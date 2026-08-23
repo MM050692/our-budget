@@ -1,25 +1,130 @@
-<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#111827"><link rel="manifest" href="manifest.json">
-<title>Our Budget</title><link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="config.js"></script>
-</head><body>
-<div id="authScreen" class="auth-screen"><div class="auth-card"><div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div><h1>Our Budget</h1>
-<p class="sub">Sign in with your Supabase account.</p><form id="authForm" class="form">
-<label>Email<input id="authEmail" type="email" required></label>
-<label>Password<input id="authPassword" type="password" required></label>
-<button class="primary">Sign in</button><div id="authMessage" class="hint"></div></form></div></div>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.json">
+<title>Our Budget</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+</head>
+<body>
+<div id="authScreen" class="auth-screen">
+  <div class="auth-card">
+    <div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div>
+    <h1>Our Budget</h1>
+    <p class="sub">Sign in to your shared household.</p>
+    <form id="authForm" class="form">
+      <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
+      <label>Password<input id="authPassword" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">Sign in</button>
+      <div id="authMessage" class="hint"></div>
+    </form>
+  </div>
+</div>
 
-<div id="app" class="hidden"><header><div><div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div><h1>Our Budget</h1><div id="syncStatus" class="hint">Connecting…</div></div><button class="icon" onclick="openSettings()">⚙</button></header>
+<div id="app" class="hidden">
+<header>
+  <div>
+    <div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div>
+    <h1>Our Budget</h1>
+    <div id="syncStatus" class="hint">Connecting…</div>
+  </div>
+  <button class="icon" onclick="showPage('settings')" aria-label="Settings">⚙</button>
+</header>
+
 <main>
-<section class="hero"><div class="muted">Balance</div><div id="balance" class="balance">AED 0.00</div><div class="stats">
-<div><span>Income</span><b id="income">AED 0.00</b></div><div><span>Spent</span><b id="spent">AED 0.00</b></div><div><span>Saved</span><b id="saved">AED 0.00</b></div></div></section>
-<section class="actions"><button onclick="openTx('income')">＋ Income</button><button onclick="openTx('expense')">＋ Expense</button></section>
-<section><div class="head"><h2>Budget</h2><button onclick="openBudget()">Edit</button></div><div class="card"><div class="row"><span>Monthly budget</span><b id="budget">AED 0.00</b></div><div class="bar"><i id="bar"></i></div><div class="row small"><span id="budgetMsg">Remaining</span><b id="remaining">AED 0.00</b></div></div></section>
-<section><div class="head"><h2>Recent transactions</h2><button onclick="openTransactions()">All</button></div><div id="txList" class="card"></div></section>
-<section><div class="head"><h2>Savings goals</h2><button onclick="openGoals()">Manage</button></div><div id="goalList" class="card"></div></section>
-<section><div class="head"><h2>Debt</h2><button onclick="openDebts()">Manage</button></div><div id="debtList" class="card"></div></section>
-</main><nav><button>Home</button><button onclick="openTransactions()">Transactions</button><button onclick="openBudget()">Budget</button><button onclick="openSettings()">Settings</button></nav></div>
+  <section id="page-home" class="page">
+    <div class="hero">
+      <div class="muted">Household cash flow balance</div>
+      <div id="balance" class="balance">AED 0.00</div>
+      <div class="stats">
+        <div><span>Income</span><b id="income">AED 0.00</b></div>
+        <div><span>Spent</span><b id="spent">AED 0.00</b></div>
+        <div><span>Saved</span><b id="saved">AED 0.00</b></div>
+      </div>
+    </div>
 
-<div id="modal" class="modal hidden"><div class="sheet"><div class="sheethead"><h2 id="title"></h2><button onclick="closeModal()">×</button></div><div id="content"></div></div></div>
-<script src="app.js"></script></body></html>
+    <div class="actions">
+      <button onclick="openTx('income')">＋ Income</button>
+      <button onclick="openTx('expense')">＋ Expense</button>
+    </div>
+
+    <div class="head"><h2>Budget</h2><button onclick="openBudget()">Edit</button></div>
+    <div class="card">
+      <div class="row"><span>Monthly budget</span><b id="budget">AED 0.00</b></div>
+      <div class="bar"><i id="bar"></i></div>
+      <div class="row small"><span id="budgetMsg">Remaining</span><b id="remaining">AED 0.00</b></div>
+    </div>
+
+    <div class="head top"><h2>Recent transactions</h2><button onclick="showPage('transactions')">All</button></div>
+    <div id="txList" class="card"></div>
+  </section>
+
+  <section id="page-transactions" class="page hidden">
+    <div class="pageTitle">
+      <div><div class="eyebrow">HISTORY</div><h2>Transactions</h2></div>
+      <div class="buttonRow"><button class="secondary compact" onclick="openTx('income')">＋ Income</button><button class="primary compact" onclick="openTx('expense')">＋ Expense</button></div>
+    </div>
+    <div id="allTx" class="card"></div>
+  </section>
+
+  <section id="page-debt" class="page hidden">
+    <div class="pageTitle"><div><div class="eyebrow">LIABILITIES</div><h2>Debt</h2></div><button class="primary compact" onclick="openDebtForm()">＋ Add debt</button></div>
+    <div class="metricCard"><span>Total debt</span><b id="totalDebt">AED 0.00</b></div>
+    <div id="debtList" class="stack"></div>
+  </section>
+
+  <section id="page-goals" class="page hidden">
+    <div class="pageTitle"><div><div class="eyebrow">TARGETS</div><h2>Savings Goals</h2></div><button class="primary compact" onclick="openGoalForm()">＋ Add goal</button></div>
+    <div class="metricCard"><span>Total saved toward goals</span><b id="goalSaved">AED 0.00</b></div>
+    <div id="goalList" class="stack"></div>
+  </section>
+
+  <section id="page-assets" class="page hidden">
+    <div class="pageTitle"><div><div class="eyebrow">NET WORTH</div><h2>Other Assets</h2></div><button class="primary compact" onclick="openAssetForm()">＋ Add asset</button></div>
+    <div class="metricCard">
+      <span>Estimated assets value</span>
+      <b id="assetTotal">AED 0.00</b>
+      <small id="priceStatus">Market prices refresh after sign-in.</small>
+    </div>
+    <div id="marketStrip" class="marketStrip"></div>
+    <div id="assetList" class="stack"></div>
+    <div class="sourceNote">Market values are estimates. Metals are valued from grams using the current USD price per troy ounce.</div>
+  </section>
+
+  <section id="page-settings" class="page hidden">
+    <div class="pageTitle"><div><div class="eyebrow">APP</div><h2>Settings</h2></div></div>
+    <div class="card form">
+      <label>Dashboard currency<select id="baseCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
+      <p class="hint">The app remembers the last currency you use when adding a transaction, goal, debt or cash asset.</p>
+      <label>1 USD = AED<input id="rateAED" type="number" step="0.0001"></label>
+      <label>1 USD = MVR<input id="rateMVR" type="number" step="0.0001"></label>
+      <label>1 USD = INR<input id="rateINR" type="number" step="0.0001"></label>
+      <button class="primary" onclick="saveSettings()">Save settings</button>
+      <button class="secondary" onclick="refreshPrices(true)">Refresh market prices</button>
+      <button class="secondary" onclick="signOut()">Sign out</button>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button data-page="home" onclick="showPage('home')">Home</button>
+  <button data-page="transactions" onclick="showPage('transactions')">History</button>
+  <button data-page="debt" onclick="showPage('debt')">Debt</button>
+  <button data-page="goals" onclick="showPage('goals')">Goals</button>
+  <button data-page="assets" onclick="showPage('assets')">Assets</button>
+</nav>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="sheet">
+    <div class="sheethead"><h2 id="title"></h2><button onclick="closeModal()">×</button></div>
+    <div id="content"></div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
