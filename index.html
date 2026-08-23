@@ -1,0 +1,25 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827"><link rel="manifest" href="manifest.json">
+<title>Our Budget</title><link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="config.js"></script>
+</head><body>
+<div id="authScreen" class="auth-screen"><div class="auth-card"><div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div><h1>Our Budget</h1>
+<p class="sub">Sign in with your Supabase account.</p><form id="authForm" class="form">
+<label>Email<input id="authEmail" type="email" required></label>
+<label>Password<input id="authPassword" type="password" required></label>
+<button class="primary">Sign in</button><div id="authMessage" class="hint"></div></form></div></div>
+
+<div id="app" class="hidden"><header><div><div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div><h1>Our Budget</h1><div id="syncStatus" class="hint">Connecting…</div></div><button class="icon" onclick="openSettings()">⚙</button></header>
+<main>
+<section class="hero"><div class="muted">Balance</div><div id="balance" class="balance">AED 0.00</div><div class="stats">
+<div><span>Income</span><b id="income">AED 0.00</b></div><div><span>Spent</span><b id="spent">AED 0.00</b></div><div><span>Saved</span><b id="saved">AED 0.00</b></div></div></section>
+<section class="actions"><button onclick="openTx('income')">＋ Income</button><button onclick="openTx('expense')">＋ Expense</button></section>
+<section><div class="head"><h2>Budget</h2><button onclick="openBudget()">Edit</button></div><div class="card"><div class="row"><span>Monthly budget</span><b id="budget">AED 0.00</b></div><div class="bar"><i id="bar"></i></div><div class="row small"><span id="budgetMsg">Remaining</span><b id="remaining">AED 0.00</b></div></div></section>
+<section><div class="head"><h2>Recent transactions</h2><button onclick="openTransactions()">All</button></div><div id="txList" class="card"></div></section>
+<section><div class="head"><h2>Savings goals</h2><button onclick="openGoals()">Manage</button></div><div id="goalList" class="card"></div></section>
+<section><div class="head"><h2>Debt</h2><button onclick="openDebts()">Manage</button></div><div id="debtList" class="card"></div></section>
+</main><nav><button>Home</button><button onclick="openTransactions()">Transactions</button><button onclick="openBudget()">Budget</button><button onclick="openSettings()">Settings</button></nav></div>
+
+<div id="modal" class="modal hidden"><div class="sheet"><div class="sheethead"><h2 id="title"></h2><button onclick="closeModal()">×</button></div><div id="content"></div></div></div>
+<script src="app.js"></script></body></html>
