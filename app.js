@@ -175,11 +175,14 @@ function openTx(type,id=null,presetCategory=''){
   $('txCategory').value=existing?.category||presetCategory||categories[0];
   $('txBy').value=existing?.paidBy||'Dhani';
   $('txAccountId').value=existing?.accountId||'';
-  $('txAccountId').onchange=()=>{const a=state.accounts.find(x=>x.id===$('txAccountId').value);if(a)$('txCurrency').value=a.currency};
+  const syncAccountCurrency=()=>{const a=state.accounts.find(x=>x.id===$('txAccountId').value);$('txCurrency').disabled=!!a;if(a)$('txCurrency').value=a.currency};
+  $('txAccountId').onchange=syncAccountCurrency;syncAccountCurrency();
   $('txForm').onsubmit=async e=>{
-    e.preventDefault();rememberCurrency($('txCurrency').value);
-    const linked=state.accounts.find(x=>x.id===$('txAccountId').value);
-    const tx={id:existing?.id||crypto.randomUUID(),type,amount:+$('txAmount').value,currency:$('txCurrency').value,category:$('txCategory').value,paidBy:$('txBy').value,accountId:linked?.id||'',account:linked?.name||(existing?.accountId?'':existing?.account||''),date:$('txDate').value,note:$('txNote').value,createdAt:existing?.createdAt||new Date().toISOString()};
+    e.preventDefault();
+    const linked=state.accounts.find(x=>x.id===$('txAccountId').value);const txDate=$('txDate').value;
+    if(linked&&txDate<linked.openingDate){alert(`Choose a date on or after ${linked.openingDate}, when ${linked.name} tracking started.`);return}
+    const currency=linked?.currency||$('txCurrency').value;rememberCurrency(currency);
+    const tx={id:existing?.id||crypto.randomUUID(),type,amount:+$('txAmount').value,currency,category:$('txCategory').value,paidBy:$('txBy').value,accountId:linked?.id||'',account:linked?.name||(existing?.accountId?'':existing?.account||''),date:txDate,note:$('txNote').value,createdAt:existing?.createdAt||new Date().toISOString()};
     const i=state.transactions.findIndex(x=>x.id===tx.id);if(i>=0)state.transactions[i]=tx;else state.transactions.push(tx);
     await saveOperation({action:'upsert',table:'transactions',row:{id:tx.id,household_id:householdId,user_id:currentUser.id,type:tx.type,amount:tx.amount,currency:tx.currency,category:tx.category,paid_by:tx.paidBy,account_id:tx.accountId||null,account:tx.account||null,date:tx.date,note:tx.note||null,updated_at:new Date().toISOString()}});
   };
@@ -385,7 +388,7 @@ function timelineEvents(){
   });
   const budgetUSD=Object.values(state.budgets).reduce((sum,b)=>sum+usd(b.amount,b.currency),0);
   if(budgetUSD>0)events.push({date:month()+'-01',kind:'budget',title:'Monthly budget plan',detail:money(fromUSD(budgetUSD,state.settings.base))});
-  return events.filter(e=>e.date).sort((a,b)=>b.date.localeCompare(a.date));
+  const today=new Date().toISOString().slice(0,10);return events.filter(e=>e.date).sort((a,b)=>{const af=a.date>=today,bf=b.date>=today;if(af!==bf)return af?-1:1;return af?a.date.localeCompare(b.date):b.date.localeCompare(a.date)});
 }
 function timelineHtml(){
   const events=timelineEvents();
@@ -402,7 +405,7 @@ function buildMoneySuggestions({incomeUSD,spentUSD,balanceUSD,assetTotalUSD,debt
   const essentialsUSD=spentIn(['Housing','Food','Transport','Bills','Health']);
   const wantsUSD=spentIn(['Shopping','Entertainment','Travel','Other']);
   if(!state.accounts.length)suggestions.push(['Add your real balance','Add your main bank account with today’s balance. Then choose it for salary and expenses so Money stays current.']);
-  if(!state.transactions.some(t=>t.type==='income'&&t.date.startsWith(currentMonth)))suggestions.push(['Add this month’s salary','Once income is entered, the app will turn 40–30–20–10 into clear monthly amounts and show your one-year direction.']);
+  if(!state.transactions.some(t=>t.type==='income'&&t.category!=='Balance adjustment'&&t.date.startsWith(currentMonth)))suggestions.push(['Add this month’s salary','Once income is entered, the app will turn 40–30–20–10 into clear monthly amounts and show your one-year direction.']);
   if(incomeUSD>0){
     const essentialTarget=incomeUSD*.4,wantsTarget=incomeUSD*.1;
     if(essentialsUSD>essentialTarget)suggestions.push(['Bring essentials toward 40%',`Essentials are ${money(fromUSD(essentialsUSD,state.settings.base))} this month, above the ${money(fromUSD(essentialTarget,state.settings.base))} guide. Start with the largest bill you can safely reduce.`]);
@@ -422,7 +425,7 @@ function buildMoneySuggestions({incomeUSD,spentUSD,balanceUSD,assetTotalUSD,debt
 }
 
 function render(){
-  const tx=state.transactions.filter(t=>t.date.startsWith(month()));
+  const tx=state.transactions.filter(t=>t.date.startsWith(month())&&t.category!=='Balance adjustment');
   const incomeUSD=tx.filter(t=>t.type==='income').reduce((s,t)=>s+usd(t.amount,t.currency),0);
   const spentUSD=tx.filter(t=>t.type==='expense').reduce((s,t)=>s+usd(t.amount,t.currency),0);
   const accountTotalUSD=state.accounts.reduce((sum,a)=>sum+accountBalanceUSD(a),0);
