@@ -372,6 +372,7 @@ $$;
 
 revoke all on function private.validate_v7_transaction_links() from public, anon, authenticated;
 
+drop trigger if exists validate_v7_transaction_links on public.transactions;
 create trigger validate_v7_transaction_links
 before insert or update on public.transactions
 for each row execute function private.validate_v7_transaction_links();
@@ -423,6 +424,7 @@ $$;
 
 revoke all on function private.sync_debt_payment() from public, anon, authenticated;
 
+drop trigger if exists sync_debt_payment on public.transactions;
 create trigger sync_debt_payment
 after insert or update or delete on public.transactions
 for each row execute function private.sync_debt_payment();
@@ -461,6 +463,7 @@ $$;
 
 revoke all on function private.validate_goal_contribution() from public, anon, authenticated;
 
+drop trigger if exists validate_goal_contribution on public.goal_contributions;
 create trigger validate_goal_contribution
 before insert or update on public.goal_contributions
 for each row execute function private.validate_goal_contribution();
@@ -497,6 +500,7 @@ $$;
 
 revoke all on function private.sync_goal_contribution() from public, anon, authenticated;
 
+drop trigger if exists sync_goal_contribution on public.goal_contributions;
 create trigger sync_goal_contribution
 after insert or update or delete on public.goal_contributions
 for each row execute function private.sync_goal_contribution();
