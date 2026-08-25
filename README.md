@@ -1,33 +1,45 @@
-# Our Budget v5
+# Our Budget v6
 
-A private, shared household budget app for Dhani and Sakhi. It runs on GitHub Pages and the existing Supabase Free project, with no paid services required.
+A private, shared household money app for Dhani and Sakhi. It runs on GitHub Pages with the existing Supabase Free project, so no paid service, ChatGPT subscription or external AI is required after deployment.
 
 ## Included
 
-- Email/password login and household-scoped Row Level Security
-- Shared transactions with edit and delete
-- Separate Budget, Net Worth, Debt, Goals and Assets pages
+- Email/password login with household-scoped Row Level Security
+- Shared salary and expense entries with edit, delete and realtime updates
+- Bank, cash and wallet accounts with a starting balance and automatic running balance
+- Simple account correction that keeps an adjustment in the shared history
+- One easy **Money & Wealth** page combining accounts, assets, debts and net worth
+- A clear **40–30–20–10** monthly guide: 40% essentials, 30% debt, 20% goals and savings, 10% wants
+- A built-in pie-style allocation graphic and 12-month net-worth trajectory with no chart subscription
+- An automatic **Timeline** populated by transactions, accounts, budgets, assets, debts and goals
 - Per-category budgets with their original currencies preserved
-- Cash, manual assets, metals and cryptocurrency tracking
-- Free market-price refresh on sign-in or on demand
+- Free market-price refresh for metals and cryptocurrency
 - Household/account-scoped local cache and safe offline pending changes
-- Realtime updates between both phones
-- Automatic net-worth calculation, motivation and rule-based money suggestions
+- Rule-based suggestions that run entirely in the browser
 
-## One-time database setup
+## Database migrations
 
-The production migration is stored at `supabase/migrations/20260825090000_harden_household_finance.sql`.
+Apply the SQL files in `supabase/migrations/` in timestamp order. The v6 account migration adds `accounts`, links transactions through `account_id`, enables RLS and adds the table to Supabase Realtime.
 
-It tightens existing policies and grants without deleting household data. The repository uses only the public Supabase publishable key. Never add a secret or service-role key to `config.js`.
+The repository uses only the public Supabase publishable key. Never add a secret or service-role key to `config.js`.
 
 ## Free hosting
 
-Serve the `main` branch through GitHub Pages. Supabase, GitHub Pages and the real-time Gold API endpoint are used within their free offerings. No background jobs, paid database branches or premium APIs are required.
+Serve the `main` branch through GitHub Pages. The app uses GitHub Pages, the existing Supabase Free project and the free Gold API endpoint. It has no paid database branch, background job, premium API, advertising SDK or ChatGPT runtime dependency.
+
+## Balance setup
+
+1. Open **Money** and add the main bank, cash or wallet account.
+2. Enter its balance from just before the first transaction you want the app to track.
+3. Choose that account when adding salary or spending.
+4. If the app and real balance differ, use **Correct balance**; the app records a transparent adjustment.
+5. Keep gold, crypto, property and investments under **Other assets** so bank money is not counted twice.
 
 ## Verification
 
-1. Sign in as Dhani and add, edit and delete a transaction.
-2. Sign in as Sakhi on the other phone and confirm the changes appear.
-3. Set budgets in different currencies, change dashboard currency and confirm values convert rather than being relabelled.
-4. Add a cash asset, a metal and a cryptocurrency.
-5. Temporarily go offline, save a change, reconnect and confirm the pending-sync message clears.
+1. Sign in as Dhani, add an account and record salary into it.
+2. Add an expense from the same account and confirm its running balance changes.
+3. Sign in as Sakhi on the other phone and confirm the account, Money page and Timeline update.
+4. Confirm the 40–30–20–10 amounts and 12-month trajectory react to the current month’s salary.
+5. Correct an account balance and confirm the adjustment appears in History and Timeline.
+6. Temporarily go offline, save a change, reconnect and confirm the pending-sync message clears.

@@ -38,7 +38,7 @@
 <main>
   <section id="page-home" class="page">
     <div class="hero">
-      <div class="muted">Household cash flow balance</div>
+      <div class="muted">Money available</div>
       <div id="balance" class="balance">AED 0.00</div>
       <div class="stats">
         <div><span>Income</span><b id="income">AED 0.00</b></div>
@@ -48,7 +48,7 @@
     </div>
 
     <div class="actions">
-      <button onclick="openTx('income')">＋ Income</button>
+      <button onclick="openTx('income',null,'Salary')">＋ Salary</button>
       <button onclick="openTx('expense')">＋ Expense</button>
     </div>
 
@@ -81,26 +81,53 @@
   </section>
 
   <section id="page-wealth" class="page hidden">
-    <div class="pageTitle"><div><div class="eyebrow">FINANCIAL FREEDOM</div><h2>Our Net Worth</h2></div></div>
+    <div class="pageTitle">
+      <div><div class="eyebrow">OUR MONEY</div><h2>Money & Wealth</h2></div>
+      <div class="buttonRow"><button class="secondary compact" onclick="openAccountForm()">＋ Account</button><button class="primary compact" onclick="openAssetForm()">＋ Asset</button></div>
+    </div>
     <div class="wealthHero">
       <div class="muted">Estimated household net worth</div>
       <div id="netWorth" class="wealthNumber">AED 0.00</div>
       <div id="wealthMessage" class="wealthMessage">Every good money decision moves you forward.</div>
     </div>
+
     <div class="metricGrid wealthBreakdown">
-      <div class="metricCard"><span>Tracked cash-flow balance</span><b id="netWorthCash">AED 0.00</b></div>
+      <div class="metricCard"><span>Money available</span><b id="netWorthCash">AED 0.00</b></div>
       <div class="metricCard"><span>Other assets</span><b id="netWorthAssets">AED 0.00</b></div>
       <div class="metricCard"><span>Remaining debt</span><b id="netWorthDebt">AED 0.00</b></div>
       <div class="metricCard"><span>This month’s surplus</span><b id="monthlySurplus">AED 0.00</b></div>
     </div>
-    <div class="card goalProgressCard">
+
+    <div class="sectionTitle"><div><h2>Bank, cash & wallets</h2><p>Choose an account when adding salary or spending.</p></div><button onclick="openTx('income',null,'Salary')">＋ Salary</button></div>
+    <div class="metricCard accountTotalCard"><span>Total available in accounts</span><b id="accountTotal">AED 0.00</b></div>
+    <div id="accountList" class="stack"></div>
+
+    <div class="sectionTitle top"><div><h2>40–30–20–10 plan</h2><p>Your monthly income is divided automatically.</p></div><span id="allocationIncome" class="pill">Add salary</span></div>
+    <div class="allocationPanel">
+      <div class="allocationDonut" role="img" aria-label="40 percent essentials, 30 percent debt, 20 percent future, 10 percent wants"><div><b>100%</b><span>of income</span></div></div>
+      <div id="allocationSummary" class="allocationGrid"></div>
+    </div>
+
+    <div class="sectionTitle top"><div><h2>12-month trajectory</h2><p>Projection based on the current 40–30–20–10 plan.</p></div></div>
+    <div id="trajectoryChart" class="chartCard"></div>
+
+    <div class="sectionTitle top"><div><h2>Other assets</h2><p>Gold, crypto and other investments.</p></div><button onclick="openAssetForm()">＋ Add</button></div>
+    <div class="metricCard">
+      <span>Estimated other-assets value</span>
+      <b id="assetTotal">AED 0.00</b>
+      <small id="priceStatus">Market prices refresh after sign-in.</small>
+    </div>
+    <div id="marketStrip" class="marketStrip"></div>
+    <div id="assetList" class="stack"></div>
+
+    <div class="card goalProgressCard top">
       <div class="progressLabel"><span>Goal funding progress</span><b id="goalProgressText">0%</b></div>
       <div class="miniBar"><i id="goalProgress"></i></div>
-      <div class="meta">Saved amounts are progress indicators and are not added again to net worth.</div>
+      <div class="meta">Goal amounts show progress and are not counted twice in net worth.</div>
     </div>
     <div class="head top"><h2>Your next best moves</h2><span id="savingsRate" class="pill">0% saved</span></div>
     <div id="wealthSuggestions" class="adviceList"></div>
-    <div class="sourceNote">Suggestions use your tracked data and are general guidance, not financial advice.</div>
+    <div class="sourceNote">Balances are based on what you enter. Suggestions are general guidance, not financial advice.</div>
   </section>
 
   <section id="page-debt" class="page hidden">
@@ -115,16 +142,10 @@
     <div id="goalList" class="stack"></div>
   </section>
 
-  <section id="page-assets" class="page hidden">
-    <div class="pageTitle"><div><div class="eyebrow">NET WORTH</div><h2>Other Assets</h2></div><button class="primary compact" onclick="openAssetForm()">＋ Add asset</button></div>
-    <div class="metricCard">
-      <span>Estimated assets value</span>
-      <b id="assetTotal">AED 0.00</b>
-      <small id="priceStatus">Market prices refresh after sign-in.</small>
-    </div>
-    <div id="marketStrip" class="marketStrip"></div>
-    <div id="assetList" class="stack"></div>
-    <div class="sourceNote">Market values are estimates. Metals are valued from grams using the current USD price per troy ounce.</div>
+  <section id="page-timeline" class="page hidden">
+    <div class="pageTitle"><div><div class="eyebrow">AUTOMATIC HISTORY</div><h2>Our Money Timeline</h2></div></div>
+    <div class="timelineIntro">This fills itself from salary, expenses, accounts, debts and goals. Nothing extra to maintain.</div>
+    <div id="timelineList" class="timeline"></div>
   </section>
 
   <section id="page-settings" class="page hidden">
@@ -146,10 +167,10 @@
   <button data-page="home" onclick="showPage('home')">Home</button>
   <button data-page="transactions" onclick="showPage('transactions')">History</button>
   <button data-page="budget" onclick="showPage('budget')">Budget</button>
-  <button data-page="wealth" onclick="showPage('wealth')">Wealth</button>
+  <button data-page="wealth" onclick="showPage('wealth')">Money</button>
   <button data-page="debt" onclick="showPage('debt')">Debt</button>
   <button data-page="goals" onclick="showPage('goals')">Goals</button>
-  <button data-page="assets" onclick="showPage('assets')">Assets</button>
+  <button data-page="timeline" onclick="showPage('timeline')">Timeline</button>
 </nav>
 </div>
 

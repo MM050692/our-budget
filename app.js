@@ -1,13 +1,14 @@
-const VERSION=5;
+const VERSION=6;
 const LEGACY_KEYS=['our_budget_v4','our_budget_v3','our_budget_v2'];
 const DEFAULT={
   version:VERSION,settings:{base:'AED',lastCurrency:'AED',rates:{USD:1,AED:3.6725,MVR:15.42,INR:88}},
   transactions:[],budgets:{Housing:{amount:3000,currency:'AED'},Food:{amount:1500,currency:'AED'},Transport:{amount:800,currency:'AED'},Bills:{amount:1000,currency:'AED'},Shopping:{amount:700,currency:'AED'},Other:{amount:500,currency:'AED'}},
-  goals:[],debts:[],assets:[],prices:{}
+  goals:[],debts:[],assets:[],accounts:[],prices:{}
 };
 let state=structuredClone(DEFAULT);
 let db=null,currentUser=null,householdId=null,realtimeChannel=null,currentPage='home',stateKey='',pendingKey='',priceRefresh=null;
-const cats=['Housing','Food','Transport','Bills','Shopping','Entertainment','Health','Travel','Debt','Savings','Other'];
+const expenseCats=['Housing','Food','Transport','Bills','Health','Debt','Savings','Shopping','Entertainment','Travel','Other'];
+const incomeCats=['Salary','Bonus','Side income','Gift','Refund','Other income'];
 const metalChoices=[['XAU','Gold'],['XAG','Silver'],['XPT','Platinum'],['XPD','Palladium']];
 const cryptoChoices=[['BTC','Bitcoin'],['ETH','Ethereum'],['LTC','Litecoin'],['XRP','XRP'],['DOT','Polkadot'],['ADA','Cardano']];
 const $=id=>document.getElementById(id);
@@ -18,7 +19,7 @@ function normalizeState(raw){
   const next=Object.assign(structuredClone(DEFAULT),raw||{});next.version=VERSION;
   next.settings=Object.assign({},DEFAULT.settings,raw?.settings||{});next.settings.rates=Object.assign({},DEFAULT.settings.rates,raw?.settings?.rates||{});
   next.settings.lastCurrency=next.settings.lastCurrency||next.settings.base||'AED';
-  next.transactions=Array.isArray(next.transactions)?next.transactions:[];next.goals=Array.isArray(next.goals)?next.goals:[];next.debts=Array.isArray(next.debts)?next.debts:[];next.assets=Array.isArray(next.assets)?next.assets:[];next.prices=next.prices||{};
+  next.transactions=Array.isArray(next.transactions)?next.transactions:[];next.goals=Array.isArray(next.goals)?next.goals:[];next.debts=Array.isArray(next.debts)?next.debts:[];next.assets=Array.isArray(next.assets)?next.assets:[];next.accounts=Array.isArray(next.accounts)?next.accounts:[];next.prices=next.prices||{};
   const base=next.settings.base||'AED';const source=next.budgets&&typeof next.budgets==='object'?next.budgets:DEFAULT.budgets;
   next.budgets=Object.fromEntries(Object.entries(source).map(([category,value])=>[category,typeof value==='object'?{amount:Number(value.amount)||0,currency:value.currency||base}:{amount:Number(value)||0,currency:base}]));
   return next;
@@ -68,7 +69,7 @@ function showPage(name){
   const p=$('page-'+name);if(p)p.classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===name));
   render();
-  if(name==='assets')refreshPrices(false);
+  if(name==='wealth')refreshPrices(false);
 }
 
 async function boot(){
@@ -97,20 +98,22 @@ async function signedIn(user){
 
 async function loadRemote(){
   if(!db||!householdId)return;
-  const [t,b,g,d,a]=await Promise.all([
+  const [t,b,g,d,a,accounts]=await Promise.all([
     db.from('transactions').select('*').eq('household_id',householdId),
     db.from('budgets').select('*').eq('household_id',householdId),
     db.from('goals').select('*').eq('household_id',householdId),
     db.from('debts').select('*').eq('household_id',householdId),
-    db.from('assets').select('*').eq('household_id',householdId)
+    db.from('assets').select('*').eq('household_id',householdId),
+    db.from('accounts').select('*').eq('household_id',householdId)
   ]);
-  const failed=[t,b,g,d,a].filter(x=>x.error);if(failed.length){updateSyncStatus('Could not refresh · saved data kept');return}
+  const failed=[t,b,g,d,a,accounts].filter(x=>x.error);if(failed.length){updateSyncStatus('Could not refresh · saved data kept');return}
   if(pending().length){updateSyncStatus();return}
-  state.transactions=t.data.map(x=>({id:x.id,type:x.type,amount:+x.amount,currency:x.currency.trim(),category:x.category,paidBy:x.paid_by,account:x.account||'',date:x.date,note:x.note||''}));
+  state.transactions=t.data.map(x=>({id:x.id,type:x.type,amount:+x.amount,currency:x.currency.trim(),category:x.category,paidBy:x.paid_by,accountId:x.account_id||'',account:x.account||'',date:x.date,note:x.note||'',createdAt:x.created_at||''}));
   state.budgets=Object.fromEntries(b.data.map(x=>[x.category,{amount:+x.amount,currency:(x.currency||state.settings.base).trim()}]));
-  state.goals=g.data.map(x=>({id:x.id,name:x.name,target:+x.target,saved:+x.saved,currency:x.currency.trim(),due:x.due_date||''}));
-  state.debts=d.data.map(x=>({id:x.id,name:x.name,original:+x.original_amount,remaining:+x.remaining_amount,currency:x.currency.trim(),due:x.due_date||''}));
-  state.assets=a.data.map(x=>({id:x.id,name:x.name,type:x.asset_type,symbol:x.symbol||'',quantity:+x.quantity,currency:x.currency.trim(),manualValue:x.manual_value==null?null:+x.manual_value,notes:x.notes||''}));
+  state.goals=g.data.map(x=>({id:x.id,name:x.name,target:+x.target,saved:+x.saved,currency:x.currency.trim(),due:x.due_date||'',createdAt:x.created_at||''}));
+  state.debts=d.data.map(x=>({id:x.id,name:x.name,original:+x.original_amount,remaining:+x.remaining_amount,currency:x.currency.trim(),due:x.due_date||'',createdAt:x.created_at||''}));
+  state.assets=a.data.map(x=>({id:x.id,name:x.name,type:x.asset_type,symbol:x.symbol||'',quantity:+x.quantity,currency:x.currency.trim(),manualValue:x.manual_value==null?null:+x.manual_value,notes:x.notes||'',createdAt:x.created_at||''}));
+  state.accounts=accounts.data.map(x=>({id:x.id,name:x.name,type:x.account_type,currency:x.currency.trim(),openingBalance:+x.opening_balance,openingDate:x.opening_date,notes:x.notes||'',createdAt:x.created_at||''}));
   cache();render();updateSyncStatus();
 }
 
@@ -122,6 +125,7 @@ function subscribeRealtime(){
     .on('postgres_changes',{event:'*',schema:'public',table:'goals',filter:'household_id=eq.'+householdId},()=>{if(!pending().length)loadRemote()})
     .on('postgres_changes',{event:'*',schema:'public',table:'debts',filter:'household_id=eq.'+householdId},()=>{if(!pending().length)loadRemote()})
     .on('postgres_changes',{event:'*',schema:'public',table:'assets',filter:'household_id=eq.'+householdId},()=>{if(!pending().length)loadRemote()})
+    .on('postgres_changes',{event:'*',schema:'public',table:'accounts',filter:'household_id=eq.'+householdId},()=>{if(!pending().length)loadRemote()})
     .subscribe(status=>{if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')updateSyncStatus('Realtime reconnecting…')});
 }
 async function refreshPrices(force){
@@ -151,27 +155,86 @@ async function refreshPrices(force){
   })();try{return await priceRefresh}finally{priceRefresh=null}
 }
 
-function openTx(type,id=null){
+function openTx(type,id=null,presetCategory=''){
   const existing=id?state.transactions.find(x=>x.id===id):null;if(existing)type=existing.type;
+  const categories=type==='income'?incomeCats:expenseCats;
+  const categoryOptions=[...new Set([existing?.category,presetCategory,...categories].filter(Boolean))];
+  const accountOptions=state.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} · ${a.currency}</option>`).join('');
   openModal(existing?'Edit transaction':type==='income'?'Add income':'Add expense',`<form class="form" id="txForm">
     <label>Amount<input id="txAmount" type="number" step="0.01" min="0.01" required value="${existing?.amount??''}"></label>
     <label>Currency<select id="txCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
-    <label>Category<select id="txCategory">${cats.map(x=>`<option>${x}</option>`).join('')}</select></label>
-    <label>Paid by<select id="txBy"><option>Dhani</option><option>Sakhi</option><option>Shared</option></select></label>
-    <label>Account<input id="txAccount" placeholder="Cash / Bank / Card" value="${esc(existing?.account||'')}"></label>
+    <label>${type==='income'?'Income type':'Category'}<select id="txCategory">${categoryOptions.map(x=>`<option>${esc(x)}</option>`).join('')}</select></label>
+    <label>${type==='income'?'Received by':'Paid by'}<select id="txBy"><option>Dhani</option><option>Sakhi</option><option>Shared</option></select></label>
+    <label>Account<select id="txAccountId"><option value="">Not linked to an account</option>${accountOptions}</select></label>
+    ${state.accounts.length?'':'<div class="friendlyNote">Tip: add your bank or cash account on the Money page, then salary and spending will update its balance automatically.</div>'}
     <label>Date<input id="txDate" type="date" value="${existing?.date||new Date().toISOString().slice(0,10)}" required></label>
     <label>Note<input id="txNote" placeholder="Optional" value="${esc(existing?.note||'')}"></label>
     <button class="primary" type="submit">Save</button>
   </form>`);
-  $('txCurrency').value=existing?.currency||state.settings.lastCurrency;$('txCategory').value=existing?.category||cats[0];$('txBy').value=existing?.paidBy||'Dhani';
+  $('txCurrency').value=existing?.currency||state.settings.lastCurrency;
+  $('txCategory').value=existing?.category||presetCategory||categories[0];
+  $('txBy').value=existing?.paidBy||'Dhani';
+  $('txAccountId').value=existing?.accountId||'';
+  $('txAccountId').onchange=()=>{const a=state.accounts.find(x=>x.id===$('txAccountId').value);if(a)$('txCurrency').value=a.currency};
   $('txForm').onsubmit=async e=>{
     e.preventDefault();rememberCurrency($('txCurrency').value);
-    const tx={id:existing?.id||crypto.randomUUID(),type,amount:+$('txAmount').value,currency:$('txCurrency').value,category:$('txCategory').value,paidBy:$('txBy').value,account:$('txAccount').value,date:$('txDate').value,note:$('txNote').value};
+    const linked=state.accounts.find(x=>x.id===$('txAccountId').value);
+    const tx={id:existing?.id||crypto.randomUUID(),type,amount:+$('txAmount').value,currency:$('txCurrency').value,category:$('txCategory').value,paidBy:$('txBy').value,accountId:linked?.id||'',account:linked?.name||(existing?.accountId?'':existing?.account||''),date:$('txDate').value,note:$('txNote').value,createdAt:existing?.createdAt||new Date().toISOString()};
     const i=state.transactions.findIndex(x=>x.id===tx.id);if(i>=0)state.transactions[i]=tx;else state.transactions.push(tx);
-    await saveOperation({action:'upsert',table:'transactions',row:{id:tx.id,household_id:householdId,user_id:currentUser.id,type:tx.type,amount:tx.amount,currency:tx.currency,category:tx.category,paid_by:tx.paidBy,account:tx.account||null,date:tx.date,note:tx.note||null,updated_at:new Date().toISOString()}});
+    await saveOperation({action:'upsert',table:'transactions',row:{id:tx.id,household_id:householdId,user_id:currentUser.id,type:tx.type,amount:tx.amount,currency:tx.currency,category:tx.category,paid_by:tx.paidBy,account_id:tx.accountId||null,account:tx.account||null,date:tx.date,note:tx.note||null,updated_at:new Date().toISOString()}});
   };
 }
 async function deleteTransaction(id){if(!confirm('Delete this transaction?'))return;state.transactions=state.transactions.filter(x=>x.id!==id);enqueue({action:'delete',table:'transactions',id});cache();render();if(await flushPending())await loadRemote()}
+
+function accountBalanceUSD(account){
+  return usd(account.openingBalance,account.currency)+state.transactions.filter(t=>t.accountId===account.id&&t.date>=(account.openingDate||'0000-00-00')).reduce((sum,t)=>sum+(t.type==='income'?1:-1)*usd(t.amount,t.currency),0);
+}
+function accountTypeLabel(type){return type==='bank'?'Bank account':type==='cash'?'Cash':'Mobile wallet'}
+function openAccountForm(id=null){
+  const a=id?state.accounts.find(x=>x.id===id):null;
+  openModal(a?'Edit account':'Add bank, cash or wallet',`<form class="form" id="accountForm">
+    <div class="friendlyNote">Enter the balance from just before the first salary or expense you plan to record. After that, linked entries update it automatically.</div>
+    <label>Name<input id="accountName" required maxlength="80" value="${esc(a?.name||'')}" placeholder="Main bank account"></label>
+    <label>Type<select id="accountType"><option value="bank">Bank account</option><option value="cash">Cash</option><option value="wallet">Mobile wallet</option></select></label>
+    <label>Currency<select id="accountCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
+    <label>Starting balance<input id="accountOpening" type="number" step="0.01" required value="${a?.openingBalance??0}"></label>
+    <label>Start tracking from<input id="accountDate" type="date" required value="${a?.openingDate||new Date().toISOString().slice(0,10)}"></label>
+    <label>Notes<input id="accountNotes" maxlength="200" value="${esc(a?.notes||'')}" placeholder="Optional"></label>
+    <button class="primary" type="submit">${a?'Update account':'Add account'}</button>
+  </form>`);
+  $('accountType').value=a?.type||'bank';$('accountCurrency').value=a?.currency||state.settings.lastCurrency;
+  $('accountForm').onsubmit=async e=>{
+    e.preventDefault();
+    const name=$('accountName').value.trim();
+    if(state.accounts.some(x=>x.id!==a?.id&&x.name.toLowerCase()===name.toLowerCase())){alert('An account with that name already exists.');return}
+    const item={id:a?.id||crypto.randomUUID(),name,type:$('accountType').value,currency:$('accountCurrency').value,openingBalance:+$('accountOpening').value,openingDate:$('accountDate').value,notes:$('accountNotes').value.trim(),createdAt:a?.createdAt||new Date().toISOString()};
+    rememberCurrency(item.currency);
+    const i=state.accounts.findIndex(x=>x.id===item.id);if(i>=0)state.accounts[i]=item;else state.accounts.push(item);
+    await saveOperation({action:'upsert',table:'accounts',row:{id:item.id,household_id:householdId,name:item.name,account_type:item.type,currency:item.currency,opening_balance:item.openingBalance,opening_date:item.openingDate,notes:item.notes||null,updated_at:new Date().toISOString()}});
+  };
+}
+function reconcileAccount(id){
+  const a=state.accounts.find(x=>x.id===id);if(!a)return;
+  const current=fromUSD(accountBalanceUSD(a),a.currency);
+  openModal('Correct account balance',`<form class="form" id="reconcileForm">
+    <div class="friendlyNote">The app currently shows <b>${money(current,a.currency)}</b>. Enter the real balance from your bank or wallet. A small adjustment will be recorded so your history stays clear.</div>
+    <label>Actual balance<input id="actualBalance" type="number" step="0.01" required value="${current.toFixed(2)}"></label>
+    <button class="primary" type="submit">Update balance</button>
+  </form>`);
+  $('reconcileForm').onsubmit=async e=>{
+    e.preventDefault();const actual=+$('actualBalance').value;const difference=actual-current;
+    if(Math.abs(difference)<0.005){closeModal();return}
+    const tx={id:crypto.randomUUID(),type:difference>0?'income':'expense',amount:Math.abs(difference),currency:a.currency,category:'Balance adjustment',paidBy:'Shared',accountId:a.id,account:a.name,date:new Date().toISOString().slice(0,10),note:'Manual account balance correction',createdAt:new Date().toISOString()};
+    state.transactions.push(tx);
+    await saveOperation({action:'upsert',table:'transactions',row:{id:tx.id,household_id:householdId,user_id:currentUser.id,type:tx.type,amount:tx.amount,currency:tx.currency,category:tx.category,paid_by:tx.paidBy,account_id:tx.accountId,account:tx.account,date:tx.date,note:tx.note,updated_at:new Date().toISOString()}});
+  };
+}
+async function deleteAccount(id){
+  if(!confirm('Remove this account? Its salary and expense history will stay in the Timeline.'))return;
+  state.accounts=state.accounts.filter(x=>x.id!==id);
+  state.transactions=state.transactions.map(t=>t.accountId===id?{...t,accountId:''}:t);
+  enqueue({action:'delete',table:'accounts',id});cache();render();if(await flushPending())await loadRemote();
+}
 
 function openBudget(){
   const categories=[...new Set([...Object.keys(DEFAULT.budgets),...Object.keys(state.budgets)])];
@@ -226,8 +289,9 @@ async function deleteDebt(id){if(!confirm('Delete this debt?'))return;state.debt
 function openAssetForm(id=null){
   const a=id?state.assets.find(x=>x.id===id):null;
   openModal(a?'Edit asset':'Add asset',`<form class="form" id="assetForm">
-    <label>Asset name<input id="assetName" required value="${esc(a?.name||'')}" placeholder="Gold jewellery / Bitcoin / Savings account"></label>
-    <label>Type<select id="assetType"><option value="cash">Cash / Bank balance</option><option value="manual">Other asset / investment</option><option value="metal">Precious metal</option><option value="crypto">Crypto</option></select></label>
+    <div class="friendlyNote">Add investments, gold or property here. Put bank, cash and wallet balances in Accounts so your net worth is not counted twice.</div>
+    <label>Asset name<input id="assetName" required value="${esc(a?.name||'')}" placeholder="Gold jewellery / Investment / Property"></label>
+    <label>Type<select id="assetType">${a?.type==='cash'?'<option value="cash">Legacy cash balance</option>':''}<option value="manual">Other asset / investment</option><option value="metal">Precious metal</option><option value="crypto">Crypto</option></select></label>
     <div id="assetSymbolWrap" class="hidden"><label>Asset<select id="assetSymbol"></select></label></div>
     <label id="assetQuantityLabel">Amount / quantity<input id="assetQuantity" type="number" step="0.00000001" min="0" value="${a?.quantity??''}"></label>
     <label id="assetCurrencyWrap">Currency<select id="assetCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
@@ -235,7 +299,7 @@ function openAssetForm(id=null){
     <label>Notes<input id="assetNotes" value="${esc(a?.notes||'')}" placeholder="Optional"></label>
     <button class="primary" type="submit">${a?'Update asset':'Save asset'}</button>
   </form>`);
-  $('assetType').value=a?.type||'cash';$('assetCurrency').value=a?.currency||state.settings.lastCurrency;
+  $('assetType').value=a?.type||'manual';$('assetCurrency').value=a?.currency||state.settings.lastCurrency;
   $('assetType').onchange=()=>configureAssetForm();configureAssetForm(a?.symbol||'');
   $('assetForm').onsubmit=async e=>{
     e.preventDefault();const type=$('assetType').value;const currency=$('assetCurrency').value;rememberCurrency(currency);
@@ -281,28 +345,79 @@ function saveSettings(){
 }
 async function signOut(){if(db)await db.auth.signOut();showAuth()}
 
-function txHtml(t,actions=false){return `<div class="tx"><div class="left"><div class="dot">${t.type==='income'?'↑':'↓'}</div><div class="txMain"><div class="name">${esc(t.category)}</div><div class="meta">${esc(t.paidBy)} · ${esc(t.date)}${t.note?' · '+esc(t.note):''}</div>${actions?`<div class="txActions"><button class="linkBtn" onclick="openTx('${t.type}','${t.id}')">Edit</button><button class="dangerLink" onclick="deleteTransaction('${t.id}')">Delete</button></div>`:''}</div></div><b class="${t.type==='income'?'inc':'exp'}">${t.type==='income'?'+':'−'} ${money(t.amount,t.currency)}</b></div>`}
+function txHtml(t,actions=false){
+  const account=t.account?' · '+esc(t.account):'';
+  return `<div class="tx"><div class="left"><div class="dot">${t.type==='income'?'↑':'↓'}</div><div class="txMain"><div class="name">${esc(t.category)}</div><div class="meta">${esc(t.paidBy)} · ${esc(t.date)}${account}${t.note?' · '+esc(t.note):''}</div>${actions?`<div class="txActions"><button class="linkBtn" onclick="openTx('${t.type}','${t.id}')">Edit</button><button class="dangerLink" onclick="deleteTransaction('${t.id}')">Delete</button></div>`:''}</div></div><b class="${t.type==='income'?'inc':'exp'}">${t.type==='income'?'+':'−'} ${money(t.amount,t.currency)}</b></div>`;
+}
+
+function trajectorySvg(currentUSD,monthlyGrowthUSD){
+  if(!(monthlyGrowthUSD>0))return '<div class="emptyChart"><b>Add your salary to see the next 12 months</b><span>The chart will use 30% for debt and 20% for savings and goals.</span></div>';
+  const values=Array.from({length:13},(_,i)=>currentUSD+monthlyGrowthUSD*i);
+  const low=Math.min(0,...values),high=Math.max(0,...values),range=Math.max(1,high-low);
+  const points=values.map((v,i)=>`${44+i*(552/12)},${174-((v-low)/range)*132}`).join(' ');
+  const zeroY=174-((0-low)/range)*132;
+  const end=values[12];
+  return `<div class="trajectoryLabels"><div><span>Now</span><b>${money(fromUSD(currentUSD,state.settings.base))}</b></div><div><span>In 12 months</span><b>${money(fromUSD(end,state.settings.base))}</b></div></div>
+    <svg class="trajectorySvg" viewBox="0 0 640 205" role="img" aria-label="Projected net worth for the next 12 months">
+      <defs><linearGradient id="trajectoryFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4f46e5" stop-opacity=".28"/><stop offset="1" stop-color="#4f46e5" stop-opacity=".02"/></linearGradient></defs>
+      <line x1="44" y1="${zeroY}" x2="596" y2="${zeroY}" class="zeroLine"/>
+      <polygon points="44,174 ${points} 596,174" fill="url(#trajectoryFill)"/>
+      <polyline points="${points}" class="trajectoryLine"/>
+      <circle cx="44" cy="${points.split(' ')[0].split(',')[1]}" r="5" class="trajectoryPoint"/>
+      <circle cx="596" cy="${points.split(' ')[12].split(',')[1]}" r="6" class="trajectoryPoint"/>
+      <text x="44" y="197">NOW</text><text x="596" y="197" text-anchor="end">12 MONTHS</text>
+    </svg>
+    <div class="chartFoot">Plan: ${money(fromUSD(monthlyGrowthUSD,state.settings.base))} each month toward debt reduction and your future. This estimate excludes interest and market changes.</div>`;
+}
+
+function timelineEvents(){
+  const events=[];
+  state.transactions.forEach(t=>events.push({date:t.date,kind:t.type,title:t.category,detail:`${t.type==='income'?'+':'−'} ${money(t.amount,t.currency)}${t.account?' · '+t.account:''}`}));
+  state.accounts.forEach(a=>events.push({date:a.openingDate,kind:'account',title:`${a.name} tracking started`,detail:`Opening balance ${money(a.openingBalance,a.currency)}`}));
+  state.assets.forEach(a=>{if(a.createdAt)events.push({date:a.createdAt.slice(0,10),kind:'asset',title:`${a.name} added`,detail:`Asset · ${money(fromUSD(assetUSD(a),state.settings.base))}`})});
+  state.debts.forEach(d=>{
+    if(d.createdAt)events.push({date:d.createdAt.slice(0,10),kind:'debt',title:`${d.name} added`,detail:`Debt · ${money(d.remaining,d.currency)} remaining`});
+    if(d.due)events.push({date:d.due,kind:'debt',title:`${d.name} due`,detail:`${money(d.remaining,d.currency)} remaining`});
+  });
+  state.goals.forEach(g=>{
+    if(g.createdAt)events.push({date:g.createdAt.slice(0,10),kind:'goal',title:`${g.name} goal added`,detail:`${money(g.saved,g.currency)} saved`});
+    if(g.due)events.push({date:g.due,kind:'goal',title:`${g.name} target date`,detail:`Goal ${money(g.target,g.currency)}`});
+  });
+  const budgetUSD=Object.values(state.budgets).reduce((sum,b)=>sum+usd(b.amount,b.currency),0);
+  if(budgetUSD>0)events.push({date:month()+'-01',kind:'budget',title:'Monthly budget plan',detail:money(fromUSD(budgetUSD,state.settings.base))});
+  return events.filter(e=>e.date).sort((a,b)=>b.date.localeCompare(a.date));
+}
+function timelineHtml(){
+  const events=timelineEvents();
+  if(!events.length)return '<div class="card hint">Your timeline will appear as you add salary, spending, accounts, debts, goals and assets.</div>';
+  return events.slice(0,100).map(e=>{
+    const date=new Intl.DateTimeFormat('en',{day:'numeric',month:'short',year:'numeric'}).format(new Date(e.date+'T00:00:00'));
+    return `<div class="timelineItem"><div class="timelineDot ${e.kind}"></div><div class="timelineBody"><div class="timelineDate">${esc(date)}</div><div class="timelineTitle">${esc(e.title)}</div><div class="meta">${esc(e.detail)}</div></div></div>`;
+  }).join('');
+}
 
 function buildMoneySuggestions({incomeUSD,spentUSD,balanceUSD,assetTotalUSD,debtUSD,goalSavedUSD,goalTargetUSD,budgetUSD}){
-  const surplus=incomeUSD-spentUSD;const suggestions=[];
-  if(!state.transactions.length)suggestions.push(['Start with visibility','Add your income and every expense for one full month. Accurate tracking is the first step to making your money work for you.']);
+  const suggestions=[];const currentMonth=month();
+  const spentIn=cats=>state.transactions.filter(t=>t.type==='expense'&&t.date.startsWith(currentMonth)&&cats.includes(t.category)).reduce((s,t)=>s+usd(t.amount,t.currency),0);
+  const essentialsUSD=spentIn(['Housing','Food','Transport','Bills','Health']);
+  const wantsUSD=spentIn(['Shopping','Entertainment','Travel','Other']);
+  if(!state.accounts.length)suggestions.push(['Add your real balance','Add your main bank account with today’s balance. Then choose it for salary and expenses so Money stays current.']);
+  if(!state.transactions.some(t=>t.type==='income'&&t.date.startsWith(currentMonth)))suggestions.push(['Add this month’s salary','Once income is entered, the app will turn 40–30–20–10 into clear monthly amounts and show your one-year direction.']);
   if(incomeUSD>0){
-    const rate=surplus/incomeUSD;
-    if(rate<0)suggestions.push(['Stop the monthly leak',`Spending is above income by ${money(fromUSD(Math.abs(surplus),state.settings.base))}. Reduce flexible categories until the month turns positive.`]);
-    else if(rate<0.1)suggestions.push(['Raise your savings rate',`You are keeping about ${Math.round(rate*100)}% of income. First aim for 10%, then increase it gradually toward 20%.`]);
-    else if(rate>=0.2)suggestions.push(['Protect your strong surplus',`You are keeping about ${Math.round(rate*100)}% of income. Automate this amount toward debt, goals and long-term assets after payday.`]);
+    const essentialTarget=incomeUSD*.4,wantsTarget=incomeUSD*.1;
+    if(essentialsUSD>essentialTarget)suggestions.push(['Bring essentials toward 40%',`Essentials are ${money(fromUSD(essentialsUSD,state.settings.base))} this month, above the ${money(fromUSD(essentialTarget,state.settings.base))} guide. Start with the largest bill you can safely reduce.`]);
+    if(wantsUSD>wantsTarget)suggestions.push(['Protect the 10% fun limit',`Wants are above the ${money(fromUSD(wantsTarget,state.settings.base))} monthly guide. Pause non-essential spending until next month.`]);
   }
-  const categorySpend=Object.entries(state.budgets).map(([category,b])=>{const spent=state.transactions.filter(t=>t.type==='expense'&&t.category===category&&t.date.startsWith(month())).reduce((s,t)=>s+usd(t.amount,t.currency),0);return {category,over:spent-usd(b.amount,b.currency)}}).sort((a,b)=>b.over-a.over)[0];
-  if(categorySpend?.over>0)suggestions.push(['Fix the biggest budget overrun',`${categorySpend.category} is over budget by ${money(fromUSD(categorySpend.over,state.settings.base))} this month. Set one specific limit for the rest of the month.`]);
-  if(debtUSD>0){
-    if(surplus>0){const debtShare=surplus*(goalTargetUSD>goalSavedUSD?0.7:0.9);const months=Math.max(1,Math.ceil(debtUSD/debtShare));suggestions.push(['Attack debt consistently',`Direct ${money(fromUSD(debtShare,state.settings.base))} of the current monthly surplus to debt. At that pace, the tracked balance could clear in roughly ${months} month${months===1?'':'s'}, before interest and new borrowing.`])}
-    else suggestions.push(['Create debt-payment room','Before investing more, create a reliable monthly surplus and direct it to the highest-interest debt while paying minimums on the rest.']);
-  }
+  if(debtUSD>0&&incomeUSD>0){
+    const payment=incomeUSD*.3,months=Math.max(1,Math.ceil(debtUSD/Math.max(payment,.01)));
+    suggestions.push(['Use 30% to clear debt',`Aim for ${money(fromUSD(payment,state.settings.base))} a month. The tracked balance could clear in roughly ${months} month${months===1?'':'s'}, before interest or new borrowing.`]);
+  }else if(debtUSD>0)suggestions.push(['Debt gets the next 30%','After salary is added, reserve 30% for debt and keep paying the highest-interest balance first.']);
   const goalGap=Math.max(0,goalTargetUSD-goalSavedUSD);
-  if(goalGap>0&&surplus>0){const goalShare=surplus*(debtUSD>0?0.3:0.8);const months=Math.max(1,Math.ceil(goalGap/goalShare));suggestions.push(['Fund goals automatically',`Move ${money(fromUSD(goalShare,state.settings.base))} monthly toward goals. At the current gap, that is roughly ${months} month${months===1?'':'s'} if targets and income stay unchanged.`])}
-  if(debtUSD<=0&&surplus>0&&assetTotalUSD<=0)suggestions.push(['Build your safety base','Start with an emergency fund in an accessible savings account. After that buffer is stable, consider diversified long-term investing appropriate to your risk level.']);
-  if(assetTotalUSD>0)suggestions.push(['Keep assets working','Review cash, metals and crypto quarterly. Avoid letting one volatile asset become too large, and keep emergency money separate from investments.']);
-  if(!suggestions.length)suggestions.push(['Keep compounding the basics','Track spending, avoid new high-interest debt and increase automatic saving whenever income rises.']);
+  if(incomeUSD>0&&goalGap>0){
+    const future=incomeUSD*.2,months=Math.max(1,Math.ceil(goalGap/Math.max(future,.01)));
+    suggestions.push(['Grow the future with 20%',`Move ${money(fromUSD(future,state.settings.base))} monthly to savings and goals. At that pace, the tracked goal gap is about ${months} month${months===1?'':'s'}.`]);
+  }else if(incomeUSD>0&&goalTargetUSD<=0)suggestions.push(['Give the 20% a purpose','Add one simple savings goal, such as an emergency fund, so your future money has a clear destination.']);
+  if(!suggestions.length)suggestions.push(['Keep the plan simple','Use 40% for essentials, 30% for debt, 20% for your future and 10% for wants. Update account balances whenever reality differs.']);
   return suggestions.slice(0,4);
 }
 
@@ -310,8 +425,11 @@ function render(){
   const tx=state.transactions.filter(t=>t.date.startsWith(month()));
   const incomeUSD=tx.filter(t=>t.type==='income').reduce((s,t)=>s+usd(t.amount,t.currency),0);
   const spentUSD=tx.filter(t=>t.type==='expense').reduce((s,t)=>s+usd(t.amount,t.currency),0);
-  const balanceUSD=state.transactions.reduce((s,t)=>s+(t.type==='income'?1:t.type==='expense'?-1:0)*usd(t.amount,t.currency),0);
-  $('balance').textContent=money(fromUSD(balanceUSD,state.settings.base));
+  const accountTotalUSD=state.accounts.reduce((sum,a)=>sum+accountBalanceUSD(a),0);
+  const unassignedTransactions=state.transactions.filter(t=>!t.accountId);
+  const unassignedCashUSD=unassignedTransactions.reduce((s,t)=>s+(t.type==='income'?1:t.type==='expense'?-1:0)*usd(t.amount,t.currency),0);
+  const trackedCashUSD=accountTotalUSD+unassignedCashUSD;
+  $('balance').textContent=money(fromUSD(trackedCashUSD,state.settings.base));
   $('income').textContent=money(fromUSD(incomeUSD,state.settings.base));
   $('spent').textContent=money(fromUSD(spentUSD,state.settings.base));
   $('saved').textContent=money(fromUSD(incomeUSD-spentUSD,state.settings.base));
@@ -331,17 +449,37 @@ function render(){
   const goalUSD=state.goals.reduce((s,g)=>s+usd(g.saved,g.currency),0);$('goalSaved').textContent=money(fromUSD(goalUSD,state.settings.base));
   $('goalList').innerHTML=state.goals.length?state.goals.map(g=>{const p=Math.max(0,Math.min(1,g.saved/Math.max(g.target,1)));return `<div class="goalCard"><div class="cardTop"><div><h3>${esc(g.name)}</h3><div class="meta">${money(g.saved,g.currency)} of ${money(g.target,g.currency)}${g.due?' · Target '+esc(g.due):''}</div></div><span class="pill">${Math.round(p*100)}%</span></div><div class="miniBar"><i style="width:${p*100}%"></i></div><div class="cardActions"><button class="linkBtn" onclick="openGoalForm('${g.id}')">Edit</button><button class="dangerLink" onclick="deleteGoal('${g.id}')">Delete</button></div></div>`}).join(''):'<div class="card hint">No goals added.</div>';
 
+  $('accountTotal').textContent=money(fromUSD(accountTotalUSD,state.settings.base));
+  const accountCards=state.accounts.map(a=>{
+    const currentUSD=accountBalanceUSD(a);const nativeBalance=fromUSD(currentUSD,a.currency);const baseLine=a.currency===state.settings.base?'':` · ${money(fromUSD(currentUSD,state.settings.base))} total`;
+    return `<div class="accountCard"><div class="cardTop"><div><div class="accountBadge">${esc(accountTypeLabel(a.type))}</div><h3>${esc(a.name)}</h3><div class="meta">Tracking since ${esc(a.openingDate)}${a.notes?' · '+esc(a.notes):''}</div></div><div class="value">${money(nativeBalance,a.currency)}<div class="meta">${esc(baseLine.replace(/^ · /,''))}</div></div></div><div class="cardActions"><button class="linkBtn" onclick="reconcileAccount('${a.id}')">Correct balance</button><button class="linkBtn" onclick="openAccountForm('${a.id}')">Edit</button><button class="dangerLink" onclick="deleteAccount('${a.id}')">Delete</button></div></div>`;
+  });
+  if(unassignedTransactions.length)accountCards.push(`<div class="accountCard unassigned"><div class="cardTop"><div><div class="accountBadge">Not linked</div><h3>Older entries</h3><div class="meta">${unassignedTransactions.length} transaction${unassignedTransactions.length===1?'':'s'} without an account. They still count in Money available.</div></div><div class="value">${money(fromUSD(unassignedCashUSD,state.settings.base))}</div></div></div>`);
+  $('accountList').innerHTML=accountCards.length?accountCards.join(''):'<div class="card friendlyEmpty"><b>Start with your main bank account</b><span>Add its current balance, then choose it whenever you add salary or spending.</span><button class="secondary compact" onclick="openAccountForm()">＋ Add account</button></div>';
+
+  const spendFor=categories=>tx.filter(t=>t.type==='expense'&&categories.includes(t.category)).reduce((s,t)=>s+usd(t.amount,t.currency),0);
+  const buckets=[
+    {key:'essential',label:'Essentials',pct:40,target:incomeUSD*.4,actual:spendFor(['Housing','Food','Transport','Bills','Health'])},
+    {key:'debt',label:'Debt payoff',pct:30,target:incomeUSD*.3,actual:spendFor(['Debt'])},
+    {key:'future',label:'Goals & savings',pct:20,target:incomeUSD*.2,actual:spendFor(['Savings'])},
+    {key:'wants',label:'Wants',pct:10,target:incomeUSD*.1,actual:spendFor(['Shopping','Entertainment','Travel','Other'])}
+  ];
+  $('allocationIncome').textContent=incomeUSD>0?`${money(fromUSD(incomeUSD,state.settings.base))} income`:'Add salary';
+  $('allocationSummary').innerHTML=buckets.map(b=>`<div class="allocationItem ${b.key}"><div class="allocationHeading"><span class="allocationColor"></span><b>${b.pct}% ${esc(b.label)}</b></div><div class="allocationTarget">${money(fromUSD(b.target,state.settings.base))}</div><div class="meta">Used ${money(fromUSD(b.actual,state.settings.base))} this month</div></div>`).join('');
+
   const assetTotalUSD=state.assets.reduce((s,a)=>s+assetUSD(a),0);$('assetTotal').textContent=money(fromUSD(assetTotalUSD,state.settings.base));
   const goalTargetUSD=state.goals.reduce((s,g)=>s+usd(g.target,g.currency),0);const goalProgressRatio=goalTargetUSD>0?Math.min(1,goalUSD/goalTargetUSD):0;
-  const netWorthUSD=balanceUSD+assetTotalUSD-debtUSD;const surplusUSD=incomeUSD-spentUSD;const savingRate=incomeUSD>0?surplusUSD/incomeUSD:0;
-  $('netWorth').textContent=money(fromUSD(netWorthUSD,state.settings.base));$('netWorthCash').textContent=money(fromUSD(balanceUSD,state.settings.base));$('netWorthAssets').textContent=money(fromUSD(assetTotalUSD,state.settings.base));$('netWorthDebt').textContent=money(fromUSD(debtUSD,state.settings.base));$('monthlySurplus').textContent=money(fromUSD(surplusUSD,state.settings.base));
-  $('goalProgress').style.width=(goalProgressRatio*100)+'%';$('goalProgressText').textContent=Math.round(goalProgressRatio*100)+'%';$('savingsRate').textContent=(incomeUSD>0?Math.round(savingRate*100):0)+'% saved';
-  $('wealthMessage').textContent=netWorthUSD<0?'You are not stuck—every debt payment raises this number.':debtUSD>0?'Your assets are growing while you work toward becoming debt-free.':netWorthUSD>0?'You are building real financial momentum. Keep compounding it.':'Start tracking, create a surplus and build from zero together.';
-  const advice=buildMoneySuggestions({incomeUSD,spentUSD,balanceUSD,assetTotalUSD,debtUSD,goalSavedUSD:goalUSD,goalTargetUSD,budgetUSD});
+  const netWorthUSD=trackedCashUSD+assetTotalUSD-debtUSD;const surplusUSD=incomeUSD-spentUSD;const savingRate=incomeUSD>0?surplusUSD/incomeUSD:0;
+  $('netWorth').textContent=money(fromUSD(netWorthUSD,state.settings.base));$('netWorthCash').textContent=money(fromUSD(trackedCashUSD,state.settings.base));$('netWorthAssets').textContent=money(fromUSD(assetTotalUSD,state.settings.base));$('netWorthDebt').textContent=money(fromUSD(debtUSD,state.settings.base));$('monthlySurplus').textContent=money(fromUSD(surplusUSD,state.settings.base));
+  $('goalProgress').style.width=(goalProgressRatio*100)+'%';$('goalProgressText').textContent=Math.round(goalProgressRatio*100)+'%';$('savingsRate').textContent=(incomeUSD>0?Math.round(savingRate*100):0)+'% left';
+  $('wealthMessage').textContent=netWorthUSD<0?'You are not stuck—every debt payment raises this number.':debtUSD>0?'Your money and assets are growing while you work toward becoming debt-free.':netWorthUSD>0?'You are building real financial momentum together. Keep going.':'Add your bank balance and salary to see your starting point.';
+  $('trajectoryChart').innerHTML=trajectorySvg(netWorthUSD,incomeUSD*.5);
+  const advice=buildMoneySuggestions({incomeUSD,spentUSD,balanceUSD:trackedCashUSD,assetTotalUSD,debtUSD,goalSavedUSD:goalUSD,goalTargetUSD,budgetUSD});
   $('wealthSuggestions').innerHTML=advice.map(([title,body],i)=>`<div class="adviceCard"><span class="adviceNumber">${i+1}</span><div><h3>${esc(title)}</h3><p>${esc(body)}</p></div></div>`).join('');
   $('marketStrip').innerHTML=['XAU','XAG','BTC','ETH'].map(sym=>{const p=state.prices[sym];const unit=sym==='XAU'||sym==='XAG'?' / oz':'';return `<div class="quote"><span>${sym}</span><b>${p?money(p.usd,'USD')+unit:'—'}</b></div>`}).join('');
-  $('assetList').innerHTML=state.assets.length?state.assets.map(a=>{const valueUSD=assetUSD(a);const p=state.prices[a.symbol];const missing=(a.type==='metal'||a.type==='crypto')&&!p;return `<div class="assetCard"><div class="cardTop"><div><h3>${esc(a.name)}</h3><div class="meta">${esc(marketLabel(a))}${a.notes?' · '+esc(a.notes):''}</div>${p?`<div class="meta">Live ${a.symbol}: ${money(p.usd,'USD')}${a.type==='metal'?' / oz':''}</div>`:''}${missing?'<div class="meta">Live price unavailable; value will refresh later.</div>':''}</div><div class="value">${money(fromUSD(valueUSD,state.settings.base))}</div></div><div class="cardActions"><button class="linkBtn" onclick="openAssetForm('${a.id}')">Edit</button><button class="dangerLink" onclick="deleteAsset('${a.id}')">Delete</button></div></div>`}).join(''):'<div class="card hint">No other assets added yet.</div>';
+  $('assetList').innerHTML=state.assets.length?state.assets.map(a=>{const valueUSD=assetUSD(a);const p=state.prices[a.symbol];const missing=(a.type==='metal'||a.type==='crypto')&&!p;const legacy=a.type==='cash'?'<div class="meta legacyNote">Move this balance to Accounts when convenient to keep tracking simple.</div>':'';return `<div class="assetCard"><div class="cardTop"><div><h3>${esc(a.name)}</h3><div class="meta">${esc(marketLabel(a))}${a.notes?' · '+esc(a.notes):''}</div>${legacy}${p?`<div class="meta">Live ${a.symbol}: ${money(p.usd,'USD')}${a.type==='metal'?' / oz':''}</div>`:''}${missing?'<div class="meta">Live price unavailable; value will refresh later.</div>':''}</div><div class="value">${money(fromUSD(valueUSD,state.settings.base))}</div></div><div class="cardActions"><button class="linkBtn" onclick="openAssetForm('${a.id}')">Edit</button><button class="dangerLink" onclick="deleteAsset('${a.id}')">Delete</button></div></div>`}).join(''):'<div class="card hint">No other assets added yet.</div>';
 
+  $('timelineList').innerHTML=timelineHtml();
   $('baseCurrency').value=state.settings.base;$('rateAED').value=state.settings.rates.AED;$('rateMVR').value=state.settings.rates.MVR;$('rateINR').value=state.settings.rates.INR;
 }
 
