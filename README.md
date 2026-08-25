@@ -6,12 +6,13 @@ A private, shared household budget app for Dhani and Sakhi. It runs on GitHub Pa
 
 - Email/password login and household-scoped Row Level Security
 - Shared transactions with edit and delete
-- Separate Budget, Debt, Goals and Assets pages
+- Separate Budget, Net Worth, Debt, Goals and Assets pages
 - Per-category budgets with their original currencies preserved
 - Cash, manual assets, metals and cryptocurrency tracking
 - Free market-price refresh on sign-in or on demand
 - Household/account-scoped local cache and safe offline pending changes
 - Realtime updates between both phones
+- Automatic net-worth calculation, motivation and rule-based money suggestions
 
 ## One-time database setup
 

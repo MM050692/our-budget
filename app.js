@@ -283,6 +283,29 @@ async function signOut(){if(db)await db.auth.signOut();showAuth()}
 
 function txHtml(t,actions=false){return `<div class="tx"><div class="left"><div class="dot">${t.type==='income'?'↑':'↓'}</div><div class="txMain"><div class="name">${esc(t.category)}</div><div class="meta">${esc(t.paidBy)} · ${esc(t.date)}${t.note?' · '+esc(t.note):''}</div>${actions?`<div class="txActions"><button class="linkBtn" onclick="openTx('${t.type}','${t.id}')">Edit</button><button class="dangerLink" onclick="deleteTransaction('${t.id}')">Delete</button></div>`:''}</div></div><b class="${t.type==='income'?'inc':'exp'}">${t.type==='income'?'+':'−'} ${money(t.amount,t.currency)}</b></div>`}
 
+function buildMoneySuggestions({incomeUSD,spentUSD,balanceUSD,assetTotalUSD,debtUSD,goalSavedUSD,goalTargetUSD,budgetUSD}){
+  const surplus=incomeUSD-spentUSD;const suggestions=[];
+  if(!state.transactions.length)suggestions.push(['Start with visibility','Add your income and every expense for one full month. Accurate tracking is the first step to making your money work for you.']);
+  if(incomeUSD>0){
+    const rate=surplus/incomeUSD;
+    if(rate<0)suggestions.push(['Stop the monthly leak',`Spending is above income by ${money(fromUSD(Math.abs(surplus),state.settings.base))}. Reduce flexible categories until the month turns positive.`]);
+    else if(rate<0.1)suggestions.push(['Raise your savings rate',`You are keeping about ${Math.round(rate*100)}% of income. First aim for 10%, then increase it gradually toward 20%.`]);
+    else if(rate>=0.2)suggestions.push(['Protect your strong surplus',`You are keeping about ${Math.round(rate*100)}% of income. Automate this amount toward debt, goals and long-term assets after payday.`]);
+  }
+  const categorySpend=Object.entries(state.budgets).map(([category,b])=>{const spent=state.transactions.filter(t=>t.type==='expense'&&t.category===category&&t.date.startsWith(month())).reduce((s,t)=>s+usd(t.amount,t.currency),0);return {category,over:spent-usd(b.amount,b.currency)}}).sort((a,b)=>b.over-a.over)[0];
+  if(categorySpend?.over>0)suggestions.push(['Fix the biggest budget overrun',`${categorySpend.category} is over budget by ${money(fromUSD(categorySpend.over,state.settings.base))} this month. Set one specific limit for the rest of the month.`]);
+  if(debtUSD>0){
+    if(surplus>0){const debtShare=surplus*(goalTargetUSD>goalSavedUSD?0.7:0.9);const months=Math.max(1,Math.ceil(debtUSD/debtShare));suggestions.push(['Attack debt consistently',`Direct ${money(fromUSD(debtShare,state.settings.base))} of the current monthly surplus to debt. At that pace, the tracked balance could clear in roughly ${months} month${months===1?'':'s'}, before interest and new borrowing.`])}
+    else suggestions.push(['Create debt-payment room','Before investing more, create a reliable monthly surplus and direct it to the highest-interest debt while paying minimums on the rest.']);
+  }
+  const goalGap=Math.max(0,goalTargetUSD-goalSavedUSD);
+  if(goalGap>0&&surplus>0){const goalShare=surplus*(debtUSD>0?0.3:0.8);const months=Math.max(1,Math.ceil(goalGap/goalShare));suggestions.push(['Fund goals automatically',`Move ${money(fromUSD(goalShare,state.settings.base))} monthly toward goals. At the current gap, that is roughly ${months} month${months===1?'':'s'} if targets and income stay unchanged.`])}
+  if(debtUSD<=0&&surplus>0&&assetTotalUSD<=0)suggestions.push(['Build your safety base','Start with an emergency fund in an accessible savings account. After that buffer is stable, consider diversified long-term investing appropriate to your risk level.']);
+  if(assetTotalUSD>0)suggestions.push(['Keep assets working','Review cash, metals and crypto quarterly. Avoid letting one volatile asset become too large, and keep emergency money separate from investments.']);
+  if(!suggestions.length)suggestions.push(['Keep compounding the basics','Track spending, avoid new high-interest debt and increase automatic saving whenever income rises.']);
+  return suggestions.slice(0,4);
+}
+
 function render(){
   const tx=state.transactions.filter(t=>t.date.startsWith(month()));
   const incomeUSD=tx.filter(t=>t.type==='income').reduce((s,t)=>s+usd(t.amount,t.currency),0);
@@ -309,6 +332,13 @@ function render(){
   $('goalList').innerHTML=state.goals.length?state.goals.map(g=>{const p=Math.max(0,Math.min(1,g.saved/Math.max(g.target,1)));return `<div class="goalCard"><div class="cardTop"><div><h3>${esc(g.name)}</h3><div class="meta">${money(g.saved,g.currency)} of ${money(g.target,g.currency)}${g.due?' · Target '+esc(g.due):''}</div></div><span class="pill">${Math.round(p*100)}%</span></div><div class="miniBar"><i style="width:${p*100}%"></i></div><div class="cardActions"><button class="linkBtn" onclick="openGoalForm('${g.id}')">Edit</button><button class="dangerLink" onclick="deleteGoal('${g.id}')">Delete</button></div></div>`}).join(''):'<div class="card hint">No goals added.</div>';
 
   const assetTotalUSD=state.assets.reduce((s,a)=>s+assetUSD(a),0);$('assetTotal').textContent=money(fromUSD(assetTotalUSD,state.settings.base));
+  const goalTargetUSD=state.goals.reduce((s,g)=>s+usd(g.target,g.currency),0);const goalProgressRatio=goalTargetUSD>0?Math.min(1,goalUSD/goalTargetUSD):0;
+  const netWorthUSD=balanceUSD+assetTotalUSD-debtUSD;const surplusUSD=incomeUSD-spentUSD;const savingRate=incomeUSD>0?surplusUSD/incomeUSD:0;
+  $('netWorth').textContent=money(fromUSD(netWorthUSD,state.settings.base));$('netWorthCash').textContent=money(fromUSD(balanceUSD,state.settings.base));$('netWorthAssets').textContent=money(fromUSD(assetTotalUSD,state.settings.base));$('netWorthDebt').textContent=money(fromUSD(debtUSD,state.settings.base));$('monthlySurplus').textContent=money(fromUSD(surplusUSD,state.settings.base));
+  $('goalProgress').style.width=(goalProgressRatio*100)+'%';$('goalProgressText').textContent=Math.round(goalProgressRatio*100)+'%';$('savingsRate').textContent=(incomeUSD>0?Math.round(savingRate*100):0)+'% saved';
+  $('wealthMessage').textContent=netWorthUSD<0?'You are not stuck—every debt payment raises this number.':debtUSD>0?'Your assets are growing while you work toward becoming debt-free.':netWorthUSD>0?'You are building real financial momentum. Keep compounding it.':'Start tracking, create a surplus and build from zero together.';
+  const advice=buildMoneySuggestions({incomeUSD,spentUSD,balanceUSD,assetTotalUSD,debtUSD,goalSavedUSD:goalUSD,goalTargetUSD,budgetUSD});
+  $('wealthSuggestions').innerHTML=advice.map(([title,body],i)=>`<div class="adviceCard"><span class="adviceNumber">${i+1}</span><div><h3>${esc(title)}</h3><p>${esc(body)}</p></div></div>`).join('');
   $('marketStrip').innerHTML=['XAU','XAG','BTC','ETH'].map(sym=>{const p=state.prices[sym];const unit=sym==='XAU'||sym==='XAG'?' / oz':'';return `<div class="quote"><span>${sym}</span><b>${p?money(p.usd,'USD')+unit:'—'}</b></div>`}).join('');
   $('assetList').innerHTML=state.assets.length?state.assets.map(a=>{const valueUSD=assetUSD(a);const p=state.prices[a.symbol];const missing=(a.type==='metal'||a.type==='crypto')&&!p;return `<div class="assetCard"><div class="cardTop"><div><h3>${esc(a.name)}</h3><div class="meta">${esc(marketLabel(a))}${a.notes?' · '+esc(a.notes):''}</div>${p?`<div class="meta">Live ${a.symbol}: ${money(p.usd,'USD')}${a.type==='metal'?' / oz':''}</div>`:''}${missing?'<div class="meta">Live price unavailable; value will refresh later.</div>':''}</div><div class="value">${money(fromUSD(valueUSD,state.settings.base))}</div></div><div class="cardActions"><button class="linkBtn" onclick="openAssetForm('${a.id}')">Edit</button><button class="dangerLink" onclick="deleteAsset('${a.id}')">Delete</button></div></div>`}).join(''):'<div class="card hint">No other assets added yet.</div>';
 
