@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Our Budget</title>
+  <rect width="512" height="512" rx="128" fill="#1f6552"/>
+  <circle cx="404" cy="108" r="68" fill="#f1b94b"/>
+  <circle cx="220" cy="256" r="128" fill="none" stroke="#fffdf7" stroke-width="58"/>
+  <circle cx="308" cy="256" r="128" fill="none" stroke="#dff3e8" stroke-width="58"/>
+  <path d="M176 340c52 31 108 31 160 0" fill="none" stroke="#e96d5b" stroke-width="34" stroke-linecap="round"/>
+</svg>

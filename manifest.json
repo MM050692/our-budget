@@ -1,8 +1,38 @@
 {
-  "name":"Our Budget",
-  "short_name":"Our Budget",
-  "start_url":"./",
-  "display":"standalone",
-  "background_color":"#f4f6f8",
-  "theme_color":"#111827"
+  "name": "Our Budget",
+  "short_name": "Our Budget",
+  "description": "A private shared household money tracker.",
+  "id": "./",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f2e8",
+  "theme_color": "#1f6552",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Add spend",
+      "short_name": "Spend",
+      "description": "Record an expense quickly",
+      "url": "./?quick=expense",
+      "icons": [{ "src": "shortcut-spend.png", "sizes": "96x96", "type": "image/png" }]
+    },
+    {
+      "name": "Add income",
+      "short_name": "Income",
+      "description": "Record salary or other income",
+      "url": "./?quick=income",
+      "icons": [{ "src": "shortcut-income.png", "sizes": "96x96", "type": "image/png" }]
+    },
+    {
+      "name": "Transfer money",
+      "short_name": "Transfer",
+      "description": "Move money between accounts",
+      "url": "./?quick=transfer",
+      "icons": [{ "src": "shortcut-transfer.png", "sizes": "96x96", "type": "image/png" }]
+    }
+  ]
 }

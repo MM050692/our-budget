@@ -1,185 +1,266 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#111827">
-<link rel="manifest" href="manifest.json">
-<title>Our Budget</title>
-<link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="config.js"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#173f35">
+  <meta name="description" content="A private shared household money tracker.">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <title>Our Budget</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4"></script>
+  <script src="config.js"></script>
 </head>
 <body>
-<div id="authScreen" class="auth-screen">
-  <div class="auth-card">
-    <div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div>
-    <h1>Our Budget</h1>
-    <p class="sub">Sign in to your shared household.</p>
-    <form id="authForm" class="form">
-      <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
-      <label>Password<input id="authPassword" type="password" autocomplete="current-password" required></label>
-      <button class="primary" type="submit">Sign in</button>
-      <div id="authMessage" class="hint"></div>
-    </form>
+  <div id="authScreen" class="authScreen">
+    <div class="authGlow"></div>
+    <div class="authCard">
+      <img src="icon.svg" class="authLogo" alt="">
+      <div class="eyebrow">OUR HOUSEHOLD</div>
+      <h1>Our Budget</h1>
+      <p>One calm place for your money.</p>
+      <form id="authForm" class="form">
+        <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
+        <label>Password<input id="authPassword" type="password" autocomplete="current-password" required></label>
+        <button class="primary wide" type="submit">Sign in</button>
+        <div id="authMessage" class="formMessage" aria-live="polite"></div>
+      </form>
+    </div>
   </div>
-</div>
 
-<div id="app" class="hidden">
-<header>
-  <div>
-    <div class="eyebrow">PRIVATE HOUSEHOLD FINANCE</div>
-    <h1>Our Budget</h1>
-    <div id="syncStatus" class="hint">Connecting…</div>
-  </div>
-  <button class="icon" onclick="showPage('settings')" aria-label="Settings">⚙</button>
-</header>
-
-<main>
-  <section id="page-home" class="page">
-    <div class="hero">
-      <div class="muted">Money available</div>
-      <div id="balance" class="balance">AED 0.00</div>
-      <div class="stats">
-        <div><span>Income</span><b id="income">AED 0.00</b></div>
-        <div><span>Spent</span><b id="spent">AED 0.00</b></div>
-        <div><span>Saved</span><b id="saved">AED 0.00</b></div>
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <img src="icon.svg" alt="">
+        <div>
+          <div id="greeting" class="brandTitle">Our Budget</div>
+          <div id="syncStatus" class="syncStatus">Connecting…</div>
+        </div>
       </div>
-    </div>
+      <button class="roundButton" onclick="showPage('settings')" aria-label="Settings">⚙</button>
+    </header>
 
-    <div class="actions">
-      <button onclick="openTx('income',null,'Salary')">＋ Salary</button>
-      <button onclick="openTx('expense')">＋ Expense</button>
-    </div>
+    <main>
+      <section id="page-today" class="page">
+        <div class="todayHeading">
+          <div>
+            <div id="todayDate" class="eyebrow"></div>
+            <h1 id="todayHello">Hello</h1>
+          </div>
+          <span id="trackingBadge" class="statusBadge">Ready</span>
+        </div>
 
-    <div class="head"><h2>Budget</h2><button onclick="openBudget()">Edit</button></div>
-    <div class="card">
-      <div class="row"><span>Monthly budget</span><b id="budget">AED 0.00</b></div>
-      <div class="bar"><i id="bar"></i></div>
-      <div class="row small"><span id="budgetMsg">Remaining</span><b id="remaining">AED 0.00</b></div>
-    </div>
+        <div class="safeCard">
+          <div class="safeTop">
+            <div>
+              <span>Fun money safe today</span>
+              <b id="safeToday">—</b>
+            </div>
+            <div class="safeIcon">✨</div>
+          </div>
+          <div id="safeMessage" class="safeMessage">Add salary and payday to calculate this.</div>
+          <div class="safeStats">
+            <div><span>This week</span><b id="safeWeek">—</b></div>
+            <div><span>Next payday</span><b id="nextPayday">Not set</b></div>
+          </div>
+        </div>
 
-    <div class="head top"><h2>Recent transactions</h2><button onclick="showPage('transactions')">All</button></div>
-    <div id="txList" class="card"></div>
-  </section>
+        <div class="quickGrid">
+          <button class="quickAction expense" onclick="openQuickExpense()"><span>−</span><b>Add spend</b><small>Fast entry</small></button>
+          <button class="quickAction income" onclick="openTransaction('income',null,{category:'Salary'})"><span>＋</span><b>Add income</b><small>Salary or extra</small></button>
+          <button class="quickAction transfer" onclick="openTransfer()"><span>⇄</span><b>Transfer</b><small>Between accounts</small></button>
+          <button class="quickAction shortcut" onclick="openShortcutHelp()"><span>⚡</span><b>Phone shortcut</b><small>Back Tap setup</small></button>
+        </div>
 
-  <section id="page-transactions" class="page hidden">
-    <div class="pageTitle">
-      <div><div class="eyebrow">HISTORY</div><h2>Transactions</h2></div>
-      <div class="buttonRow"><button class="secondary compact" onclick="openTx('income')">＋ Income</button><button class="primary compact" onclick="openTx('expense')">＋ Expense</button></div>
-    </div>
-    <div id="allTx" class="card"></div>
-  </section>
+        <div class="metricGrid three">
+          <div class="metricCard"><span>Money available</span><b id="todayCash">MVR 0</b></div>
+          <div class="metricCard"><span>Reserved for goals</span><b id="todayReserved">MVR 0</b></div>
+          <div class="metricCard"><span>This month left</span><b id="todaySurplus">MVR 0</b></div>
+        </div>
 
-  <section id="page-budget" class="page hidden">
-    <div class="pageTitle"><div><div class="eyebrow">MONTHLY PLAN</div><h2>Budget</h2></div><button class="primary compact" onclick="openBudget()">Edit budget</button></div>
-    <div class="metricGrid">
-      <div class="metricCard"><span>Monthly budget</span><b id="budgetPageTotal">AED 0.00</b></div>
-      <div class="metricCard"><span id="budgetPageStatus">Remaining</span><b id="budgetPageRemaining">AED 0.00</b></div>
-    </div>
-    <div id="budgetList" class="stack"></div>
-  </section>
+        <div class="sectionHead">
+          <div><h2>40–30–20–10 today</h2><p>How this month is moving.</p></div>
+          <button onclick="showPage('plan')">Full plan</button>
+        </div>
+        <div id="todayAllocation" class="allocationStrip"></div>
 
-  <section id="page-wealth" class="page hidden">
-    <div class="pageTitle">
-      <div><div class="eyebrow">OUR MONEY</div><h2>Money & Wealth</h2></div>
-      <div class="buttonRow"><button class="secondary compact" onclick="openAccountForm()">＋ Account</button><button class="primary compact" onclick="openAssetForm()">＋ Asset</button></div>
-    </div>
-    <div class="wealthHero">
-      <div class="muted">Estimated household net worth</div>
-      <div id="netWorth" class="wealthNumber">AED 0.00</div>
-      <div id="wealthMessage" class="wealthMessage">Every good money decision moves you forward.</div>
-    </div>
+        <div class="sectionHead top">
+          <div><h2>Monthly checklist</h2><p>Confirm regular money in seconds.</p></div>
+          <button onclick="openRecurringForm()">＋ Add</button>
+        </div>
+        <div id="dueList" class="stack"></div>
 
-    <div class="metricGrid wealthBreakdown">
-      <div class="metricCard"><span>Money available</span><b id="netWorthCash">AED 0.00</b></div>
-      <div class="metricCard"><span>Other assets</span><b id="netWorthAssets">AED 0.00</b></div>
-      <div class="metricCard"><span>Remaining debt</span><b id="netWorthDebt">AED 0.00</b></div>
-      <div class="metricCard"><span>This month’s surplus</span><b id="monthlySurplus">AED 0.00</b></div>
-    </div>
+        <div class="sectionHead top">
+          <div><h2>Recent activity</h2><p>Your latest shared records.</p></div>
+          <button onclick="showPage('timeline')">See all</button>
+        </div>
+        <div id="recentList" class="cardList"></div>
+      </section>
 
-    <div class="sectionTitle"><div><h2>Bank, cash & wallets</h2><p>Choose an account when adding salary or spending.</p></div><button onclick="openTx('income',null,'Salary')">＋ Salary</button></div>
-    <div class="metricCard accountTotalCard"><span>Total available in accounts</span><b id="accountTotal">AED 0.00</b></div>
-    <div id="accountList" class="stack"></div>
+      <section id="page-money" class="page hidden">
+        <div class="pageTitle">
+          <div><div class="eyebrow">THE BIG PICTURE</div><h1>Money</h1></div>
+          <div class="buttonRow">
+            <button class="secondary compact" onclick="openAccountForm()">＋ Account</button>
+            <button class="primary compact" onclick="openAssetForm()">＋ Asset</button>
+          </div>
+        </div>
 
-    <div class="sectionTitle top"><div><h2>40–30–20–10 plan</h2><p>Your monthly income is divided automatically.</p></div><span id="allocationIncome" class="pill">Add salary</span></div>
-    <div class="allocationPanel">
-      <div class="allocationDonut" role="img" aria-label="40 percent essentials, 30 percent debt, 20 percent future, 10 percent wants"><div><b>100%</b><span>of income</span></div></div>
-      <div id="allocationSummary" class="allocationGrid"></div>
-    </div>
+        <div class="netWorthCard">
+          <div class="netWorthTop"><span>Household net worth</span><span id="netWorthMood">🌱</span></div>
+          <b id="netWorth">MVR 0</b>
+          <p id="wealthMessage">Every honest update is progress.</p>
+        </div>
 
-    <div class="sectionTitle top"><div><h2>12-month trajectory</h2><p>Projection based on the current 40–30–20–10 plan.</p></div></div>
-    <div id="trajectoryChart" class="chartCard"></div>
+        <div class="metricGrid four">
+          <div class="metricCard"><span>Accounts</span><b id="moneyCash">MVR 0</b></div>
+          <div class="metricCard"><span>Other assets</span><b id="moneyAssets">MVR 0</b></div>
+          <div class="metricCard"><span>Debt</span><b id="moneyDebt">MVR 0</b></div>
+          <div class="metricCard"><span>Spendable after goals</span><b id="moneySpendable">MVR 0</b></div>
+        </div>
 
-    <div class="sectionTitle top"><div><h2>Other assets</h2><p>Gold, crypto and other investments.</p></div><button onclick="openAssetForm()">＋ Add</button></div>
-    <div class="metricCard">
-      <span>Estimated other-assets value</span>
-      <b id="assetTotal">AED 0.00</b>
-      <small id="priceStatus">Market prices refresh after sign-in.</small>
-    </div>
-    <div id="marketStrip" class="marketStrip"></div>
-    <div id="assetList" class="stack"></div>
+        <div class="sectionHead top">
+          <div><h2>Wealth journey</h2><p>Actual progress or the next 12 months.</p></div>
+        </div>
+        <div class="chartTabs">
+          <button id="actualChartButton" class="active" onclick="setWealthChart('actual')">Actual</button>
+          <button id="projectionChartButton" onclick="setWealthChart('projection')">12-month plan</button>
+        </div>
+        <div id="wealthChart" class="chartCard"></div>
 
-    <div class="card goalProgressCard top">
-      <div class="progressLabel"><span>Goal funding progress</span><b id="goalProgressText">0%</b></div>
-      <div class="miniBar"><i id="goalProgress"></i></div>
-      <div class="meta">Goal amounts show progress and are not counted twice in net worth.</div>
-    </div>
-    <div class="head top"><h2>Your next best moves</h2><span id="savingsRate" class="pill">0% saved</span></div>
-    <div id="wealthSuggestions" class="adviceList"></div>
-    <div class="sourceNote">Balances are based on what you enter. Suggestions are general guidance, not financial advice.</div>
-  </section>
+        <div class="sectionHead top">
+          <div><h2>Accounts</h2><p>Tap Statement for daily running balances.</p></div>
+          <button onclick="openTransfer()">⇄ Transfer</button>
+        </div>
+        <div id="accountList" class="stack"></div>
 
-  <section id="page-debt" class="page hidden">
-    <div class="pageTitle"><div><div class="eyebrow">LIABILITIES</div><h2>Debt</h2></div><button class="primary compact" onclick="openDebtForm()">＋ Add debt</button></div>
-    <div class="metricCard"><span>Total debt</span><b id="totalDebt">AED 0.00</b></div>
-    <div id="debtList" class="stack"></div>
-  </section>
+        <div class="sectionHead top">
+          <div><h2>Other assets</h2><p>Gold, investments and crypto.</p></div>
+          <button onclick="openAssetForm()">＋ Add</button>
+        </div>
+        <div class="assetSummary card">
+          <div><span>Estimated value</span><b id="assetTotal">MVR 0</b></div>
+          <small id="priceStatus">Market prices refresh after sign-in.</small>
+        </div>
+        <div id="marketStrip" class="marketStrip"></div>
+        <div id="assetList" class="stack"></div>
 
-  <section id="page-goals" class="page hidden">
-    <div class="pageTitle"><div><div class="eyebrow">TARGETS</div><h2>Savings Goals</h2></div><button class="primary compact" onclick="openGoalForm()">＋ Add goal</button></div>
-    <div class="metricCard"><span>Total saved toward goals</span><b id="goalSaved">AED 0.00</b></div>
-    <div id="goalList" class="stack"></div>
-  </section>
+        <div class="sectionHead top"><div><h2>Best next moves</h2><p>Simple guidance from your numbers.</p></div></div>
+        <div id="moneySuggestions" class="adviceList"></div>
+        <div class="sourceNote">General guidance only. Balances depend on what you enter.</div>
+      </section>
 
-  <section id="page-timeline" class="page hidden">
-    <div class="pageTitle"><div><div class="eyebrow">AUTOMATIC HISTORY</div><h2>Our Money Timeline</h2></div></div>
-    <div class="timelineIntro">This fills itself from salary, expenses, accounts, debts and goals. Nothing extra to maintain.</div>
-    <div id="timelineList" class="timeline"></div>
-  </section>
+      <section id="page-plan" class="page hidden">
+        <div class="pageTitle">
+          <div><div class="eyebrow">YOUR ROADMAP</div><h1>Plan</h1></div>
+          <button class="secondary compact" onclick="openBudget()">Edit budget</button>
+        </div>
 
-  <section id="page-settings" class="page hidden">
-    <div class="pageTitle"><div><div class="eyebrow">APP</div><h2>Settings</h2></div></div>
-    <div class="card form">
-      <label>Dashboard currency<select id="baseCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
-      <p class="hint">Your dashboard and last-used currency are remembered separately for this household account on this device.</p>
-      <label>1 USD = AED<input id="rateAED" type="number" step="0.0001"></label>
-      <label>1 USD = MVR<input id="rateMVR" type="number" step="0.0001"></label>
-      <label>1 USD = INR<input id="rateINR" type="number" step="0.0001"></label>
-      <button class="primary" onclick="saveSettings()">Save settings</button>
-      <button class="secondary" onclick="refreshPrices(true)">Refresh market prices</button>
-      <button class="secondary" onclick="signOut()">Sign out</button>
-    </div>
-  </section>
-</main>
+        <div class="sectionHead"><div><h2>40–30–20–10</h2><p>Essentials, debt, future and wants.</p></div><span id="planIncome" class="statusBadge">Add salary</span></div>
+        <div class="allocationPanel">
+          <div class="allocationDonut" role="img" aria-label="40 percent essentials, 30 percent debt, 20 percent future, 10 percent wants"><div><b>100%</b><span>of income</span></div></div>
+          <div id="planAllocation" class="allocationGrid"></div>
+        </div>
 
-<nav>
-  <button data-page="home" onclick="showPage('home')">Home</button>
-  <button data-page="transactions" onclick="showPage('transactions')">History</button>
-  <button data-page="budget" onclick="showPage('budget')">Budget</button>
-  <button data-page="wealth" onclick="showPage('wealth')">Money</button>
-  <button data-page="debt" onclick="showPage('debt')">Debt</button>
-  <button data-page="goals" onclick="showPage('goals')">Goals</button>
-  <button data-page="timeline" onclick="showPage('timeline')">Timeline</button>
-</nav>
-</div>
+        <div id="emergencyFundCard" class="emergencyCard top"></div>
 
-<div id="modal" class="modal hidden">
-  <div class="sheet">
-    <div class="sheethead"><h2 id="title"></h2><button onclick="closeModal()">×</button></div>
-    <div id="content"></div>
+        <div class="sectionHead top">
+          <div><h2>Debt freedom</h2><p>Payments update balances automatically.</p></div>
+          <button onclick="openDebtForm()">＋ Add</button>
+        </div>
+        <div id="debtList" class="stack"></div>
+
+        <div class="sectionHead top">
+          <div><h2>Goals</h2><p>Reserve money without double-counting it.</p></div>
+          <button onclick="openGoalForm()">＋ Add</button>
+        </div>
+        <div id="goalList" class="stack"></div>
+
+        <div class="sectionHead top"><div><h2>Category budget</h2><p>Your current limits and actual spending.</p></div></div>
+        <div id="budgetList" class="stack"></div>
+
+        <div class="sectionHead top">
+          <div><h2>Recurring items</h2><p>Salary, rent and regular bills.</p></div>
+          <button onclick="openRecurringForm()">＋ Add</button>
+        </div>
+        <div id="recurringList" class="stack"></div>
+      </section>
+
+      <section id="page-timeline" class="page hidden">
+        <div class="pageTitle">
+          <div><div class="eyebrow">AUTOMATIC HISTORY</div><h1>Timeline</h1></div>
+          <button class="primary compact" onclick="openQuickExpense()">＋ Spend</button>
+        </div>
+        <div class="timelineIntro">Transactions, transfers, accounts, goals, debts and plans appear here automatically.</div>
+        <div id="timelineFilters" class="filterChips">
+          <button class="active" data-filter="all" onclick="setTimelineFilter('all')">All</button>
+          <button data-filter="money" onclick="setTimelineFilter('money')">Money</button>
+          <button data-filter="plans" onclick="setTimelineFilter('plans')">Plans</button>
+          <button data-filter="wins" onclick="setTimelineFilter('wins')">Wins</button>
+        </div>
+        <div id="timelineList" class="timeline"></div>
+      </section>
+
+      <section id="page-settings" class="page hidden">
+        <div class="pageTitle">
+          <div><div class="eyebrow">PERSONALISE</div><h1>Settings</h1></div>
+          <button class="secondary compact" onclick="showPage('today')">Done</button>
+        </div>
+
+        <div class="card form">
+          <label>Dashboard currency<select id="baseCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
+          <label>Salary day each month<input id="paydayDay" type="number" min="1" max="31" placeholder="Example: 25"></label>
+          <label>1 USD = AED<input id="rateAED" type="number" step="0.0001"></label>
+          <label>1 USD = MVR<input id="rateMVR" type="number" step="0.0001"></label>
+          <label>1 USD = INR<input id="rateINR" type="number" step="0.0001"></label>
+          <button class="primary" onclick="saveSettings()">Save settings</button>
+        </div>
+
+        <div class="settingsCard top">
+          <div class="settingsIcon">⚡</div>
+          <div><h3>Fast expense shortcut</h3><p>Open Add Spend with iPhone Back Tap or an Android home-screen shortcut.</p></div>
+          <button class="secondary compact" onclick="openShortcutHelp()">Set up</button>
+        </div>
+
+        <div class="settingsCard">
+          <div class="settingsIcon">↧</div>
+          <div><h3>Own your data</h3><p>Download a complete JSON backup or a transaction CSV.</p></div>
+          <div class="buttonRow">
+            <button class="secondary compact" onclick="exportBackup()">Backup</button>
+            <button class="secondary compact" onclick="exportTransactionsCsv()">CSV</button>
+          </div>
+        </div>
+
+        <div class="settingsCard">
+          <div class="settingsIcon">◌</div>
+          <div><h3>Free and independent</h3><p>No paid API, bank connection or ChatGPT subscription is required.</p></div>
+          <button class="secondary compact" onclick="refreshPrices(true)">Refresh prices</button>
+        </div>
+
+        <button class="signOutButton" onclick="signOut()">Sign out</button>
+      </section>
+    </main>
+
+    <nav class="bottomNav" aria-label="Main navigation">
+      <button data-page="today" class="active" onclick="showPage('today')"><span>⌂</span><b>Today</b></button>
+      <button data-page="money" onclick="showPage('money')"><span>◉</span><b>Money</b></button>
+      <button data-page="plan" onclick="showPage('plan')"><span>✓</span><b>Plan</b></button>
+      <button data-page="timeline" onclick="showPage('timeline')"><span>↟</span><b>Timeline</b></button>
+    </nav>
   </div>
-</div>
-<script src="app.js"></script>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="sheet">
+      <div class="sheetHandle"></div>
+      <div class="sheetHead"><h2 id="modalTitle"></h2><button onclick="closeModal()" aria-label="Close">×</button></div>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden" aria-live="polite"></div>
+  <div id="confetti" class="confetti" aria-hidden="true"></div>
+
+  <script src="app.js"></script>
 </body>
 </html>
