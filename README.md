@@ -1,25 +1,32 @@
-# Our Budget v3
+# Our Budget v5
 
-This build adds:
-- Supabase email/password login
-- automatic household membership lookup
-- shared transactions
-- shared budgets
-- shared savings goals
-- shared debts
-- realtime refresh between both phones
-- AED / MVR / INR / USD
-- local cache
+A private, shared household budget app for Dhani and Sakhi. It runs on GitHub Pages and the existing Supabase Free project, with no paid services required.
 
-## Before using
-Your SQL schema must already exist and both users must already be attached to the same household.
+## Included
 
-## To test
-1. Host this folder over HTTPS.
-2. Open the hosted URL on the iPhone.
-3. Sign in with Swap's Supabase email/password.
-4. Open the same URL on the Samsung.
-5. Sign in with the wife's Supabase email/password.
-6. Add an expense on one phone and confirm it appears on the other.
+- Email/password login and household-scoped Row Level Security
+- Shared transactions with edit and delete
+- Separate Budget, Debt, Goals and Assets pages
+- Per-category budgets with their original currencies preserved
+- Cash, manual assets, metals and cryptocurrency tracking
+- Free market-price refresh on sign-in or on demand
+- Household/account-scoped local cache and safe offline pending changes
+- Realtime updates between both phones
 
-Do not put a Supabase secret key or database password into this app.
+## One-time database setup
+
+The production migration is stored at `supabase/migrations/20260825090000_harden_household_finance.sql`.
+
+It tightens existing policies and grants without deleting household data. The repository uses only the public Supabase publishable key. Never add a secret or service-role key to `config.js`.
+
+## Free hosting
+
+Serve the `main` branch through GitHub Pages. Supabase, GitHub Pages and the real-time Gold API endpoint are used within their free offerings. No background jobs, paid database branches or premium APIs are required.
+
+## Verification
+
+1. Sign in as Dhani and add, edit and delete a transaction.
+2. Sign in as Sakhi on the other phone and confirm the changes appear.
+3. Set budgets in different currencies, change dashboard currency and confirm values convert rather than being relabelled.
+4. Add a cash asset, a metal and a cryptocurrency.
+5. Temporarily go offline, save a change, reconnect and confirm the pending-sync message clears.

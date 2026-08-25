@@ -71,6 +71,15 @@
     <div id="allTx" class="card"></div>
   </section>
 
+  <section id="page-budget" class="page hidden">
+    <div class="pageTitle"><div><div class="eyebrow">MONTHLY PLAN</div><h2>Budget</h2></div><button class="primary compact" onclick="openBudget()">Edit budget</button></div>
+    <div class="metricGrid">
+      <div class="metricCard"><span>Monthly budget</span><b id="budgetPageTotal">AED 0.00</b></div>
+      <div class="metricCard"><span id="budgetPageStatus">Remaining</span><b id="budgetPageRemaining">AED 0.00</b></div>
+    </div>
+    <div id="budgetList" class="stack"></div>
+  </section>
+
   <section id="page-debt" class="page hidden">
     <div class="pageTitle"><div><div class="eyebrow">LIABILITIES</div><h2>Debt</h2></div><button class="primary compact" onclick="openDebtForm()">＋ Add debt</button></div>
     <div class="metricCard"><span>Total debt</span><b id="totalDebt">AED 0.00</b></div>
@@ -99,7 +108,7 @@
     <div class="pageTitle"><div><div class="eyebrow">APP</div><h2>Settings</h2></div></div>
     <div class="card form">
       <label>Dashboard currency<select id="baseCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
-      <p class="hint">The app remembers the last currency you use when adding a transaction, goal, debt or cash asset.</p>
+      <p class="hint">Your dashboard and last-used currency are remembered separately for this household account on this device.</p>
       <label>1 USD = AED<input id="rateAED" type="number" step="0.0001"></label>
       <label>1 USD = MVR<input id="rateMVR" type="number" step="0.0001"></label>
       <label>1 USD = INR<input id="rateINR" type="number" step="0.0001"></label>
@@ -113,6 +122,7 @@
 <nav>
   <button data-page="home" onclick="showPage('home')">Home</button>
   <button data-page="transactions" onclick="showPage('transactions')">History</button>
+  <button data-page="budget" onclick="showPage('budget')">Budget</button>
   <button data-page="debt" onclick="showPage('debt')">Debt</button>
   <button data-page="goals" onclick="showPage('goals')">Goals</button>
   <button data-page="assets" onclick="showPage('assets')">Assets</button>
