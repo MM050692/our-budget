@@ -1,4 +1,4 @@
-# Our Budget v7
+# Our Budget v8
 
 A private shared household money app for a couple. It runs on GitHub Pages with the existing Supabase Free project. It has no paid API, bank connection, AI runtime or ChatGPT subscription dependency.
 
@@ -7,20 +7,24 @@ A private shared household money app for a couple. It runs on GitHub Pages with 
 - Four simple areas: **Today**, **Money**, **Plan** and an automatic **Timeline**
 - A friendly fast-expense form, plus iPhone Back Tap and Android/PWA shortcuts
 - Bank, cash and wallet accounts with opening balances, linked transactions, daily statements and transparent balance corrections
+- A safer daily-spending guide that protects goal money, upcoming bills, debt minimums and a three-day essentials buffer
 - One linked transfer that updates both accounts without inflating income or spending
-- Debts with APR, minimum payments, principal/interest records and automatic remaining balances
+- A household-wide debt plan with interest-saving and quick-win strategies, minimum protection and extra-payment simulation
 - Goals with dated contributions that reserve existing cash without double-counting net worth
 - Recurring salary, rent and bill templates with a monthly confirmation checklist
 - A 40–30–20–10 plan: 40% essentials, 30% debt, 20% future, 10% wants
+- A payday assistant that turns the four percentages into exact, recordable actions
 - Emergency-fund guidance from the current essential category limits
-- Actual daily net-worth snapshots and a separate 12-month direction chart
+- Actual daily net-worth snapshots and cautious/current/improved 12-month scenarios
+- A 30/60/90-day cash-flow outlook from regular income, bills and debt minimums
+- A shared monthly balance check-up with transparent corrections and Timeline history
 - Assets and free market-price refresh for metals and crypto
 - Household-scoped Row Level Security, Realtime updates, local cache and an offline change queue
-- Complete JSON backup and transaction CSV export
+- Complete JSON backup, validated merge restore with an automatic safety copy, and transaction CSV export
 
 ## Data model and migration
 
-Apply SQL files in `supabase/migrations/` in timestamp order. The v7 migration adds shared settings, recurring items, goal contributions, net-worth snapshots, linked transfers and linked debt-payment fields. It also adds RLS policies, explicit authenticated grants, household-link validation, indexes and automatic debt/goal balance triggers.
+Apply SQL files in `supabase/migrations/` in timestamp order. The v8 migration adds the shared debt strategy and monthly check-ups with RLS, explicit authenticated grants, actor validation, indexes and Realtime publication. Earlier migrations retain linked accounts, transfers, recurring items, contributions, net-worth snapshots and automatic debt/goal balance triggers.
 
 The repository uses only the public Supabase publishable/anon key. Never put a secret or service-role key in `config.js`.
 
@@ -56,5 +60,10 @@ Serve `main` through GitHub Pages. The app uses the existing GitHub Pages site, 
 3. Transfer between two accounts and confirm income, spending and net worth do not change.
 4. Record a debt payment and goal contribution; confirm the linked balances change once.
 5. Confirm a recurring item and make sure it cannot be confirmed twice in one month.
-6. Sign in on the second phone and confirm settings and data update in realtime.
-7. Go offline, save an expense, reconnect and confirm the waiting-sync message clears.
+6. Open the payday assistant and verify the four targets match the current month’s income.
+7. Compare both debt strategies and test an extra monthly payment without saving it.
+8. Complete the monthly money check and confirm any correction appears in the account statement and Timeline.
+9. Preview 30, 60 and 90 days in Timeline and confirm regular items affect the expected cash balance.
+10. Restore a recent backup and confirm the automatic safety copy downloads before the merge begins.
+11. Sign in on the second phone and confirm settings and data update in realtime.
+12. Go offline, save an expense, reconnect and confirm the waiting-sync message clears.

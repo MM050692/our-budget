@@ -1,7 +1,7 @@
 {
   "name": "Our Budget",
   "short_name": "Our Budget",
-  "description": "A private shared household money tracker.",
+  "description": "A private shared household money planner for safer spending, debt freedom and goals.",
   "id": "./",
   "start_url": "./?source=pwa",
   "scope": "./",

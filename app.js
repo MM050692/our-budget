@@ -1,4 +1,4 @@
-const VERSION = 7;
+const VERSION = 8;
 const CURRENCIES = ['AED', 'MVR', 'INR', 'USD'];
 const EXPENSE_CATEGORIES = [
   ['Housing', '🏠'], ['Food', '🍲'], ['Transport', '🚕'], ['Bills', '💡'],
@@ -6,13 +6,15 @@ const EXPENSE_CATEGORIES = [
   ['Entertainment', '🎬'], ['Travel', '✈️'], ['Other', '•••']
 ];
 const INCOME_CATEGORIES = ['Salary', 'Bonus', 'Side income', 'Gift', 'Refund', 'Other income'];
+const ESSENTIAL_CATEGORIES = ['Housing', 'Food', 'Transport', 'Bills', 'Health'];
+const WANT_CATEGORIES = ['Shopping', 'Entertainment', 'Travel', 'Other'];
 const METALS = [['XAU', 'Gold'], ['XAG', 'Silver'], ['XPT', 'Platinum'], ['XPD', 'Palladium']];
 const CRYPTO = [['BTC', 'Bitcoin'], ['ETH', 'Ethereum'], ['LTC', 'Litecoin'], ['XRP', 'XRP'], ['DOT', 'Polkadot'], ['ADA', 'Cardano']];
 const DEFAULT = {
   version: VERSION,
   settings: {
     base: 'MVR', lastCurrency: 'MVR', rates: { USD: 1, AED: 3.6725, MVR: 15.42, INR: 88 },
-    paydayDay: null, funMode: true, lastExpenseCategory: 'Food', lastExpenseAccountId: ''
+    paydayDay: null, funMode: true, debtStrategy: 'avalanche', lastExpenseCategory: 'Food', lastExpenseAccountId: ''
   },
   member: { displayName: '', role: '' }, people: [],
   transactions: [],
@@ -21,7 +23,7 @@ const DEFAULT = {
     Bills: { amount: 1500, currency: 'MVR' }, Transport: { amount: 1000, currency: 'MVR' },
     Shopping: { amount: 2000, currency: 'MVR' }, Other: { amount: 2000, currency: 'MVR' }
   },
-  goals: [], debts: [], assets: [], accounts: [], recurring: [], contributions: [], snapshots: [], prices: {}
+  goals: [], debts: [], assets: [], accounts: [], recurring: [], contributions: [], snapshots: [], checkups: [], prices: {}
 };
 
 let state = structuredClone(DEFAULT);
@@ -36,8 +38,10 @@ let priceRefresh = null;
 let currentPage = 'today';
 let wealthChartMode = 'actual';
 let timelineFilter = 'all';
+let cashflowDays = 30;
 let toastTimer = null;
 let pendingQuickAction = new URLSearchParams(location.search).get('quick') || '';
+let pendingRestoreData = null;
 
 const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
@@ -63,7 +67,8 @@ function normalizeState(raw) {
   next.settings.base = CURRENCIES.includes(next.settings.base) ? next.settings.base : 'MVR';
   next.settings.lastCurrency = CURRENCIES.includes(next.settings.lastCurrency) ? next.settings.lastCurrency : next.settings.base;
   next.member = Object.assign({}, DEFAULT.member, input.member || {});
-  for (const key of ['people', 'transactions', 'goals', 'debts', 'assets', 'accounts', 'recurring', 'contributions', 'snapshots']) {
+  next.settings.debtStrategy = ['avalanche', 'snowball'].includes(next.settings.debtStrategy) ? next.settings.debtStrategy : 'avalanche';
+  for (const key of ['people', 'transactions', 'goals', 'debts', 'assets', 'accounts', 'recurring', 'contributions', 'snapshots', 'checkups']) {
     next[key] = Array.isArray(next[key]) ? next[key] : [];
   }
   next.prices = next.prices && typeof next.prices === 'object' ? next.prices : {};
@@ -82,16 +87,18 @@ function cache() {
 }
 
 function loadScopedState() {
-  stateKey = `our_budget_v7:${householdId}:${currentUser.id}`;
-  pendingKey = `our_budget_pending_v7:${householdId}:${currentUser.id}`;
+  stateKey = `our_budget_v8:${householdId}:${currentUser.id}`;
+  pendingKey = `our_budget_pending_v8:${householdId}:${currentUser.id}`;
   const legacyStateKeys = [
-    `our_budget_v5:${householdId}:${currentUser.id}`,
+    `our_budget_v7:${householdId}:${currentUser.id}`,
     `our_budget_v6:${householdId}:${currentUser.id}`,
+    `our_budget_v5:${householdId}:${currentUser.id}`,
     'our_budget_v4', 'our_budget_v3', 'our_budget_v2'
   ];
   const legacyPendingKeys = [
-    `our_budget_pending_v5:${householdId}:${currentUser.id}`,
-    `our_budget_pending_v6:${householdId}:${currentUser.id}`
+    `our_budget_pending_v7:${householdId}:${currentUser.id}`,
+    `our_budget_pending_v6:${householdId}:${currentUser.id}`,
+    `our_budget_pending_v5:${householdId}:${currentUser.id}`
   ];
   let raw = safeParse(localStorage.getItem(stateKey));
   if (!raw) {
@@ -213,6 +220,9 @@ async function runOperation(operation) {
   if (operation.action === 'settings') {
     return db.from('household_settings').upsert(operation.row, { onConflict: 'household_id' });
   }
+  if (operation.action === 'checkup') {
+    return db.from('monthly_checkups').upsert(operation.row, { onConflict: 'household_id,month' });
+  }
   return db.from(operation.table).upsert(operation.row);
 }
 
@@ -245,6 +255,17 @@ async function flushPending() {
 
 async function saveOperation(operation, options = {}) {
   enqueue(operation);
+  cache();
+  render();
+  if (options.close !== false) closeModal();
+  if (options.message) toast(options.message);
+  if (options.celebrate) celebrate();
+  haptic();
+  if (await flushPending()) await loadRemote();
+}
+
+async function saveOperations(operations, options = {}) {
+  operations.forEach(enqueue);
   cache();
   render();
   if (options.close !== false) closeModal();
@@ -342,6 +363,7 @@ async function loadRemote() {
     db.from('recurring_items').select('*').eq('household_id', householdId),
     db.from('goal_contributions').select('*').eq('household_id', householdId),
     db.from('net_worth_snapshots').select('*').eq('household_id', householdId).order('snapshot_date'),
+    db.from('monthly_checkups').select('*').eq('household_id', householdId).order('month'),
     db.from('household_settings').select('*').eq('household_id', householdId).maybeSingle(),
     db.from('household_members').select('display_name').eq('household_id', householdId)
   ]);
@@ -350,7 +372,7 @@ async function loadRemote() {
     return;
   }
   if (pending().length) { updateSyncStatus(); return; }
-  const [transactions, budgets, goals, debts, assets, accounts, recurring, contributions, snapshots, settings, members] = results.map(r => r.data);
+  const [transactions, budgets, goals, debts, assets, accounts, recurring, contributions, snapshots, checkups, settings, members] = results.map(r => r.data);
   state.people = members.map(member => member.display_name).filter(Boolean);
   state.transactions = transactions.map(row => ({
     id: row.id, type: row.type, amount: +row.amount, currency: cleanCurrency(row.currency), category: row.category,
@@ -369,10 +391,12 @@ async function loadRemote() {
   state.recurring = recurring.map(row => ({ id: row.id, name: row.name, kind: row.kind, amount: +row.amount, currency: cleanCurrency(row.currency), category: row.category, paidBy: row.paid_by, accountId: row.account_id || '', day: row.day_of_month, note: row.note || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
   state.contributions = contributions.map(row => ({ id: row.id, goalId: row.goal_id, accountId: row.account_id || '', amount: +row.amount, currency: cleanCurrency(row.currency), date: row.date, note: row.note || '', createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
   state.snapshots = snapshots.map(row => ({ id: row.id, date: row.snapshot_date, cashUSD: +row.cash_usd, assetsUSD: +row.assets_usd, debtUSD: +row.debt_usd, netWorthUSD: +row.net_worth_usd }));
+  state.checkups = checkups.map(row => ({ id: row.id, month: row.month, accountCount: +row.account_count, adjustmentUSD: +row.adjustment_total_usd, note: row.note || '', completedBy: row.completed_by || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' }));
   if (settings) {
     state.settings.base = cleanCurrency(settings.base_currency) || state.settings.base;
     state.settings.paydayDay = settings.payday_day || null;
     state.settings.funMode = settings.fun_mode !== false;
+    state.settings.debtStrategy = ['avalanche', 'snowball'].includes(settings.debt_strategy) ? settings.debt_strategy : 'avalanche';
     state.settings.rates = {
       USD: 1,
       AED: +(settings.usd_to_aed || state.settings.rates.AED),
@@ -393,8 +417,8 @@ function scheduleRemoteReload() {
 
 function subscribeRealtime() {
   if (realtimeChannel) db.removeChannel(realtimeChannel);
-  realtimeChannel = db.channel(`household-v7-${householdId}`);
-  for (const table of ['transactions', 'budgets', 'goals', 'debts', 'assets', 'accounts', 'recurring_items', 'goal_contributions', 'net_worth_snapshots', 'household_settings']) {
+  realtimeChannel = db.channel(`household-v8-${householdId}`);
+  for (const table of ['transactions', 'budgets', 'goals', 'debts', 'assets', 'accounts', 'recurring_items', 'goal_contributions', 'net_worth_snapshots', 'monthly_checkups', 'household_settings']) {
     realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table, filter: `household_id=eq.${householdId}` }, scheduleRemoteReload);
   }
   realtimeChannel.subscribe(status => {
@@ -485,10 +509,10 @@ function allocationBuckets(metrics = moneyMetrics()) {
     .filter(c => c.date.startsWith(monthKey()))
     .reduce((sum, c) => sum + usd(c.amount, c.currency), 0);
   return [
-    { key: 'essential', label: 'Essentials', pct: 40, target: metrics.incomeUSD * .4, actual: expenseFor(['Housing', 'Food', 'Transport', 'Bills', 'Health']) },
+    { key: 'essential', label: 'Essentials', pct: 40, target: metrics.incomeUSD * .4, actual: expenseFor(ESSENTIAL_CATEGORIES) },
     { key: 'debt', label: 'Debt freedom', pct: 30, target: metrics.incomeUSD * .3, actual: expenseFor(['Debt']) },
     { key: 'future', label: 'Future', pct: 20, target: metrics.incomeUSD * .2, actual: expenseFor(['Savings']) + futureContributionsUSD },
-    { key: 'wants', label: 'Fun & wants', pct: 10, target: metrics.incomeUSD * .1, actual: expenseFor(['Shopping', 'Entertainment', 'Travel', 'Other']) }
+    { key: 'wants', label: 'Fun & wants', pct: 10, target: metrics.incomeUSD * .1, actual: expenseFor(WANT_CATEGORIES) }
   ];
 }
 
@@ -506,13 +530,111 @@ function nextPaydayInfo() {
   return { date: localDate(date), days };
 }
 
+function dateObject(value) { return new Date(`${value}T12:00:00`); }
+function addDays(value, days) {
+  const date = dateObject(value);
+  date.setDate(date.getDate() + days);
+  return localDate(date);
+}
+function dateDistance(start, end) { return Math.max(0, Math.round((dateObject(end) - dateObject(start)) / 86400000)); }
+function monthDatesBetween(start, end) {
+  const values = [];
+  const cursor = dateObject(`${monthKey(start)}-01`);
+  const last = dateObject(`${monthKey(end)}-01`);
+  while (cursor <= last) {
+    values.push(localDate(cursor));
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return values;
+}
+function monthlyDate(month, day) {
+  const base = dateObject(month);
+  const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  return `${monthKey(month)}-${String(Math.min(Number(day) || 1, lastDay)).padStart(2, '0')}`;
+}
+function recurringConfirmed(itemId, occurrenceDate) {
+  return state.transactions.some(transaction =>
+    transaction.recurringItemId === itemId && transaction.recurringMonth === monthStart(occurrenceDate)
+  );
+}
+function recurringOccurrences(start, end, predicate = () => true) {
+  const occurrences = [];
+  for (const month of monthDatesBetween(start, end)) {
+    state.recurring.filter(item => item.active !== false && predicate(item)).forEach(item => {
+      const date = monthlyDate(month, item.day);
+      if (date >= start && date <= end && !recurringConfirmed(item.id, date)) occurrences.push({ item, date });
+    });
+  }
+  return occurrences;
+}
+function debtPaidInMonthUSD(debt, month) {
+  return state.transactions.filter(transaction => transaction.debtId === debt.id && transaction.date.startsWith(monthKey(month)))
+    .reduce((sum, transaction) => sum + usd(Number(transaction.debtPrincipal || 0) + Number(transaction.debtInterest || 0), debt.currency), 0);
+}
+function upcomingObligations(start, end) {
+  const expenseOccurrences = recurringOccurrences(start, end, item => item.kind === 'expense');
+  const billsUSD = expenseOccurrences.filter(({ item }) => item.category !== 'Debt')
+    .reduce((sum, { item }) => sum + usd(item.amount, item.currency), 0);
+  let debtUSD = 0;
+  for (const month of monthDatesBetween(start, end)) {
+    const monthEnd = monthlyDate(month, 31);
+    const rangeStart = monthKey(month) === monthKey(start) ? start : month;
+    const rangeEnd = monthKey(month) === monthKey(end) ? end : monthEnd;
+    const recurringDebtUSD = expenseOccurrences
+      .filter(({ item, date }) => item.category === 'Debt' && date >= rangeStart && date <= rangeEnd)
+      .reduce((sum, { item }) => sum + usd(item.amount, item.currency), 0);
+    const minimumDebtUSD = activeDebts().reduce((sum, debt) => {
+      if (!(debt.minimum > 0)) return sum;
+      const dueDate = debt.paymentDay ? monthlyDate(month, debt.paymentDay) : rangeEnd;
+      if (dueDate < rangeStart || dueDate > rangeEnd) return sum;
+      return sum + Math.max(0, usd(debt.minimum, debt.currency) - debtPaidInMonthUSD(debt, month));
+    }, 0);
+    debtUSD += Math.max(recurringDebtUSD, minimumDebtUSD);
+  }
+  return { billsUSD, debtUSD, totalUSD: billsUSD + debtUSD, occurrences: expenseOccurrences };
+}
+
 function safeSpendPlan(metrics = moneyMetrics(), buckets = allocationBuckets(metrics)) {
   const payday = nextPaydayInfo();
-  if (!(metrics.incomeUSD > 0) || !payday) return { ready: false, dailyUSD: 0, weeklyUSD: 0, payday };
+  if (!(metrics.incomeUSD > 0) || !payday) return { ready: false, dailyUSD: 0, weeklyUSD: 0, payday, protectedUSD: 0, bufferUSD: 0 };
   const wants = buckets.find(bucket => bucket.key === 'wants');
-  const remainingUSD = Math.max(0, wants.target - wants.actual);
+  const obligations = upcomingObligations(today(), payday.date);
+  const essentialsBudgetUSD = Object.entries(state.budgets)
+    .filter(([category]) => ESSENTIAL_CATEGORIES.includes(category))
+    .reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
+  const daysThisMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+  const bufferUSD = essentialsBudgetUSD > 0 ? essentialsBudgetUSD / daysThisMonth * 3 : 0;
+  const wantsRemainingUSD = Math.max(0, wants.target - wants.actual);
+  const cashAfterProtectionUSD = Math.max(0, metrics.spendableUSD - obligations.totalUSD - bufferUSD);
+  const remainingUSD = Math.min(wantsRemainingUSD, cashAfterProtectionUSD);
   const dailyUSD = remainingUSD / payday.days;
-  return { ready: true, dailyUSD, weeklyUSD: dailyUSD * Math.min(7, payday.days), payday, remainingUSD };
+  return {
+    ready: true, dailyUSD, weeklyUSD: dailyUSD * Math.min(7, payday.days), payday, remainingUSD,
+    wantsRemainingUSD, protectedUSD: obligations.totalUSD, billsUSD: obligations.billsUSD,
+    debtUSD: obligations.debtUSD, bufferUSD, spendableCashUSD: metrics.spendableUSD,
+    shortfallUSD: Math.max(0, obligations.totalUSD + bufferUSD - metrics.spendableUSD)
+  };
+}
+
+function openSafeBreakdown() {
+  const metrics = moneyMetrics();
+  const safe = safeSpendPlan(metrics, allocationBuckets(metrics));
+  if (!safe.ready) {
+    openModal('Safe-to-spend guide', `<div class="form"><div class="friendlyNote">Add this month’s salary and set the salary day first. The app then protects real cash, goals, upcoming bills, debt minimums and a three-day essentials buffer.</div><button class="primary" onclick="closeModal();openTransaction('income',null,{category:'Salary'})">Add salary</button></div>`);
+    return;
+  }
+  openModal('Safe-to-spend guide', `<div class="form">
+    <div class="friendlyNote">This is the lower of your remaining 10% wants allowance and the cash that is genuinely free after protection.</div>
+    <div class="statement">
+      <div class="statementRow"><time>1</time><div><b>Spendable cash</b><div class="meta">Accounts minus money reserved for goals</div></div><div class="statementValue"><strong>${baseMoney(safe.spendableCashUSD)}</strong></div></div>
+      <div class="statementRow"><time>2</time><div><b>Upcoming bills</b><div class="meta">Unconfirmed regular expenses before payday</div></div><div class="statementValue"><strong>− ${baseMoney(safe.billsUSD)}</strong></div></div>
+      <div class="statementRow"><time>3</time><div><b>Debt minimums</b><div class="meta">Still due before payday</div></div><div class="statementValue"><strong>− ${baseMoney(safe.debtUSD)}</strong></div></div>
+      <div class="statementRow"><time>4</time><div><b>Three-day buffer</b><div class="meta">Based on essential category limits</div></div><div class="statementValue"><strong>− ${baseMoney(safe.bufferUSD)}</strong></div></div>
+      <div class="statementRow"><time>✓</time><div><b>Safe wants left</b><div class="meta">Never above the remaining 10% allowance</div></div><div class="statementValue"><strong>${baseMoney(safe.remainingUSD)}</strong></div></div>
+    </div>
+    ${safe.shortfallUSD > 0 ? `<div class="warningNote">Protected commitments exceed spendable cash by <b>${baseMoney(safe.shortfallUSD)}</b>. Pause non-essential spending and update any bill that has already been paid.</div>` : ''}
+    <button class="primary" onclick="closeModal()">Got it</button>
+  </div>`);
 }
 
 async function refreshPrices(force = false) {
@@ -621,23 +743,38 @@ function actualChartHtml(metrics) {
 }
 
 function projectionChartHtml(metrics) {
-  if (!(metrics.incomeUSD > 0)) return '<div class="emptyChart"><b>Add salary to see a one-year direction</b><span>The projection uses 30% for debt and 20% for savings and goals.</span></div>';
-  const monthlyGrowthUSD = metrics.incomeUSD * .5;
-  const values = Array.from({ length: 13 }, (_, index) => metrics.netWorthUSD + monthlyGrowthUSD * index);
-  const low = Math.min(0, ...values);
-  const high = Math.max(0, ...values);
+  const recurringIncomeUSD = state.recurring.filter(item => item.active !== false && item.kind === 'income')
+    .reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
+  const monthlyIncomeUSD = recurringIncomeUSD || metrics.incomeUSD;
+  if (!(monthlyIncomeUSD > 0)) return '<div class="emptyChart"><b>Add salary to see a one-year direction</b><span>The projection will use your regular income, bills, debt interest and current 40–30–20–10 plan.</span></div>';
+  const recurringLivingUSD = state.recurring.filter(item => item.active !== false && item.kind === 'expense' && !['Debt', 'Savings'].includes(item.category))
+    .reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
+  const monthlyInterestUSD = activeDebts().reduce((sum, debt) => sum + usd(debt.remaining, debt.currency) * Number(debt.apr || 0) / 1200, 0);
+  const scenarios = [
+    { key: 'cautious', label: 'Cautious', color: '#e96d5b', livingShare: .60 },
+    { key: 'current', label: 'Current plan', color: '#557fa3', livingShare: .50 },
+    { key: 'improved', label: 'Improved', color: '#31846c', livingShare: .45 }
+  ].map(scenario => {
+    const livingUSD = Math.max(recurringLivingUSD, monthlyIncomeUSD * scenario.livingShare);
+    const monthlyGrowthUSD = monthlyIncomeUSD - livingUSD - monthlyInterestUSD;
+    return { ...scenario, monthlyGrowthUSD, values: Array.from({ length: 13 }, (_, index) => metrics.netWorthUSD + monthlyGrowthUSD * index) };
+  });
+  const allValues = scenarios.flatMap(scenario => scenario.values);
+  const low = Math.min(0, ...allValues);
+  const high = Math.max(0, ...allValues);
   const range = Math.max(1, high - low);
-  const coords = values.map((value, index) => ({ x: 42 + index * (556 / 12), y: 164 - ((value - low) / range) * 118 }));
-  const points = coords.map(point => `${point.x},${point.y}`).join(' ');
   const zeroY = 164 - ((0 - low) / range) * 118;
-  return `<div class="chartLabels"><div><span>Now</span><b>${baseMoney(metrics.netWorthUSD)}</b></div><div><span>In 12 months</span><b>${baseMoney(values.at(-1))}</b></div></div>
+  const current = scenarios.find(scenario => scenario.key === 'current');
+  const lines = scenarios.map(scenario => {
+    const coords = scenario.values.map((value, index) => ({ x: 42 + index * (556 / 12), y: 164 - ((value - low) / range) * 118 }));
+    return `<polyline points="${coords.map(point => `${point.x},${point.y}`).join(' ')}" fill="none" stroke="${scenario.color}" stroke-width="${scenario.key === 'current' ? 5 : 3}" stroke-linecap="round" stroke-linejoin="round" opacity="${scenario.key === 'current' ? 1 : .82}"/>`;
+  }).join('');
+  return `<div class="chartLabels"><div><span>Now</span><b>${baseMoney(metrics.netWorthUSD)}</b></div><div><span>Current plan · 12 months</span><b>${baseMoney(current.values.at(-1))}</b></div></div>
     <svg class="wealthSvg" viewBox="0 0 640 195" role="img" aria-label="Projected household net worth for twelve months">
-      <defs><linearGradient id="wealthFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#31846c" stop-opacity=".28"/><stop offset="1" stop-color="#31846c" stop-opacity=".02"/></linearGradient></defs>
       <line x1="42" y1="${zeroY}" x2="598" y2="${zeroY}" class="chartZero"/>
-      <polygon points="42,164 ${points} 598,164" class="chartArea"/><polyline points="${points}" class="chartLine"/>
-      <circle cx="${coords[0].x}" cy="${coords[0].y}" r="5" class="chartPoint"/><circle cx="${coords.at(-1).x}" cy="${coords.at(-1).y}" r="6" class="chartPoint"/>
+      ${lines}
       <text x="42" y="188">NOW</text><text x="598" y="188" text-anchor="end">12 MONTHS</text>
-    </svg><div class="chartFoot">Direction only: assumes 30% of monthly income reduces debt and 20% grows savings. Interest and market changes are not predicted.</div>`;
+    </svg><div class="forecastLegend">${scenarios.map(scenario => `<span><i style="background:${scenario.color}"></i>${scenario.label}</span>`).join('')}</div><div class="chartFoot">Uses regular income and bills, your debt interest and three spending paths. Market prices stay unchanged, so this is guidance—not a promise.</div>`;
 }
 
 function setWealthChart(mode) {
@@ -645,10 +782,79 @@ function setWealthChart(mode) {
   render();
 }
 
+function cashflowForecast(days = cashflowDays) {
+  const start = today();
+  const end = addDays(start, days);
+  const events = recurringOccurrences(start, end).map(({ item, date }) => ({
+    date, label: item.name, accountId: item.accountId,
+    deltaUSD: (item.kind === 'income' ? 1 : -1) * usd(item.amount, item.currency),
+    deltaNative: (item.kind === 'income' ? 1 : -1) * Number(item.amount), currency: item.currency,
+    category: item.category
+  }));
+  for (const month of monthDatesBetween(start, end)) {
+    const hasRecurringDebt = events.some(event => event.category === 'Debt' && event.date.startsWith(monthKey(month)));
+    if (hasRecurringDebt) continue;
+    activeDebts().filter(debt => debt.remaining > .005 && debt.minimum > 0).forEach(debt => {
+      const date = debt.paymentDay ? monthlyDate(month, debt.paymentDay) : monthlyDate(month, 31);
+      if (date < start || date > end) return;
+      const remainingUSD = Math.max(0, usd(debt.minimum, debt.currency) - debtPaidInMonthUSD(debt, month));
+      if (remainingUSD > .005) events.push({ date, label: `${debt.name} minimum`, accountId: '', deltaUSD: -remainingUSD, deltaNative: null, currency: debt.currency, category: 'Debt' });
+    });
+  }
+  events.sort((a, b) => a.date.localeCompare(b.date));
+  let balanceUSD = moneyMetrics().cashUSD;
+  let eventIndex = 0;
+  const points = [{ date: start, balanceUSD }];
+  for (let offset = 1; offset <= days; offset += 1) {
+    const date = addDays(start, offset);
+    while (eventIndex < events.length && events[eventIndex].date <= date) {
+      balanceUSD += events[eventIndex].deltaUSD;
+      eventIndex += 1;
+    }
+    points.push({ date, balanceUSD });
+  }
+  const accountEnd = activeAccounts().map(account => {
+    const delta = events.filter(event => event.accountId === account.id && event.currency === account.currency)
+      .reduce((sum, event) => sum + Number(event.deltaNative || 0), 0);
+    return { id: account.id, name: account.name, currency: account.currency, balance: accountBalanceNative(account) + delta };
+  });
+  const lowest = points.reduce((result, point) => point.balanceUSD < result.balanceUSD ? point : result, points[0]);
+  return { start, end, days, events, points, accountEnd, startUSD: points[0]?.balanceUSD || 0, endUSD: points.at(-1)?.balanceUSD || 0, lowest };
+}
+
+function cashflowChartHtml(forecast) {
+  if (!forecast.events.length) return '<div class="emptyChart"><b>Add regular salary and bills</b><span>Your 30–90 day outlook will then populate automatically.</span></div>';
+  const values = forecast.points.map(point => point.balanceUSD);
+  const low = Math.min(0, ...values);
+  const high = Math.max(0, ...values);
+  const range = Math.max(1, high - low);
+  const coords = forecast.points.map((point, index) => ({
+    x: 42 + index * (556 / Math.max(1, forecast.points.length - 1)),
+    y: 164 - ((point.balanceUSD - low) / range) * 118
+  }));
+  const points = coords.map(point => `${point.x},${point.y}`).join(' ');
+  const zeroY = 164 - ((0 - low) / range) * 118;
+  const danger = forecast.lowest.balanceUSD < 0;
+  return `<div class="forecastSummary"><div><span>Today</span><b>${baseMoney(forecast.startUSD)}</b></div><div><span>Expected in ${forecast.days} days</span><b>${baseMoney(forecast.endUSD)}</b></div></div>
+    <svg class="wealthSvg" viewBox="0 0 640 195" role="img" aria-label="Expected household cash for ${forecast.days} days">
+      <defs><linearGradient id="cashflowFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${danger ? '#e96d5b' : '#557fa3'}" stop-opacity=".24"/><stop offset="1" stop-color="#557fa3" stop-opacity=".02"/></linearGradient></defs>
+      <line x1="42" y1="${zeroY}" x2="598" y2="${zeroY}" class="chartZero"/>
+      <polygon points="42,164 ${points} 598,164" class="forecastArea"/><polyline points="${points}" class="forecastLine${danger ? ' forecastDanger' : ''}"/>
+      <text x="42" y="188">${esc(forecast.start.slice(5))}</text><text x="598" y="188" text-anchor="end">${esc(forecast.end.slice(5))}</text>
+    </svg>
+    <div class="chartFoot">Lowest expected balance: <b>${baseMoney(forecast.lowest.balanceUSD)}</b> on ${formatDate(forecast.lowest.date)}. Confirmed items disappear from this forecast.</div>
+    <div class="forecastAccounts">${forecast.accountEnd.map(account => `<div><span>${esc(account.name)}</span><b>${money(account.balance, account.currency)}</b></div>`).join('')}</div>`;
+}
+
+function setCashflowDays(days) {
+  cashflowDays = [30, 60, 90].includes(Number(days)) ? Number(days) : 30;
+  render();
+}
+
 function buildSuggestions(metrics, buckets) {
   const suggestions = [];
   const essentialsBudgetUSD = Object.entries(state.budgets)
-    .filter(([category]) => ['Housing', 'Food', 'Transport', 'Bills', 'Health'].includes(category))
+    .filter(([category]) => ESSENTIAL_CATEGORIES.includes(category))
     .reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
   if (!activeAccounts().length) {
     suggestions.push(['Add your real bank balance', 'Start with the amount currently in the bank. Salary and spending will then update it automatically.']);
@@ -659,7 +865,8 @@ function buildSuggestions(metrics, buckets) {
   if (metrics.debtUSD > 0) {
     if (metrics.incomeUSD > 0) {
       const monthly = metrics.incomeUSD * .3;
-      suggestions.push(['Give debt its 30%', `Aim for ${baseMoney(monthly)} this month and put extra toward the highest-interest balance first.`]);
+      const target = debtPriority(activeDebts().filter(debt => debt.remaining > .005).map(debt => ({ ...debt, balanceUSD: usd(debt.remaining, debt.currency) })), state.settings.debtStrategy)[0];
+      suggestions.push(['Give debt its 30%', `Aim for ${baseMoney(monthly)} this month${target ? ` and direct extra to ${target.name}` : ''}.`]);
     } else {
       suggestions.push(['Debt gets the next 30%', 'Once salary is entered, the Plan page will turn 30% into a simple payment amount.']);
     }
@@ -689,18 +896,151 @@ function buildSuggestions(metrics, buckets) {
   return suggestions.slice(0, 4);
 }
 
-function payoffEstimate(debt, incomeUSD) {
-  if (!(incomeUSD > 0) || !(debt.remaining > 0)) return null;
-  const monthly = Math.max(Number(debt.minimum || 0), fromUSD(incomeUSD * .3, debt.currency));
-  let balance = Number(debt.remaining);
-  const rate = Number(debt.apr || 0) / 1200;
-  if (monthly <= balance * rate) return { months: Infinity, monthly };
+function debtPriority(debts, strategy) {
+  return [...debts].sort((a, b) => strategy === 'snowball'
+    ? a.balanceUSD - b.balanceUSD || b.apr - a.apr
+    : b.apr - a.apr || a.balanceUSD - b.balanceUSD
+  );
+}
+
+function simulateDebtPlan(incomeUSD, extraUSD = 0, strategy = state.settings.debtStrategy) {
+  const debts = activeDebts().filter(debt => debt.remaining > .005).map(debt => ({
+    id: debt.id, name: debt.name, currency: debt.currency, apr: Number(debt.apr || 0),
+    minimumUSD: usd(debt.minimum || 0, debt.currency), balanceUSD: usd(debt.remaining, debt.currency)
+  }));
+  const requestedBudgetUSD = Math.max(0, incomeUSD * .3 + Number(extraUSD || 0));
+  const minimumRequiredUSD = debts.reduce((sum, debt) => sum + Math.min(debt.minimumUSD, debt.balanceUSD), 0);
+  const monthlyBudgetUSD = Math.max(requestedBudgetUSD, minimumRequiredUSD);
+  const minimumShortfallUSD = Math.max(0, minimumRequiredUSD - requestedBudgetUSD);
+  if (!debts.length) return { debts, months: 0, interestUSD: 0, monthlyBudgetUSD, requestedBudgetUSD, minimumRequiredUSD, minimumShortfallUSD, firstAllocations: [], paidOffAt: {} };
+  if (!(monthlyBudgetUSD > 0)) return { debts, months: Infinity, interestUSD: 0, monthlyBudgetUSD, requestedBudgetUSD, minimumRequiredUSD, minimumShortfallUSD, firstAllocations: [], paidOffAt: {} };
+
+  let working = debts.map(debt => ({ ...debt }));
   let months = 0;
-  while (balance > .005 && months < 600) {
-    balance = Math.max(0, balance + balance * rate - monthly);
+  let interestUSD = 0;
+  let firstAllocations = [];
+  const paidOffAt = {};
+  while (working.some(debt => debt.balanceUSD > .005) && months < 600) {
     months += 1;
+    const payments = new Map();
+    working.forEach(debt => {
+      if (debt.balanceUSD <= .005) return;
+      const interest = debt.balanceUSD * debt.apr / 1200;
+      debt.balanceUSD += interest;
+      interestUSD += interest;
+    });
+    let available = monthlyBudgetUSD;
+    debtPriority(working.filter(debt => debt.balanceUSD > .005), strategy).forEach(debt => {
+      const payment = Math.min(debt.minimumUSD, debt.balanceUSD, available);
+      if (payment > 0) {
+        payments.set(debt.id, payment);
+        debt.balanceUSD -= payment;
+        available -= payment;
+      }
+    });
+    for (const debt of debtPriority(working.filter(item => item.balanceUSD > .005), strategy)) {
+      if (available <= .005) break;
+      const payment = Math.min(debt.balanceUSD, available);
+      payments.set(debt.id, (payments.get(debt.id) || 0) + payment);
+      debt.balanceUSD -= payment;
+      available -= payment;
+    }
+    working.forEach(debt => {
+      if (debt.balanceUSD <= .005 && paidOffAt[debt.id] == null) paidOffAt[debt.id] = months;
+    });
+    if (months === 1) firstAllocations = debts.map(debt => ({ id: debt.id, name: debt.name, currency: debt.currency, amountUSD: payments.get(debt.id) || 0 }));
+    const paid = [...payments.values()].reduce((sum, amount) => sum + amount, 0);
+    if (paid <= .005) { months = Infinity; break; }
   }
-  return { months, monthly };
+  if (months >= 600 && working.some(debt => debt.balanceUSD > .005)) months = Infinity;
+  return { debts, months, interestUSD, monthlyBudgetUSD, requestedBudgetUSD, minimumRequiredUSD, minimumShortfallUSD, firstAllocations, paidOffAt };
+}
+
+function payoffDateLabel(months) {
+  if (!Number.isFinite(months)) return 'Not reducing yet';
+  if (months <= 0) return 'Debt-free now';
+  const date = new Date();
+  date.setDate(1);
+  date.setMonth(date.getMonth() + months);
+  return new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' }).format(date);
+}
+
+function debtPlanSummaryHtml(plan) {
+  if (!plan.debts.length) return '<div class="friendlyEmpty"><b>No active debt</b><span>When every debt is cleared, the 30% bucket can move to your future.</span></div>';
+  if (!(plan.monthlyBudgetUSD > 0)) return '<div class="friendlyEmpty"><b>Add salary or minimum payments</b><span>The app needs one of those amounts to build a payoff route.</span></div>';
+  const firstTarget = debtPriority(plan.debts, state.settings.debtStrategy)[0];
+  return `<div><b>${state.settings.debtStrategy === 'snowball' ? 'Quick-win plan' : 'Lowest-interest-cost plan'}</b><p>Minimums are covered first. Extra money targets ${esc(firstTarget?.name || 'the next debt')}.</p></div>
+    <div class="debtPlanStats">
+      <div><span>Monthly debt money</span><b>${baseMoney(plan.monthlyBudgetUSD)}</b></div>
+      <div><span>Debt-free estimate</span><b>${payoffDateLabel(plan.months)}</b></div>
+      <div><span>Estimated interest</span><b>${Number.isFinite(plan.months) ? baseMoney(plan.interestUSD) : 'Needs more'}</b></div>
+    </div>
+    ${plan.minimumShortfallUSD > .005 ? `<div class="warningNote" style="margin-top:10px">Minimums exceed the 30% bucket by ${baseMoney(plan.minimumShortfallUSD)}. The plan protects every minimum before sending extra to one debt.</div>` : ''}`;
+}
+
+async function setDebtStrategy(strategy) {
+  if (!['avalanche', 'snowball'].includes(strategy) || state.settings.debtStrategy === strategy) return;
+  state.settings.debtStrategy = strategy;
+  await saveOperation({ action: 'settings', row: settingsRow() }, { close: false, message: strategy === 'snowball' ? 'Quick-win debt plan selected' : 'Interest-saving debt plan selected' });
+}
+
+function debtSimulatorResultHtml(extraUSD) {
+  const metrics = moneyMetrics();
+  const baseline = simulateDebtPlan(metrics.incomeUSD, 0, state.settings.debtStrategy);
+  const plan = simulateDebtPlan(metrics.incomeUSD, extraUSD, state.settings.debtStrategy);
+  if (!plan.debts.length) return '<div class="friendlyNote">You have no active debt to simulate.</div>';
+  const monthsSaved = Number.isFinite(baseline.months) && Number.isFinite(plan.months) ? Math.max(0, baseline.months - plan.months) : 0;
+  const interestSavedUSD = Number.isFinite(baseline.months) && Number.isFinite(plan.months) ? Math.max(0, baseline.interestUSD - plan.interestUSD) : 0;
+  return `<div class="debtPlanStats">
+      <div><span>Debt-free</span><b>${payoffDateLabel(plan.months)}</b></div>
+      <div><span>Time saved</span><b>${monthsSaved} month${monthsSaved === 1 ? '' : 's'}</b></div>
+      <div><span>Interest saved</span><b>${baseMoney(interestSavedUSD)}</b></div>
+    </div>
+    <div class="debtAllocationList">${plan.firstAllocations.filter(item => item.amountUSD > .005).map(item => `<div class="debtAllocationRow"><div><b>${esc(item.name)}</b><span>Suggested this month</span></div><div><b>${baseMoney(item.amountUSD)}</b></div></div>`).join('')}</div>`;
+}
+
+function openDebtSimulator() {
+  const metrics = moneyMetrics();
+  if (!activeDebts().some(debt => debt.remaining > .005)) {
+    openModal('Debt what-if', '<div class="form"><div class="friendlyNote">There is no active debt to simulate.</div><button class="primary" onclick="closeModal();openDebtForm()">Add debt</button></div>');
+    return;
+  }
+  openModal('Debt what-if', `<div class="form">
+    <div class="friendlyNote">Test an extra monthly payment without changing real data. The base plan already uses ${baseMoney(metrics.incomeUSD * .3)}—30% of this month’s income.</div>
+    <label>Extra each month (${esc(state.settings.base)})<input id="debtExtra" type="number" min="0" step="0.01" value="0"></label>
+    <div id="debtSimulatorResult"></div>
+    <button class="primary" onclick="closeModal()">Done</button>
+  </div>`);
+  const update = () => { $('debtSimulatorResult').innerHTML = debtSimulatorResultHtml(usd(+$('debtExtra').value || 0, state.settings.base)); };
+  $('debtExtra').oninput = update;
+  update();
+}
+
+function paydayAssistantHtml(metrics, buckets) {
+  if (!(metrics.incomeUSD > 0)) return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>Add salary and the app will turn 40–30–20–10 into exact actions.</p></div><button class="primary compact" onclick="openTransaction('income',null,{category:'Salary'})">Add salary</button></div>`;
+  return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>One salary, four simple jobs. These targets update automatically.</p></div><button class="primary compact" onclick="openPaydayAssistant()">Use plan</button></div>
+    <div class="paydayBuckets">${buckets.map(bucket => `<div><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b></div>`).join('')}</div>`;
+}
+
+function openPaydayAssistant() {
+  const metrics = moneyMetrics();
+  const buckets = allocationBuckets(metrics);
+  if (!(metrics.incomeUSD > 0)) { openTransaction('income', null, { category: 'Salary' }); return; }
+  const debtPlan = simulateDebtPlan(metrics.incomeUSD);
+  const debtAction = debtPlan.firstAllocations.filter(item => item.amountUSD > .005).sort((a, b) => b.amountUSD - a.amountUSD)[0];
+  const goal = activeGoals().find(item => item.saved < item.target);
+  const future = buckets.find(bucket => bucket.key === 'future');
+  openModal('Use this payday', `<div class="form">
+    <div class="friendlyNote">These are targets, not automatic bank transfers. Record an action only after the money has actually moved.</div>
+    <div class="statement">
+      ${buckets.map((bucket, index) => `<div class="statementRow"><time>${bucket.pct}%</time><div><b>${esc(bucket.label)}</b><div class="meta">${bucket.key === 'essential' ? 'Keep ready for living costs' : bucket.key === 'debt' ? 'Minimums first, then the priority debt' : bucket.key === 'future' ? 'Reserve for goals and emergency savings' : 'Your flexible spending limit'}</div></div><div class="statementValue"><strong>${baseMoney(bucket.target)}</strong><span>${baseMoney(bucket.actual)} recorded</span></div></div>`).join('')}
+    </div>
+    <div class="buttonRow">
+      ${debtAction ? `<button class="secondary" onclick="closeModal();openDebtPayment('${debtAction.id}',null,{paymentUSD:${debtAction.amountUSD}})">Record debt payment</button>` : ''}
+      ${goal && future.target > 0 ? `<button class="secondary" onclick="closeModal();openGoalContribution('${goal.id}',null,{amountUSD:${future.target}})">Reserve for ${esc(goal.name)}</button>` : ''}
+      <button class="primary" onclick="closeModal()">Done</button>
+    </div>
+  </div>`);
 }
 
 function timelineEvents() {
@@ -741,6 +1081,7 @@ function timelineEvents() {
   const budgetUSD = Object.values(state.budgets).reduce((sum, budget) => sum + usd(budget.amount, budget.currency), 0);
   if (budgetUSD > 0) events.push({ date: monthStart(), group: 'plans', kind: 'budget', title: 'Monthly category plan', detail: baseMoney(budgetUSD) });
   state.snapshots.forEach(snapshot => events.push({ date: snapshot.date, group: 'wins', kind: 'snapshot', title: 'Net worth check-in', detail: baseMoney(snapshot.netWorthUSD) }));
+  state.checkups.forEach(checkup => events.push({ date: checkup.completedAt?.slice(0, 10) || checkup.month, group: 'wins', kind: 'win', title: 'Monthly money check complete', detail: `${checkup.accountCount} account${checkup.accountCount === 1 ? '' : 's'} confirmed${checkup.note ? ` · ${checkup.note}` : ''}` }));
   const now = today();
   return events.filter(event => event.date && (timelineFilter === 'all' || event.group === timelineFilter)).sort((a, b) => {
     const aFuture = a.date > now;
@@ -783,13 +1124,20 @@ function render() {
   $('safeToday').textContent = safe.ready ? baseMoney(safe.dailyUSD) : 'Not ready yet';
   $('safeWeek').textContent = safe.ready ? baseMoney(safe.weeklyUSD) : '—';
   $('nextPayday').textContent = safe.payday ? formatDate(safe.payday.date, { day: 'numeric', month: 'short' }) : 'Not set';
+  $('safeProtected').textContent = safe.ready ? baseMoney(safe.protectedUSD) : '—';
+  $('safeBuffer').textContent = safe.ready ? baseMoney(safe.bufferUSD) : '—';
   $('safeMessage').textContent = safe.ready
-    ? `${baseMoney(safe.remainingUSD)} of this month’s 10% fun allowance remains. This daily guide lasts until payday.`
+    ? safe.shortfallUSD > .005
+      ? `Pause optional spending for now. Protected commitments are ${baseMoney(safe.shortfallUSD)} above free cash.`
+      : safe.remainingUSD + .005 < safe.wantsRemainingUSD
+        ? `Your real available cash—not only the 10% allowance—sets this safer limit until payday.`
+        : `${baseMoney(safe.remainingUSD)} of the 10% wants allowance is safely available until payday.`
     : metrics.incomeUSD > 0 ? 'Set the salary day in Settings to calculate a safe daily fun amount.' : 'Add salary and set the salary day to calculate this safely.';
   $('todayCash').textContent = baseMoney(metrics.cashUSD);
   $('todayReserved').textContent = baseMoney(metrics.goalSavedUSD);
   $('todaySurplus').textContent = baseMoney(metrics.surplusUSD);
   $('todayAllocation').innerHTML = buckets.map(bucket => `<div class="bucket ${bucket.key}"><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b><small>${baseMoney(bucket.actual)} used</small></div>`).join('');
+  $('monthlyCheckupCard').innerHTML = monthlyCheckupHtml();
 
   const currentRecurringMonth = monthStart();
   const dueItems = state.recurring.filter(item => item.active !== false).sort((a, b) => a.day - b.day);
@@ -844,19 +1192,24 @@ function render() {
   $('planIncome').textContent = metrics.incomeUSD > 0 ? `${baseMoney(metrics.incomeUSD)} income` : 'Add salary';
   $('planIncome').className = `statusBadge${metrics.incomeUSD > 0 ? '' : ' warn'}`;
   $('planAllocation').innerHTML = buckets.map(bucket => `<div class="allocationItem ${bucket.key}"><div class="allocationHeading"><span class="allocationColor"></span><b>${bucket.pct}% ${esc(bucket.label)}</b></div><div class="allocationTarget">${baseMoney(bucket.target)}</div><div class="allocationActual">Used ${baseMoney(bucket.actual)}</div></div>`).join('');
+  $('paydayAssistant').innerHTML = paydayAssistantHtml(metrics, buckets);
 
-  const essentialsBudgetUSD = Object.entries(state.budgets).filter(([category]) => ['Housing', 'Food', 'Transport', 'Bills', 'Health'].includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
+  const essentialsBudgetUSD = Object.entries(state.budgets).filter(([category]) => ESSENTIAL_CATEGORIES.includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
   const emergencyThreeUSD = essentialsBudgetUSD * 3;
   const emergencySixUSD = essentialsBudgetUSD * 6;
   const emergencyGoal = activeGoals().find(goal => /emergency/i.test(goal.name));
   const emergencySavedUSD = emergencyGoal ? usd(emergencyGoal.saved, emergencyGoal.currency) : 0;
   $('emergencyFundCard').innerHTML = `<div class="emergencyTop"><div class="emergencyIcon">☂️</div><div><h3>Emergency fund</h3><p>Based on essential category limits of ${baseMoney(essentialsBudgetUSD)} a month. Start with 3 months, then grow toward 6.</p></div></div><div class="emergencyNumbers"><div><span>First target · 3 months</span><b>${baseMoney(emergencyThreeUSD)}</b></div><div><span>Strong target · 6 months</span><b>${baseMoney(emergencySixUSD)}</b></div></div><div class="progress" style="margin-top:11px"><i style="width:${Math.min(100, emergencySavedUSD / Math.max(.01, emergencyThreeUSD) * 100)}%"></i></div><div class="cardActions" style="margin-top:10px">${emergencyGoal ? `<button class="linkBtn" onclick="openGoalContribution('${emergencyGoal.id}')">＋ Add saving</button>` : `<button class="linkBtn" onclick="createEmergencyGoal()">Create this goal</button>`}</div>`;
 
+  const debtPlan = simulateDebtPlan(metrics.incomeUSD);
+  document.querySelectorAll('#debtStrategyTabs button').forEach(button => button.classList.toggle('active', button.dataset.strategy === state.settings.debtStrategy));
+  $('debtPlanSummary').innerHTML = debtPlanSummaryHtml(debtPlan);
   const debts = activeDebts().filter(debt => debt.active !== false || debt.remaining > 0);
   $('debtList').innerHTML = debts.length ? debts.map(debt => {
     const progress = Math.max(0, Math.min(100, (1 - debt.remaining / Math.max(debt.original, .01)) * 100));
-    const estimate = payoffEstimate(debt, metrics.incomeUSD);
-    const estimateText = !estimate ? 'Add salary for a payoff estimate' : estimate.months === Infinity ? 'Payment must exceed monthly interest' : `About ${estimate.months} month${estimate.months === 1 ? '' : 's'} if this gets the full 30%`;
+    const payoffMonth = debtPlan.paidOffAt[debt.id];
+    const allocation = debtPlan.firstAllocations.find(item => item.id === debt.id)?.amountUSD || 0;
+    const estimateText = debt.remaining <= .005 ? 'Cleared' : payoffMonth ? `${payoffDateLabel(payoffMonth)} · ${baseMoney(allocation)} suggested this month` : !Number.isFinite(debtPlan.months) && debtPlan.monthlyBudgetUSD > 0 ? 'Current payment does not clear the growing interest' : 'Add salary or a minimum payment for an estimate';
     return `<div class="debtCard"><div class="cardTop"><div><h3>${esc(debt.name)}</h3><div class="meta">${money(debt.remaining, debt.currency)} left of ${money(debt.original, debt.currency)}${debt.apr ? ` · ${debt.apr}% APR` : ''}</div><div class="meta">${esc(estimateText)}</div></div><span class="pill${debt.remaining <= 0 ? '' : ' warn'}">${Math.round(progress)}% paid</span></div><div class="miniBar"><i style="width:${progress}%"></i></div><div class="cardActions">${debt.remaining > 0 ? `<button class="linkBtn" onclick="openDebtPayment('${debt.id}')">Make payment</button>` : ''}<button class="linkBtn" onclick="openDebtForm('${debt.id}')">Edit</button>${debt.remaining <= 0 ? `<button class="dangerLink" onclick="archiveDebt('${debt.id}')">Archive</button>` : ''}</div></div>`;
   }).join('') : '<div class="card friendlyEmpty"><b>No active debts</b><span>Add a balance to make a clear payoff plan.</span><button class="secondary compact" onclick="openDebtForm()">＋ Add debt</button></div>';
 
@@ -877,6 +1230,8 @@ function render() {
   const recurringItems = state.recurring.filter(item => item.active !== false).sort((a, b) => a.day - b.day);
   $('recurringList').innerHTML = recurringItems.length ? recurringItems.map(item => `<div class="recurringCard"><div class="cardTop"><div><h3>${esc(item.name)}</h3><div class="meta">${item.kind === 'income' ? 'Income' : 'Expense'} · ${money(item.amount, item.currency)} · day ${item.day}${item.accountId ? ` · ${esc(accountName(item.accountId))}` : ''}</div></div><span class="pill">Monthly</span></div><div class="cardActions"><button class="linkBtn" onclick="openRecurringForm('${item.id}')">Edit</button><button class="dangerLink" onclick="archiveRecurring('${item.id}')">Archive</button></div></div>`).join('') : '<div class="card hint">No regular items yet.</div>';
 
+  document.querySelectorAll('#cashflowTabs button').forEach(button => button.classList.toggle('active', Number(button.dataset.days) === cashflowDays));
+  $('cashflowChart').innerHTML = cashflowChartHtml(cashflowForecast(cashflowDays));
   document.querySelectorAll('#timelineFilters button').forEach(button => button.classList.toggle('active', button.dataset.filter === timelineFilter));
   $('timelineList').innerHTML = timelineHtml();
 
@@ -1095,9 +1450,9 @@ async function deleteTransaction(id) {
 function openAccountForm(id = null) {
   const account = id ? state.accounts.find(item => item.id === id) : null;
   openModal(account ? 'Edit account' : 'Add bank, cash or wallet', `<form class="form" id="accountForm">
-    <div class="friendlyNote">Starting balance means the real balance just before tracking begins. Linked salary, spending and transfers update it after that.</div>
+    <div class="friendlyNote">Starting balance means the real balance just before tracking begins. Linked salary, spending and transfers update it after that.${account ? ' Currency stays fixed so older records keep their meaning.' : ''}</div>
     <label>Name<input id="accountName" required maxlength="80" value="${esc(account?.name || '')}" placeholder="Main bank account"></label>
-    <div class="fieldRow"><label>Type<select id="accountType"><option value="bank">Bank account</option><option value="cash">Cash</option><option value="wallet">Mobile wallet</option></select></label><label>Currency<select id="accountCurrency">${currencyOptions(account?.currency || state.settings.lastCurrency)}</select></label></div>
+    <div class="fieldRow"><label>Type<select id="accountType"><option value="bank">Bank account</option><option value="cash">Cash</option><option value="wallet">Mobile wallet</option></select></label><label>Currency<select id="accountCurrency"${account ? ' disabled' : ''}>${currencyOptions(account?.currency || state.settings.lastCurrency)}</select></label></div>
     <div class="fieldRow"><label>Starting balance<input id="accountOpening" type="number" step="0.01" required value="${account?.openingBalance ?? 0}"></label><label>Track from<input id="accountDate" type="date" required value="${account?.openingDate || today()}"></label></div>
     <label>Notes<input id="accountNotes" maxlength="200" value="${esc(account?.notes || '')}" placeholder="Optional"></label>
     <button class="primary" type="submit">${account ? 'Update account' : 'Add account'}</button>
@@ -1172,6 +1527,64 @@ function reconcileAccount(id) {
   };
 }
 
+function currentCheckup() { return state.checkups.find(checkup => checkup.month === monthStart()); }
+
+function monthlyCheckupHtml() {
+  const checkup = currentCheckup();
+  if (checkup) return `<div class="checkupTop"><div class="checkupIcon">✓</div><div><h3>${formatDate(checkup.month, { month: 'long', year: 'numeric' })} checked</h3><p>${checkup.accountCount} account${checkup.accountCount === 1 ? '' : 's'} confirmed${Math.abs(checkup.adjustmentUSD) > .005 ? ` · ${baseMoney(Math.abs(checkup.adjustmentUSD))} corrected` : ' · balances matched'}</p></div><button class="secondary compact" onclick="openMonthlyCheckup()">Check again</button></div>`;
+  return `<div class="checkupTop"><div class="checkupIcon">◎</div><div><h3>Monthly money check</h3><p>Confirm the real balances together and finish the month with clean numbers.</p></div><button class="primary compact" onclick="openMonthlyCheckup()">Start</button></div>`;
+}
+
+function openMonthlyCheckup() {
+  const accounts = activeAccounts();
+  if (!accounts.length) {
+    openModal('Monthly money check', '<div class="form"><div class="friendlyNote">Add your bank, cash or wallet account first. The check-up compares the app with the real balance.</div><button class="primary" onclick="closeModal();openAccountForm()">Add account</button></div>');
+    return;
+  }
+  const existing = currentCheckup();
+  openModal('Monthly money check', `<form id="monthlyCheckupForm" class="form">
+    <div class="friendlyNote">Open each bank or wallet and enter the balance you see now. Any difference becomes a visible balance adjustment—nothing is silently changed.</div>
+    <div class="checkupInputs">${accounts.map((account, index) => `<label class="checkupAccount"><div><b>${esc(account.name)}</b><span>App shows ${money(accountBalanceNative(account), account.currency)}</span></div><input id="checkupBalance${index}" type="number" step="0.01" required value="${accountBalanceNative(account).toFixed(2)}" aria-label="Actual balance for ${esc(account.name)}"></label>`).join('')}</div>
+    <label>One note for this month<textarea id="checkupNote" maxlength="300" placeholder="What went well or needs attention?">${esc(existing?.note || '')}</textarea></label>
+    <button class="primary" type="submit">Finish monthly check</button>
+  </form>`);
+  $('monthlyCheckupForm').onsubmit = async event => {
+    event.preventDefault();
+    const operations = [];
+    let adjustmentUSD = 0;
+    accounts.forEach((account, index) => {
+      const current = accountBalanceNative(account);
+      const actual = +$(`checkupBalance${index}`).value;
+      const difference = actual - current;
+      if (Math.abs(difference) < .005) return;
+      adjustmentUSD += Math.abs(usd(difference, account.currency));
+      const transaction = {
+        id: crypto.randomUUID(), type: difference > 0 ? 'income' : 'expense', amount: Math.abs(difference),
+        currency: account.currency, category: 'Balance adjustment', paidBy: defaultPerson(), accountId: account.id,
+        account: account.name, toAccountId: '', toAmount: null, debtId: '', debtPrincipal: null, debtInterest: 0,
+        recurringItemId: '', recurringMonth: '', date: today(), note: `Monthly check · ${monthKey()}`, createdAt: new Date().toISOString()
+      };
+      state.transactions.push(transaction);
+      operations.push({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) });
+    });
+    const checkup = {
+      id: existing?.id || crypto.randomUUID(), month: monthStart(), accountCount: accounts.length,
+      adjustmentUSD, note: $('checkupNote').value.trim(), completedBy: currentUser.id,
+      completedAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    };
+    const index = state.checkups.findIndex(item => item.id === checkup.id);
+    if (index >= 0) state.checkups[index] = checkup;
+    else state.checkups.push(checkup);
+    operations.push({ action: 'checkup', row: {
+      id: checkup.id, household_id: householdId, month: checkup.month, completed_by: currentUser.id,
+      account_count: checkup.accountCount, adjustment_total_usd: checkup.adjustmentUSD,
+      note: checkup.note || null, completed_at: checkup.completedAt, updated_at: checkup.updatedAt
+    } });
+    await saveOperations(operations, { message: 'Monthly check complete ✓', celebrate: true });
+    ensureTodaySnapshot();
+  };
+}
+
 async function archiveAccount(id) {
   const account = state.accounts.find(item => item.id === id);
   if (!account) return;
@@ -1213,6 +1626,7 @@ function openAssetForm(id = null) {
     };
     if (type !== 'manual' && !(item.quantity > 0)) { toast('Enter an amount or quantity greater than zero.'); return; }
     if (type === 'manual' && !(item.manualValue >= 0)) { toast('Enter the current value.'); return; }
+    if (!['metal', 'crypto'].includes(type)) rememberCurrency(item.currency);
     const index = state.assets.findIndex(a => a.id === item.id);
     if (index >= 0) state.assets[index] = item;
     else state.assets.push(item);
@@ -1253,10 +1667,10 @@ function openDebtForm(id = null) {
   openModal(debt ? 'Edit debt' : 'Add debt', `<form class="form" id="debtForm">
     <label>Name<input id="debtName" required maxlength="100" value="${esc(debt?.name || '')}" placeholder="Credit card / Loan"></label>
     <div class="fieldRow"><label>Original amount<input id="debtOriginal" type="number" min="0" step="0.01" required value="${debt?.original ?? ''}"></label><label>Remaining now<input id="debtRemaining" type="number" min="0" step="0.01" required value="${debt?.remaining ?? ''}"></label></div>
-    <label>Currency<select id="debtCurrency">${currencyOptions(debt?.currency || state.settings.lastCurrency)}</select></label>
+    <label>Currency<select id="debtCurrency"${debt ? ' disabled' : ''}>${currencyOptions(debt?.currency || state.settings.lastCurrency)}</select></label>
     <div class="fieldRow"><label>Annual interest %<input id="debtApr" type="number" min="0" max="100" step="0.001" value="${debt?.apr ?? 0}"></label><label>Minimum monthly payment<input id="debtMinimum" type="number" min="0" step="0.01" value="${debt?.minimum ?? 0}"></label></div>
     <div class="fieldRow"><label>Usual payment day<input id="debtPaymentDay" type="number" min="1" max="31" value="${debt?.paymentDay || ''}" placeholder="Optional"></label><label>Target payoff date<input id="debtDue" type="date" value="${debt?.due || ''}"></label></div>
-    <div class="warningNote">Use “Make payment” after this is saved. A linked payment reduces the remaining balance automatically and keeps the history accurate.</div>
+    <div class="warningNote">Use “Make payment” after this is saved. A linked payment reduces the remaining balance automatically and keeps the history accurate.${debt ? ' Currency stays fixed to protect payment history.' : ''}</div>
     <button class="primary" type="submit">Save debt</button>
   </form>`);
   $('debtForm').onsubmit = async event => {
@@ -1279,7 +1693,7 @@ function openDebtForm(id = null) {
   };
 }
 
-function openDebtPayment(debtId, transactionId = null) {
+function openDebtPayment(debtId, transactionId = null, preset = {}) {
   const existing = transactionId ? state.transactions.find(t => t.id === transactionId) : null;
   const debt = state.debts.find(item => item.id === (existing?.debtId || debtId));
   const accounts = activeAccounts();
@@ -1290,11 +1704,16 @@ function openDebtPayment(debtId, transactionId = null) {
   }
   const selectedAccount = existing?.accountId || accounts.find(a => a.currency === debt.currency)?.id || accounts[0].id;
   const maxPrincipal = debt.remaining + Number(existing?.debtPrincipal || 0);
+  const suggestedPaymentUSD = Number(preset.paymentUSD || 0);
+  const suggestedInterestUSD = Math.min(suggestedPaymentUSD, usd(debt.remaining, debt.currency) * Number(debt.apr || 0) / 1200);
+  const suggestedPrincipal = Math.min(maxPrincipal, fromUSD(Math.max(0, suggestedPaymentUSD - suggestedInterestUSD), debt.currency));
+  const suggestedInterest = fromUSD(suggestedInterestUSD, debt.currency);
+  const suggestedAccountTotal = fromUSD(suggestedPaymentUSD, accounts.find(account => account.id === selectedAccount)?.currency || debt.currency);
   openModal(existing ? 'Edit debt payment' : `Pay ${debt.name}`, `<form class="form" id="debtPaymentForm">
     <div class="friendlyNote">Principal reduces the debt. Interest is recorded but does not reduce it. The total leaving the selected account updates its balance.</div>
     <label>Pay from<select id="debtPaymentAccount">${accountSelectOptions(selectedAccount, false)}</select></label>
-    <label>Total leaving account <span id="debtAccountCurrency"></span><input id="debtPaymentTotal" type="number" min="0.01" step="0.01" required value="${existing?.amount ?? ''}"></label>
-    <div class="fieldRow"><label>Principal <span>${debt.currency}</span><input id="debtPaymentPrincipal" type="number" min="0.01" max="${maxPrincipal}" step="0.01" required value="${existing?.debtPrincipal ?? ''}"></label><label>Interest / fees <span>${debt.currency}</span><input id="debtPaymentInterest" type="number" min="0" step="0.01" value="${existing?.debtInterest ?? 0}"></label></div>
+    <label>Total leaving account <span id="debtAccountCurrency"></span><input id="debtPaymentTotal" type="number" min="0.01" step="0.01" required value="${existing?.amount ?? (suggestedPaymentUSD > 0 ? suggestedAccountTotal.toFixed(2) : '')}"></label>
+    <div class="fieldRow"><label>Principal <span>${debt.currency}</span><input id="debtPaymentPrincipal" type="number" min="0.01" max="${maxPrincipal}" step="0.01" required value="${existing?.debtPrincipal ?? (suggestedPaymentUSD > 0 ? suggestedPrincipal.toFixed(2) : '')}"></label><label>Interest / fees <span>${debt.currency}</span><input id="debtPaymentInterest" type="number" min="0" step="0.01" value="${existing?.debtInterest ?? (suggestedPaymentUSD > 0 ? suggestedInterest.toFixed(2) : 0)}"></label></div>
     <div id="debtPaymentHint" class="friendlyNote"></div>
     <label>Date<input id="debtPaymentDate" type="date" required value="${existing?.date || today()}"></label>
     <label>Note<input id="debtPaymentNote" maxlength="200" value="${esc(existing?.note || '')}" placeholder="Optional"></label>
@@ -1363,8 +1782,8 @@ function openGoalForm(id = null, preset = {}) {
   const goal = id ? state.goals.find(item => item.id === id) : null;
   openModal(goal ? 'Edit goal' : 'Add savings goal', `<form class="form" id="goalForm">
     <label>Name<input id="goalName" required maxlength="100" value="${esc(goal?.name || preset.name || '')}" placeholder="Emergency fund / Vacation"></label>
-    <div class="fieldRow"><label>Target amount<input id="goalTarget" type="number" min="0.01" step="0.01" required value="${goal?.target ?? preset.target ?? ''}"></label><label>Currency<select id="goalCurrency">${currencyOptions(goal?.currency || preset.currency || state.settings.lastCurrency)}</select></label></div>
-    ${goal ? `<div class="friendlyNote">Already reserved: <b>${money(goal.saved, goal.currency)}</b>. Use “Add saving” on the goal card so every change has a date and history.</div>` : `<label>Already saved (optional)<input id="goalStarting" type="number" min="0" step="0.01" value="${preset.saved || 0}"></label>`}
+    <div class="fieldRow"><label>Target amount<input id="goalTarget" type="number" min="0.01" step="0.01" required value="${goal?.target ?? preset.target ?? ''}"></label><label>Currency<select id="goalCurrency"${goal ? ' disabled' : ''}>${currencyOptions(goal?.currency || preset.currency || state.settings.lastCurrency)}</select></label></div>
+    ${goal ? `<div class="friendlyNote">Already reserved: <b>${money(goal.saved, goal.currency)}</b>. Use “Add saving” on the goal card so every change has a date and history. Currency stays fixed to protect that history.</div>` : `<label>Already saved (optional)<input id="goalStarting" type="number" min="0" step="0.01" value="${preset.saved || 0}"></label>`}
     <label>Target date<input id="goalDue" type="date" value="${goal?.due || preset.due || ''}"></label>
     <button class="primary" type="submit">Save goal</button>
   </form>`);
@@ -1375,6 +1794,11 @@ function openGoalForm(id = null, preset = {}) {
       saved: goal ? goal.saved : +$('goalStarting').value || 0, currency: $('goalCurrency').value,
       due: $('goalDue').value, active: true, createdAt: goal?.createdAt || new Date().toISOString()
     };
+    const metrics = moneyMetrics();
+    if (!goal && usd(item.saved, item.currency) > Math.max(0, metrics.cashUSD - metrics.goalSavedUSD) + .005) {
+      toast('Add or correct the account holding this saving first.');
+      return;
+    }
     if (item.saved > item.target && !confirm('Saved is above the target. Keep it anyway?')) return;
     rememberCurrency(item.currency);
     const index = state.goals.findIndex(g => g.id === item.id);
@@ -1385,26 +1809,35 @@ function openGoalForm(id = null, preset = {}) {
 }
 
 function createEmergencyGoal() {
-  const essentialsUSD = Object.entries(state.budgets).filter(([category]) => ['Housing', 'Food', 'Transport', 'Bills', 'Health'].includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
+  const essentialsUSD = Object.entries(state.budgets).filter(([category]) => ESSENTIAL_CATEGORIES.includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
   openGoalForm(null, { name: 'Emergency Fund', target: Math.round(fromUSD(essentialsUSD * 3, state.settings.base) * 100) / 100, currency: state.settings.base });
 }
 
-function openGoalContribution(goalId, contributionId = null) {
+function openGoalContribution(goalId, contributionId = null, preset = {}) {
   const goal = state.goals.find(item => item.id === goalId);
   const existing = contributionId ? state.contributions.find(item => item.id === contributionId) : null;
   if (!goal) return;
+  const suggestedAmount = Math.min(Math.max(0, goal.target - goal.saved), fromUSD(Number(preset.amountUSD || 0), goal.currency));
+  const suggestedAccount = activeAccounts().find(account => account.currency === goal.currency)?.id || '';
   openModal(existing ? 'Edit goal saving' : `Add to ${goal.name}`, `<form class="form" id="goalContributionForm">
     <div class="friendlyNote">This reserves money already held in an account. It does not create extra cash or double-count net worth.</div>
-    <label>Amount ${goal.currency}<input id="goalContributionAmount" type="number" min="0.01" step="0.01" required value="${existing?.amount ?? ''}"></label>
+    <label>Amount ${goal.currency}<input id="goalContributionAmount" type="number" min="0.01" step="0.01" required value="${existing?.amount ?? (suggestedAmount > 0 ? suggestedAmount.toFixed(2) : '')}"></label>
     <label>Where is it held? <select id="goalContributionAccount"><option value="">Not assigned to one account</option>${activeAccounts().map(account => `<option value="${account.id}">${esc(account.name)} · ${account.currency}</option>`).join('')}</select></label>
     <label>Date<input id="goalContributionDate" type="date" required value="${existing?.date || today()}"></label>
     <label>Note<input id="goalContributionNote" maxlength="200" value="${esc(existing?.note || '')}" placeholder="Optional"></label>
     <button class="primary" type="submit">Save contribution</button>
   </form>`);
-  $('goalContributionAccount').value = existing?.accountId || '';
+  $('goalContributionAccount').value = existing?.accountId || suggestedAccount;
   $('goalContributionForm').onsubmit = async event => {
     event.preventDefault();
     const amount = +$('goalContributionAmount').value;
+    const metrics = moneyMetrics();
+    const existingUSD = existing ? usd(existing.amount, existing.currency) : 0;
+    const availableToReserveUSD = Math.max(0, metrics.cashUSD - (metrics.goalSavedUSD - existingUSD));
+    if (usd(amount, goal.currency) > availableToReserveUSD + .005) {
+      toast(`Only ${baseMoney(availableToReserveUSD)} is currently free to reserve.`);
+      return;
+    }
     if (existing) goal.saved = Math.max(0, goal.saved - existing.amount);
     goal.saved += amount;
     const item = {
@@ -1486,6 +1919,7 @@ function openRecurringForm(id = null) {
       day: +$('recurringDay').value, note: $('recurringNote').value.trim(), active: true,
       createdAt: item?.createdAt || new Date().toISOString()
     };
+    rememberCurrency(recurringItem.currency);
     const index = state.recurring.findIndex(entry => entry.id === recurringItem.id);
     if (index >= 0) state.recurring[index] = recurringItem;
     else state.recurring.push(recurringItem);
@@ -1523,6 +1957,14 @@ function openBudget() {
   };
 }
 
+function settingsRow() {
+  return {
+    household_id: householdId, base_currency: state.settings.base, payday_day: state.settings.paydayDay,
+    fun_mode: state.settings.funMode, debt_strategy: state.settings.debtStrategy,
+    usd_to_aed: state.settings.rates.AED, usd_to_mvr: state.settings.rates.MVR, usd_to_inr: state.settings.rates.INR
+  };
+}
+
 async function saveSettings() {
   const rates = { USD: 1, AED: +$('rateAED').value, MVR: +$('rateMVR').value, INR: +$('rateINR').value };
   const paydayDay = +$('paydayDay').value || null;
@@ -1531,7 +1973,7 @@ async function saveSettings() {
   state.settings.base = $('baseCurrency').value;
   state.settings.paydayDay = paydayDay;
   state.settings.rates = rates;
-  await saveOperation({ action: 'settings', row: { household_id: householdId, base_currency: state.settings.base, payday_day: paydayDay, fun_mode: state.settings.funMode, usd_to_aed: rates.AED, usd_to_mvr: rates.MVR, usd_to_inr: rates.INR } }, { close: false, message: 'Settings synced ✓' });
+  await saveOperation({ action: 'settings', row: settingsRow() }, { close: false, message: 'Settings synced ✓' });
   ensureTodaySnapshot();
 }
 
@@ -1585,10 +2027,147 @@ function downloadFile(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function exportBackup() {
+function exportBackup(label = '') {
   const backup = { exportedAt: new Date().toISOString(), appVersion: VERSION, household: 'Our household', data: state };
-  downloadFile(`our-budget-backup-${today()}.json`, JSON.stringify(backup, null, 2), 'application/json');
+  downloadFile(`our-budget-${label ? `${label}-` : 'backup-'}${today()}.json`, JSON.stringify(backup, null, 2), 'application/json');
   toast('Complete backup downloaded ✓');
+}
+
+function chooseBackupFile() {
+  const input = $('backupFile');
+  input.value = '';
+  input.click();
+}
+
+function validateBackupData(data, version) {
+  if (!data || typeof data !== 'object') return 'This file has no budget data.';
+  if (!(version >= 7 && version <= VERSION)) return `Only Our Budget v7–v${VERSION} backups can be restored safely.`;
+  const arrayKeys = ['transactions', 'goals', 'debts', 'assets', 'accounts', 'recurring', 'contributions', 'snapshots'];
+  for (const key of arrayKeys) {
+    if (!Array.isArray(data[key])) return `The ${key} section is missing.`;
+    if (data[key].length > 5000) return `The ${key} section is unexpectedly large.`;
+  }
+  const allRecords = arrayKeys.flatMap(key => data[key]);
+  if (allRecords.some(item => !item || typeof item !== 'object' || ('id' in item && typeof item.id !== 'string'))) return 'One or more records are invalid.';
+  const accountIds = new Set([...state.accounts, ...data.accounts].map(item => item.id));
+  const debtIds = new Set([...state.debts, ...data.debts].map(item => item.id));
+  const goalIds = new Set([...state.goals, ...data.goals].map(item => item.id));
+  const recurringIds = new Set([...state.recurring, ...data.recurring].map(item => item.id));
+  const brokenLink = data.transactions.some(item =>
+    (item.accountId && !accountIds.has(item.accountId)) || (item.toAccountId && !accountIds.has(item.toAccountId)) ||
+    (item.debtId && !debtIds.has(item.debtId)) || (item.recurringItemId && !recurringIds.has(item.recurringItemId))
+  ) || data.contributions.some(item => !goalIds.has(item.goalId) || (item.accountId && !accountIds.has(item.accountId)));
+  if (brokenLink) return 'This backup contains a link to a missing account, debt, goal or regular item.';
+  return '';
+}
+
+async function handleBackupFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { toast('Backup files must be under 5 MB.'); return; }
+  try {
+    const payload = safeParse(await file.text());
+    const version = Number(payload?.appVersion || payload?.data?.version || 0);
+    const error = validateBackupData(payload?.data, version);
+    if (error) { toast(error); return; }
+    pendingRestoreData = normalizeState(payload.data);
+    const data = pendingRestoreData;
+    openModal('Restore backup', `<div class="form">
+      <div class="friendlyNote">A safety copy of today’s data will download first. Restore merges the backup into this household; it does not delete newer records.</div>
+      <div class="restorePreview">
+        <div><span>Transactions</span><b>${data.transactions.length}</b></div>
+        <div><span>Accounts</span><b>${data.accounts.length}</b></div>
+        <div><span>Plans</span><b>${data.goals.length + data.debts.length}</b></div>
+        <div><span>Regular items</span><b>${data.recurring.length}</b></div>
+        <div><span>Assets</span><b>${data.assets.length}</b></div>
+        <div><span>Snapshots</span><b>${data.snapshots.length}</b></div>
+      </div>
+      <div class="warningNote">Keep this page open until the restore finishes. Nothing is restored while offline.</div>
+      <button id="restoreConfirm" class="primary" onclick="confirmBackupRestore()">Download safety copy and restore</button>
+      <button class="secondary" onclick="pendingRestoreData=null;closeModal()">Cancel</button>
+    </div>`);
+  } catch (_error) { toast('This backup could not be read.'); }
+}
+
+function accountRestoreRow(account) {
+  return { id: account.id, household_id: householdId, name: String(account.name || '').trim(), account_type: account.type, currency: cleanCurrency(account.currency), opening_balance: Number(account.openingBalance || 0), opening_date: account.openingDate, notes: account.notes || null, active: account.active !== false, updated_at: new Date().toISOString() };
+}
+function goalRestoreRow(goal, saved = goal.saved) {
+  return { id: goal.id, household_id: householdId, name: String(goal.name || '').trim(), target: Number(goal.target || 0), saved: Number(saved || 0), currency: cleanCurrency(goal.currency), due_date: goal.due || null, active: goal.active !== false, updated_at: new Date().toISOString() };
+}
+function debtRestoreRow(debt, remaining = debt.remaining) {
+  return { id: debt.id, household_id: householdId, name: String(debt.name || '').trim(), original_amount: Number(debt.original || 0), remaining_amount: Number(remaining || 0), currency: cleanCurrency(debt.currency), due_date: debt.due || null, annual_interest_rate: Number(debt.apr || 0), minimum_payment: Number(debt.minimum || 0), payment_day: debt.paymentDay || null, active: debt.active !== false, updated_at: new Date().toISOString() };
+}
+
+async function confirmBackupRestore() {
+  const data = pendingRestoreData;
+  if (!data || !db || !householdId) return;
+  if (!navigator.onLine) { toast('Reconnect before restoring a backup.'); return; }
+  if (pending().length && !(await flushPending())) { toast('Waiting changes must sync before restore.'); return; }
+  const button = $('restoreConfirm');
+  if (button) { button.disabled = true; button.textContent = 'Restoring…'; }
+  exportBackup('before-restore');
+  const operations = [];
+  operations.push({ action: 'settings', row: {
+    household_id: householdId, base_currency: data.settings.base, payday_day: data.settings.paydayDay,
+    fun_mode: data.settings.funMode !== false, debt_strategy: data.settings.debtStrategy,
+    usd_to_aed: data.settings.rates.AED, usd_to_mvr: data.settings.rates.MVR, usd_to_inr: data.settings.rates.INR
+  } });
+  const budgetRows = Object.entries(data.budgets).map(([category, budget]) => ({ household_id: householdId, category, amount: Number(budget.amount || 0), currency: cleanCurrency(budget.currency) }));
+  if (budgetRows.length) operations.push({ action: 'budget', rows: budgetRows });
+  data.accounts.forEach(account => operations.push({ action: 'upsert', table: 'accounts', row: accountRestoreRow(account) }));
+  data.goals.forEach(goal => operations.push({ action: 'upsert', table: 'goals', row: goalRestoreRow(goal, 0) }));
+  data.debts.forEach(debt => operations.push({ action: 'upsert', table: 'debts', row: debtRestoreRow(debt, debt.original) }));
+  data.recurring.forEach(item => operations.push({ action: 'upsert', table: 'recurring_items', row: {
+    id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, kind: item.kind,
+    amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category, paid_by: item.paidBy || 'Shared',
+    account_id: item.accountId || null, day_of_month: Number(item.day), note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString()
+  } }));
+  data.transactions.forEach(item => operations.push({ action: 'upsert', table: 'transactions', row: transactionRow({
+    id: item.id, type: item.type, amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category,
+    paidBy: item.paidBy || 'Shared', accountId: item.accountId || '', account: item.account || '', toAccountId: item.toAccountId || '',
+    toAmount: item.toAmount == null ? null : Number(item.toAmount), debtId: item.debtId || '', debtPrincipal: item.debtPrincipal == null ? null : Number(item.debtPrincipal),
+    debtInterest: Number(item.debtInterest || 0), recurringItemId: item.recurringItemId || '', recurringMonth: item.recurringMonth || '',
+    date: item.date, note: item.note || '', createdAt: item.createdAt || new Date().toISOString()
+  }) }));
+  data.contributions.forEach(item => operations.push({ action: 'upsert', table: 'goal_contributions', row: {
+    id: item.id, household_id: householdId, goal_id: item.goalId, account_id: item.accountId || null, user_id: currentUser.id,
+    amount: Number(item.amount), currency: cleanCurrency(item.currency), date: item.date, note: item.note || null, updated_at: new Date().toISOString()
+  } }));
+  data.debts.forEach(debt => operations.push({ action: 'upsert', table: 'debts', row: debtRestoreRow(debt) }));
+  data.goals.forEach(goal => operations.push({ action: 'upsert', table: 'goals', row: goalRestoreRow(goal) }));
+  data.assets.forEach(item => operations.push({ action: 'upsert', table: 'assets', row: {
+    id: item.id, household_id: householdId, user_id: currentUser.id, name: item.name, asset_type: item.type,
+    symbol: item.symbol || null, quantity: Number(item.quantity || 0), currency: cleanCurrency(item.currency),
+    manual_value: item.manualValue == null ? null : Number(item.manualValue), notes: item.notes || null, updated_at: new Date().toISOString()
+  } }));
+  data.snapshots.forEach(item => {
+    const existing = state.snapshots.find(snapshot => snapshot.date === item.date);
+    operations.push({ action: 'snapshot', row: { id: existing?.id || item.id, household_id: householdId, snapshot_date: item.date, cash_usd: Number(item.cashUSD), assets_usd: Number(item.assetsUSD), debt_usd: Number(item.debtUSD), net_worth_usd: Number(item.netWorthUSD) } });
+  });
+  data.checkups.forEach(item => {
+    const existing = state.checkups.find(checkup => checkup.month === item.month);
+    operations.push({ action: 'checkup', row: { id: existing?.id || item.id, household_id: householdId, month: item.month, completed_by: currentUser.id, account_count: Number(item.accountCount || 0), adjustment_total_usd: Number(item.adjustmentUSD || 0), note: item.note || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() } });
+  });
+  try {
+    for (const operation of operations) {
+      const { error } = await runOperation(operation);
+      if (error) throw error;
+    }
+    pendingRestoreData = null;
+    state.settings.lastCurrency = data.settings.lastCurrency;
+    state.prices = data.prices;
+    cache();
+    await loadRemote();
+    closeModal();
+    toast('Backup restored safely ✓');
+    celebrate();
+    await ensureTodaySnapshot();
+  } catch (error) {
+    if (button) { button.disabled = false; button.textContent = 'Retry restore'; }
+    toast(`Restore stopped: ${error?.message || 'unknown error'}`);
+    await loadRemote();
+  }
 }
 
 function csvCell(value) { return `"${String(value ?? '').replace(/"/g, '""')}"`; }

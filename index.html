@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173f35">
-  <meta name="description" content="A private shared household money tracker.">
+  <meta name="description" content="A private shared household money planner for safer spending, debt freedom and goals.">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -55,7 +55,7 @@
         <div class="safeCard">
           <div class="safeTop">
             <div>
-              <span>Fun money safe today</span>
+              <span>Safe to spend today</span>
               <b id="safeToday">—</b>
             </div>
             <div class="safeIcon">✨</div>
@@ -64,7 +64,10 @@
           <div class="safeStats">
             <div><span>This week</span><b id="safeWeek">—</b></div>
             <div><span>Next payday</span><b id="nextPayday">Not set</b></div>
+            <div><span>Protected first</span><b id="safeProtected">—</b></div>
+            <div><span>Safety buffer</span><b id="safeBuffer">—</b></div>
           </div>
+          <button class="safeDetails" onclick="openSafeBreakdown()">See how this is calculated</button>
         </div>
 
         <div class="quickGrid">
@@ -85,6 +88,8 @@
           <button onclick="showPage('plan')">Full plan</button>
         </div>
         <div id="todayAllocation" class="allocationStrip"></div>
+
+        <div id="monthlyCheckupCard" class="checkupCard top"></div>
 
         <div class="sectionHead top">
           <div><h2>Monthly checklist</h2><p>Confirm regular money in seconds.</p></div>
@@ -164,12 +169,22 @@
           <div id="planAllocation" class="allocationGrid"></div>
         </div>
 
+        <div id="paydayAssistant" class="paydayCard top"></div>
+
         <div id="emergencyFundCard" class="emergencyCard top"></div>
 
         <div class="sectionHead top">
           <div><h2>Debt freedom</h2><p>Payments update balances automatically.</p></div>
           <button onclick="openDebtForm()">＋ Add</button>
         </div>
+        <div class="strategyRow">
+          <div id="debtStrategyTabs" class="chartTabs">
+            <button data-strategy="avalanche" onclick="setDebtStrategy('avalanche')">Save interest</button>
+            <button data-strategy="snowball" onclick="setDebtStrategy('snowball')">Quick wins</button>
+          </div>
+          <button class="secondary compact" onclick="openDebtSimulator()">What if?</button>
+        </div>
+        <div id="debtPlanSummary" class="debtPlanCard"></div>
         <div id="debtList" class="stack"></div>
 
         <div class="sectionHead top">
@@ -194,6 +209,15 @@
           <button class="primary compact" onclick="openQuickExpense()">＋ Spend</button>
         </div>
         <div class="timelineIntro">Transactions, transfers, accounts, goals, debts and plans appear here automatically.</div>
+        <div class="sectionHead top">
+          <div><h2>Cash-flow outlook</h2><p>Expected account balances from regular income and bills.</p></div>
+        </div>
+        <div id="cashflowTabs" class="chartTabs">
+          <button data-days="30" class="active" onclick="setCashflowDays(30)">30 days</button>
+          <button data-days="60" onclick="setCashflowDays(60)">60 days</button>
+          <button data-days="90" onclick="setCashflowDays(90)">90 days</button>
+        </div>
+        <div id="cashflowChart" class="chartCard cashflowCard"></div>
         <div id="timelineFilters" class="filterChips">
           <button class="active" data-filter="all" onclick="setTimelineFilter('all')">All</button>
           <button data-filter="money" onclick="setTimelineFilter('money')">Money</button>
@@ -226,12 +250,14 @@
 
         <div class="settingsCard">
           <div class="settingsIcon">↧</div>
-          <div><h3>Own your data</h3><p>Download a complete JSON backup or a transaction CSV.</p></div>
+          <div><h3>Own your data</h3><p>Download a backup, safely restore one, or export transactions.</p></div>
           <div class="buttonRow">
             <button class="secondary compact" onclick="exportBackup()">Backup</button>
+            <button class="secondary compact" onclick="chooseBackupFile()">Restore</button>
             <button class="secondary compact" onclick="exportTransactionsCsv()">CSV</button>
           </div>
         </div>
+        <input id="backupFile" class="hidden" type="file" accept="application/json,.json" onchange="handleBackupFile(event)">
 
         <div class="settingsCard">
           <div class="settingsIcon">◌</div>
