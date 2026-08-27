@@ -114,6 +114,102 @@ p { line-height: 1.5; }
   font-size: 18px;
   flex: none;
 }
+.topbarActions { display: flex; align-items: center; gap: 8px; flex: none; }
+.marathiGuideButton, .authMarathiHelp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 9px 12px;
+  border-radius: 999px;
+  background: #eee8f5;
+  color: #644989;
+  font-family: "Kohinoor Devanagari", "Noto Sans Devanagari", "Nirmala UI", Inter, sans-serif;
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.marathiGuideButton span { font-size: 16px; line-height: 0; }
+.authMarathiHelp { margin: -10px auto 17px; background: var(--blue-soft); color: #375d7d; }
+
+.marathiHelpTarget { min-width: 0; }
+h1.marathiHelpTarget, h2.marathiHelpTarget, h3.marathiHelpTarget { display: inline-flex; align-items: center; gap: 6px; }
+.marathiHelpStar {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #eee8f5;
+  color: #704f98;
+  box-shadow: 0 2px 7px rgba(82,57,111,.12);
+  font-family: Inter, sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: middle;
+  flex: none;
+}
+.marathiHelpStar:hover { background: #e4d9f0; transform: translateY(-1px); }
+.safeCard .marathiHelpStar, .netWorthCard .marathiHelpStar, .moneyDateHero .marathiHelpStar {
+  background: rgba(255,255,255,.17);
+  color: white;
+  box-shadow: none;
+}
+.fieldHelpCaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.fieldHelpCaption .marathiHelpStar { margin-left: auto; }
+.nestedFieldHelpCaption { position: relative; padding-right: 28px; }
+.nestedFieldHelpCaption > .marathiHelpStar { position: absolute; top: 0; right: 0; }
+.marathiHelpButtonWrap { position: relative; min-width: 0; }
+.quickGrid > .marathiHelpButtonWrap { display: flex; }
+.quickGrid > .marathiHelpButtonWrap > .quickAction { width: 100%; }
+.marathiHelpButtonWrap > .marathiHelpStar { position: absolute; top: 7px; right: 7px; z-index: 2; }
+.netWorthRateBar > .marathiHelpButtonWrap { flex: none; }
+.netWorthRateBar > .marathiHelpButtonWrap > .marathiHelpStar { top: -8px; right: -7px; }
+
+.sakhiGuide, .sakhiHelpDetail {
+  font-family: "Kohinoor Devanagari", "Noto Sans Devanagari", "Nirmala UI", Inter, sans-serif;
+}
+.sakhiGuideIntro {
+  padding: 15px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #eee8f5, #e7f2ed);
+  color: #3f3651;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.sakhiGuideIntro b { display: block; margin-bottom: 4px; font-size: 16px; }
+.sakhiGuideGroups { display: grid; gap: 9px; margin-top: 13px; }
+.sakhiGuideGroup { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.78); }
+.sakhiGuideGroup summary { padding: 13px 15px; cursor: pointer; color: var(--ink); font-size: 12px; font-weight: 750; list-style: none; }
+.sakhiGuideGroup summary::-webkit-details-marker { display: none; }
+.sakhiGuideGroup summary:after { content: "+"; float: right; color: var(--purple); font-size: 18px; line-height: .8; }
+.sakhiGuideGroup[open] summary:after { content: "−"; }
+.sakhiTopicGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 10px 10px; }
+.sakhiTopic {
+  min-width: 0;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: #f5f5f7;
+  text-align: left;
+}
+.sakhiTopic b { display: block; font-size: 11px; line-height: 1.45; }
+.sakhiTopic small { display: block; margin-top: 2px; color: var(--muted); font-family: Inter, sans-serif; font-size: 8px; }
+.sakhiHelpHero { padding: 18px; border-radius: 22px; background: linear-gradient(140deg, #5e467c, #8366a4); color: white; }
+.sakhiHelpHero span { color: rgba(255,255,255,.72); font-size: 9px; font-weight: 750; letter-spacing: .08em; }
+.sakhiHelpHero h3 { margin-top: 8px; font-size: 23px; line-height: 1.35; }
+.sakhiHelpHero small { display: block; margin-top: 5px; color: rgba(255,255,255,.68); font-family: Inter, sans-serif; font-size: 9px; }
+.sakhiHelpBlocks { display: grid; gap: 9px; margin: 12px 0; }
+.sakhiHelpBlock { padding: 14px 15px; border-radius: 17px; background: #f5f5f7; }
+.sakhiHelpBlock b { display: block; margin-bottom: 5px; color: var(--purple); font-size: 10px; }
+.sakhiHelpBlock p { margin: 0; color: #424245; font-size: 12px; line-height: 1.7; }
+.sakhiHelpBlock.warning { background: var(--sun-soft); }
+.sakhiHelpBlock.warning b { color: #8b5a05; }
+.sakhiHelpActions { display: flex; gap: 8px; }
+.sakhiHelpActions button { flex: 1; }
 
 main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + env(safe-area-inset-bottom)); }
 .page { animation: pageIn .28s ease-out; }
@@ -520,6 +616,11 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
 .sheetHead { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 15px; }
 .sheetHead h2 { font-size: 21px; }
 .sheetHead button { width: 36px; height: 36px; border-radius: 50%; background: #e9ede9; font-size: 23px; line-height: 1; }
+.marathiHelpModal { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; padding: 0; background: rgba(11,31,25,.62); backdrop-filter: blur(5px); animation: fadeIn .18s ease; }
+.marathiHelpSheet { width: 100%; max-width: 680px; max-height: min(92svh, 850px); overflow: auto; margin: 0 auto; padding: 8px 18px calc(23px + env(safe-area-inset-bottom)); border-radius: 28px 28px 0 0; background: rgba(255,255,255,.98); box-shadow: 0 -18px 70px rgba(0,0,0,.2); animation: sheetUp .24s ease-out; overscroll-behavior: contain; }
+.marathiHelpHead { position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; margin-bottom: 8px; background: rgba(255,255,255,.94); backdrop-filter: blur(18px); }
+.marathiHelpHead h2 { margin: 0; font-family: "Kohinoor Devanagari", "Noto Sans Devanagari", "Nirmala UI", Inter, sans-serif; font-size: 20px; }
+.marathiHelpHead button { width: 36px; height: 36px; border-radius: 50%; background: #f0f0f2; color: #555; font-size: 23px; line-height: 1; }
 
 .toast { position: fixed; left: 50%; bottom: calc(88px + env(safe-area-inset-bottom)); z-index: 50; max-width: calc(100% - 36px); transform: translateX(-50%); padding: 11px 15px; border-radius: 999px; background: var(--ink); color: white; box-shadow: var(--shadow); font-size: 10px; font-weight: 800; animation: toastIn .24s ease; }
 .confetti { position: fixed; inset: 0; z-index: 45; pointer-events: none; overflow: hidden; }
@@ -615,6 +716,8 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
   main { padding-left: 24px; padding-right: 24px; }
   .modal { align-items: center; padding: 22px; }
   .sheet { border-radius: 28px; padding: 8px 23px 25px; }
+  .marathiHelpModal { align-items: center; padding: 22px; }
+  .marathiHelpSheet { border-radius: 28px; padding: 8px 23px 25px; }
 }
 
 @media (max-width: 640px) {
@@ -629,6 +732,10 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
 @media (max-width: 430px) {
   main { padding-left: 14px; padding-right: 14px; }
   .topbar { padding-left: 14px; padding-right: 14px; }
+  .topbar { gap: 8px; }
+  .brand img { width: 38px; height: 38px; }
+  .marathiGuideButton { padding-inline: 10px; }
+  .sakhiTopicGrid { grid-template-columns: 1fr; }
   .metricGrid.three { grid-template-columns: 1fr 1fr; }
   .metricGrid.three .metricCard:last-child { grid-column: 1 / -1; }
   .pageTitle { align-items: flex-start; }
@@ -649,6 +756,7 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
   .bottomNav button span { font-size: 17px; }
   .bottomNav button b { font-size: 8px; }
   .sheet { max-height: 96svh; padding: 6px 14px calc(14px + env(safe-area-inset-bottom)); border-radius: 23px 23px 0 0; }
+  .marathiHelpSheet { max-height: 96svh; padding: 6px 14px calc(14px + env(safe-area-inset-bottom)); border-radius: 23px 23px 0 0; }
   .sheetHandle { margin-bottom: 8px; }
   .sheetHead { margin-bottom: 10px; }
   .sheetHead h2 { font-size: 18px; }
