@@ -435,13 +435,19 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
 .amountField { position: relative; }
 .amountField input { padding-left: 46px; font-size: 26px; font-weight: 850; }
 .amountPrefix { position: absolute; left: 14px; bottom: 17px; color: var(--muted); font-size: 11px; font-weight: 850; z-index: 1; }
-.chipLabel { color: #43574f; font-size: 11px; font-weight: 800; }
+.chipLabel, .chipHeading { color: #43574f; font-size: 11px; font-weight: 800; }
+.chipHeading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.chipHeading small { color: var(--muted); font-size: 8px; font-weight: 700; white-space: nowrap; }
 .chips { display: flex; gap: 7px; overflow-x: auto; padding: 1px 1px 4px; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }
-.chips button { flex: none; padding: 9px 11px; border-radius: 12px; background: #ecefe9; color: var(--muted); font-size: 10px; font-weight: 750; }
+.chips button { flex: none; padding: 9px 11px; border-radius: 12px; background: #ecefe9; color: var(--muted); font-size: 10px; font-weight: 750; white-space: nowrap; }
 .chips button.active { background: var(--ink); color: white; }
 .chips.accounts button.active { background: var(--blue); }
-.quickExpenseForm .saveSpend { min-height: 52px; font-size: 15px; }
+.optionRail { scroll-snap-type: x proximity; overscroll-behavior-inline: contain; -webkit-overflow-scrolling: touch; }
+.optionRail button { scroll-snap-align: center; }
+.fieldHint { color: var(--muted); font-size: 8px; font-weight: 600; line-height: 1.35; }
+.quickEntryForm { gap: 10px; }
+.quickEntryForm .quickSave { min-height: 48px; margin-top: 2px; font-size: 14px; }
 .shortcutTabs { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; background: #e8e8df; border-radius: 14px; margin-bottom: 14px; }
 .shortcutTabs button { padding: 9px; border-radius: 10px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 850; }
 .shortcutTabs button.active { background: white; color: var(--ink); }
@@ -606,6 +612,15 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
   .scenarioList, .closeStats { grid-template-columns: 1fr; }
   .bottomNav button span { font-size: 17px; }
   .bottomNav button b { font-size: 8px; }
+  .sheet { max-height: 96svh; padding: 6px 14px calc(14px + env(safe-area-inset-bottom)); border-radius: 23px 23px 0 0; }
+  .sheetHandle { margin-bottom: 8px; }
+  .sheetHead { margin-bottom: 10px; }
+  .sheetHead h2 { font-size: 18px; }
+  .quickEntryForm .amountField input { padding-top: 10px; padding-bottom: 10px; font-size: 22px; }
+  .quickEntryForm .amountPrefix { bottom: 14px; }
+  .quickEntryForm input, .quickEntryForm select { padding: 10px 11px; border-radius: 12px; }
+  .quickEntryForm .chips button { padding: 8px 10px; }
+  .quickEntryForm .friendlyNote { padding: 9px 10px; }
 }
 
 @media (max-width: 355px) {
