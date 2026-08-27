@@ -636,6 +636,218 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
   .calendarControls b { min-width: 78px; }
 }
 
+/* Calm, product-like visual system */
+:root {
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --cream: #f5f5f7;
+  --paper: #ffffff;
+  --green: #166b50;
+  --green-2: #248267;
+  --mint: #e8f4ef;
+  --coral: #d9584b;
+  --coral-soft: #fff0ee;
+  --sun-soft: #fff7df;
+  --blue: #3478b8;
+  --blue-soft: #edf5fb;
+  --line: #e8e8ed;
+  --shadow: 0 10px 35px rgba(0, 0, 0, .055);
+  --radius: 24px;
+}
+
+body {
+  background: radial-gradient(circle at 50% -18rem, rgba(36,130,103,.075), transparent 38rem), var(--cream);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, "Segoe UI", sans-serif;
+  letter-spacing: -.01em;
+}
+
+.topbar {
+  height: 66px;
+  border-bottom: 1px solid rgba(0,0,0,.045);
+  background: rgba(245,245,247,.82);
+  backdrop-filter: saturate(180%) blur(22px);
+}
+.brand img { width: 36px; height: 36px; }
+.brandTitle { font-weight: 700; }
+.roundButton { background: rgba(255,255,255,.82); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+main { width: min(820px, 100%); padding-top: 24px; }
+h1 { font-size: clamp(31px, 8vw, 42px); font-weight: 720; letter-spacing: -.045em; }
+h2 { font-weight: 700; letter-spacing: -.025em; }
+h3 { font-weight: 680; }
+.eyebrow { color: var(--muted); font-weight: 700; letter-spacing: 1.25px; }
+.pageTitle, .todayHeading { margin-bottom: 28px; }
+.sectionHead { margin: 32px 0 12px; }
+.sectionHead p { font-size: 11px; }
+
+.metricCard, .card, .accountCard, .assetCard, .goalCard, .debtCard, .recurringCard, .settingsCard, .adviceCard, .emergencyCard, .checkupCard, .paydayCard, .debtPlanCard,
+.chartCard, .cardList, .allocationPanel, .runwayCard, .monthCloseCard, .moneyCalendar, .fundCard {
+  border-color: transparent;
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 1px 2px rgba(0,0,0,.025);
+}
+.stack, .adviceList { gap: 12px; }
+.metricGrid { gap: 12px; }
+.metricCard { padding: 16px; }
+.metricCard span { font-size: 11px; }
+.quickGrid { gap: 10px; margin: 18px 0; }
+.quickAction {
+  padding: 13px;
+  border: 1px solid rgba(0,0,0,.025);
+  border-radius: 20px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.025);
+  transition: transform .3s cubic-bezier(.2,.8,.2,1), box-shadow .3s ease, background .3s ease;
+}
+.quickAction:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.quickAction:active { transform: scale(.97); }
+.safeCard, .netWorthCard, .moneyDateHero {
+  box-shadow: 0 18px 50px rgba(20,80,62,.14);
+  background: linear-gradient(145deg, #173c32, #23654f 72%, #338469);
+}
+.safeCard:after, .moneyDateHero:after { opacity: .45; }
+.safeTop b, .netWorthCard > b { font-weight: 650; }
+.allocationStrip .bucket { border-top: 0; border-left: 3px solid var(--green-2); }
+.allocationStrip .bucket.debt { border-left-color: var(--coral); }
+.allocationStrip .bucket.future { border-left-color: var(--blue); }
+.allocationStrip .bucket.wants { border-left-color: var(--sun); }
+.primary, .secondary, .sectionHead > button, .pageTitle > button {
+  border-radius: 999px;
+  font-weight: 700;
+  box-shadow: none;
+  transition: transform .22s ease, filter .22s ease, background .22s ease;
+}
+.primary:hover, .secondary:hover, .sectionHead > button:hover, .pageTitle > button:hover { filter: brightness(.97); transform: translateY(-1px); }
+.primary:active, .secondary:active { transform: scale(.97); }
+.form { gap: 14px; }
+.form label { color: #424245; font-weight: 650; }
+.form input, .form select, .form textarea {
+  padding: 13px 14px;
+  border-color: transparent;
+  border-radius: 14px;
+  background-color: #f5f5f7;
+  box-shadow: none;
+  transition: background .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+.form input:focus, .form select:focus, .form textarea:focus { background: #fff; box-shadow: 0 0 0 4px rgba(36,130,103,.1); }
+.numberWheelInput, .optionWheelInput { cursor: pointer; caret-color: transparent; }
+.numberWheelInput { appearance: textfield; }
+.numberWheelInput::-webkit-inner-spin-button, .numberWheelInput::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.optionWheelInput {
+  appearance: none;
+  padding-right: 38px !important;
+  background-image: linear-gradient(45deg, transparent 50%, #777 50%), linear-gradient(135deg, #777 50%, transparent 50%);
+  background-position: calc(100% - 18px) 52%, calc(100% - 13px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.sheet { background: rgba(255,255,255,.97); backdrop-filter: blur(25px); box-shadow: 0 -18px 70px rgba(0,0,0,.14); }
+.sheetHead h2 { font-weight: 700; letter-spacing: -.035em; }
+.sheetHead button { background: #f0f0f2; color: #555; }
+.bottomNav { border-color: rgba(0,0,0,.055); background: rgba(255,255,255,.88); backdrop-filter: saturate(180%) blur(24px); box-shadow: 0 10px 35px rgba(0,0,0,.12); }
+.bottomNav button.active { background: #edf6f2; }
+.timelineBody, .dueItem, .quote { border-color: transparent; background: rgba(255,255,255,.9); }
+.miniBar i, .progress i { transition: width .75s cubic-bezier(.2,.8,.2,1); }
+.chartLine, .forecastLine, .trajectoryLine { stroke-dasharray: 1600; stroke-dashoffset: 1600; animation: drawLine 1.15s cubic-bezier(.2,.8,.2,1) forwards; }
+
+/* Vertical wheel pickers for every number and option */
+.numberWheelLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(0,0,0,.34);
+  backdrop-filter: blur(10px);
+  animation: wheelFade .22s ease-out;
+}
+.numberWheelCard {
+  width: min(520px, 100%);
+  padding: 12px 18px calc(18px + env(safe-area-inset-bottom));
+  border: 1px solid rgba(255,255,255,.8);
+  border-radius: 30px;
+  background: rgba(250,250,252,.96);
+  box-shadow: 0 28px 90px rgba(0,0,0,.24);
+  overflow: hidden;
+  animation: wheelUp .36s cubic-bezier(.2,.9,.25,1.08);
+}
+.numberWheelCard header { display: grid; grid-template-columns: 68px 1fr 68px; align-items: center; gap: 8px; min-height: 52px; text-align: center; }
+.numberWheelCard header div { min-width: 0; display: grid; gap: 3px; }
+.numberWheelCard header small { color: var(--muted); font-size: 8px; font-weight: 700; letter-spacing: 1px; }
+.numberWheelCard header b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.wheelTextButton { padding: 10px 0; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; }
+.wheelTextButton.done { color: var(--green); font-weight: 750; }
+.wheelReadout { min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 32px; font-weight: 650; letter-spacing: -.04em; }
+.wheelSign { width: 34px; height: 34px; border-radius: 50%; background: #e9e9ed; color: var(--ink); font-size: 20px; }
+.digitRack { position: relative; height: 132px; display: flex; justify-content: center; align-items: stretch; gap: 2px; overflow: hidden; }
+.digitWheel {
+  width: min(43px, calc((100vw - 68px) / var(--wheel-count)));
+  height: 132px;
+  padding-block: 44px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  mask-image: linear-gradient(to bottom, transparent, #000 30%, #000 70%, transparent);
+}
+.digitWheel::-webkit-scrollbar, .optionWheelList::-webkit-scrollbar { display: none; }
+.wheelDigit {
+  width: 100%;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  scroll-snap-align: center;
+  background: transparent;
+  color: var(--ink);
+  font-size: clamp(20px, 6.2vw, 29px);
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.wheelDecimal { width: 8px; height: 132px; display: grid; place-items: center; padding-top: 5px; font-size: 27px; font-weight: 650; }
+.wheelSelection { position: absolute; z-index: 0; top: 44px; left: 0; right: 0; height: 44px; border-top: 1px solid #d5d5da; border-bottom: 1px solid #d5d5da; background: rgba(255,255,255,.48); pointer-events: none; }
+.digitWheel, .wheelDecimal { position: relative; z-index: 1; }
+.wheelFooter { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 10px; }
+.wheelFooter button { padding: 7px 9px; border-radius: 999px; background: #ececf0; color: #555; font-size: 10px; font-weight: 650; }
+.optionWheelList {
+  height: 240px;
+  padding-block: 96px;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-y: contain;
+  background: linear-gradient(to bottom, transparent 0, transparent 40%, rgba(255,255,255,.72) 40%, rgba(255,255,255,.72) 60%, transparent 60%);
+  mask-image: linear-gradient(to bottom, transparent, #000 24%, #000 76%, transparent);
+}
+.optionWheelItem { width: 100%; height: 48px; display: block; padding: 0 18px; scroll-snap-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: transparent; color: #8b8b90; font-size: 17px; transition: color .15s ease, font-size .15s ease, font-weight .15s ease; }
+.optionWheelItem.active { color: var(--ink); font-size: 21px; font-weight: 650; }
+.optionWheelSelection { display: none; }
+
+@keyframes drawLine { to { stroke-dashoffset: 0; } }
+@keyframes softRise { from { opacity: 0; transform: translateY(10px); } }
+@keyframes wheelFade { from { opacity: 0; } }
+@keyframes wheelUp { from { opacity: .5; transform: translateY(32px) scale(.985); } }
+
+.page, .quickGrid > *, .metricGrid > *, .stack > * { animation: softRise .48s cubic-bezier(.2,.8,.2,1) both; }
+
+@media (min-width: 720px) {
+  .numberWheelLayer { align-items: center; }
+}
+
+@media (max-width: 430px) {
+  main { padding-top: 18px; }
+  .quickAction small { display: none; }
+  .quickAction { min-height: 64px; grid-template-columns: 32px 1fr; align-items: center; gap: 9px; }
+  .quickAction > span { width: 32px; height: 32px; margin: 0; border-radius: 11px; font-size: 18px; }
+  .quickAction b { font-size: 11px; }
+  .safeCard { padding: 20px; }
+  .numberWheelLayer { padding: 0; }
+  .numberWheelCard { border-radius: 28px 28px 0 0; border-bottom: 0; }
+  .numberWheelCard header { grid-template-columns: 58px 1fr 58px; }
+  .fieldRow.quickChoiceRow { grid-template-columns: 1fr; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *:before, *:after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
