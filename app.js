@@ -52,7 +52,6 @@ let calendarMonth = '';
 let toastTimer = null;
 let pendingQuickAction = new URLSearchParams(location.search).get('quick') || '';
 let pendingRestoreData = null;
-let numberWheelState = null;
 
 const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
@@ -211,14 +210,17 @@ function haptic() { if (navigator.vibrate) navigator.vibrate(18); }
 function openModal(title, html) {
   $('modalTitle').textContent = title;
   $('modalContent').innerHTML = html;
-  prepareWheelInputs($('modalContent'));
   $('modal').classList.remove('hidden');
+  const form = $('modalContent').querySelector('form');
+  $('modal').classList.toggle('flowModal', !!form);
+  prepareInlineControls($('modalContent'));
+  if (form) setupFormFlow(form);
   document.body.style.overflow = 'hidden';
-  setTimeout(() => $('modalContent').querySelector('input:not([type="hidden"]), select, button')?.focus(), 80);
+  setTimeout(() => $('modalContent').querySelector('.flowStep.active input:not([type="hidden"]), .flowStep.active textarea, input:not([type="hidden"]), textarea, button')?.focus(), 80);
 }
 function closeModal() {
-  closeNumberWheel(false);
   $('modal').classList.add('hidden');
+  $('modal').classList.remove('flowModal');
   $('modalContent').innerHTML = '';
   document.body.style.overflow = '';
 }
@@ -230,225 +232,229 @@ function numberPrecision(input) {
   return Math.min(8, match ? match[1].length : 0);
 }
 
-function numberWheelLabel(input) {
-  if (input.getAttribute('aria-label')) return input.getAttribute('aria-label');
-  const label = input.closest('label');
-  if (!label) return 'Choose number';
-  return [...label.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent.trim()).filter(Boolean).join(' ') || 'Choose number';
-}
-
-function wheelDigitsHtml(value, integerDigits, precision) {
-  const fixed = Math.abs(value).toFixed(precision).split('.');
-  const whole = fixed[0].padStart(integerDigits, '0').slice(-integerDigits);
-  const digits = [...whole, ...(fixed[1] || '')];
-  return digits.map((digit, position) => {
-    const decimalClass = precision && position === integerDigits ? ' afterDecimal' : '';
-    const items = Array.from({ length: 50 }, (_, index) => `<button type="button" class="wheelDigit" data-wheel-index="${index}" tabindex="-1">${index % 10}</button>`).join('');
-    return `${decimalClass ? '<span class="wheelDecimal" aria-hidden="true">.</span>' : ''}<div class="digitWheel${decimalClass}" data-position="${position}" data-digit="${digit}" tabindex="0" role="spinbutton" aria-label="Digit ${position + 1}" aria-valuemin="0" aria-valuemax="9" aria-valuenow="${digit}">${items}</div>`;
-  }).join('');
-}
-
-function currentWheelValue() {
-  if (!numberWheelState) return 0;
-  const digits = [...document.querySelectorAll('#numberWheel .digitWheel')].map(wheel => wheel.dataset.digit || '0');
-  const { integerDigits, precision, negative } = numberWheelState;
-  const whole = digits.slice(0, integerDigits).join('') || '0';
-  const decimal = precision ? `.${digits.slice(integerDigits).join('')}` : '';
-  return Number(`${negative ? '-' : ''}${whole}${decimal}`) || 0;
-}
-
-function updateWheelReadout() {
-  const readout = $('numberWheelReadout');
-  if (!readout || !numberWheelState) return;
-  const value = currentWheelValue();
-  readout.textContent = new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: numberWheelState.precision,
-    maximumFractionDigits: numberWheelState.precision
-  }).format(value);
-}
-
-function closeNumberWheel(commit = false, clear = false) {
-  if (!numberWheelState) return;
-  if (numberWheelState.type === 'option') {
-    const { select, optionIndex, previousOverflow } = numberWheelState;
-    if (commit) {
-      select.selectedIndex = optionIndex;
-      select.dispatchEvent(new Event('input', { bubbles: true }));
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    document.getElementById('numberWheel')?.remove();
-    numberWheelState = null;
-    document.body.style.overflow = previousOverflow;
-    return;
-  }
-  const { input, min, max, step, precision, previousOverflow } = numberWheelState;
-  if (commit) {
-    if (clear && !input.required) input.value = '';
-    else {
-      let value = currentWheelValue();
-      if (Number.isFinite(step) && step > 0) {
-        const anchor = Number.isFinite(min) ? min : 0;
-        value = anchor + Math.round((value - anchor) / step) * step;
-      }
-      if (Number.isFinite(min)) value = Math.max(min, value);
-      if (Number.isFinite(max)) value = Math.min(max, value);
-      input.value = precision ? value.toFixed(precision) : String(Math.round(value));
-    }
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  document.getElementById('numberWheel')?.remove();
-  numberWheelState = null;
-  document.body.style.overflow = previousOverflow;
-}
-
-function openNumberWheel(input) {
-  if (!input || input.disabled) return;
-  closeNumberWheel(false);
+function formatWheelNumber(input, value) {
+  if (!Number.isFinite(value)) return '—';
   const precision = numberPrecision(input);
-  const raw = input.value === '' ? Number(input.min || 0) : Number(input.value);
-  const initial = Number.isFinite(raw) ? raw : 0;
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: precision, maximumFractionDigits: precision }).format(value);
+}
+
+function nudgeInlineNumber(input, direction, units = 1) {
+  if (input.disabled) return;
+  const step = input.step && input.step !== 'any' ? Number(input.step) : 1;
   const min = input.hasAttribute('min') ? Number(input.min) : -Infinity;
   const max = input.hasAttribute('max') ? Number(input.max) : Infinity;
-  const step = input.hasAttribute('step') && input.step !== 'any' ? Number(input.step) : 1;
-  const maxDigits = Number.isFinite(max) ? String(Math.floor(Math.abs(max))).length : 0;
-  const valueDigits = String(Math.floor(Math.abs(initial))).length;
-  const integerDigits = Math.max(1, Math.min(8, maxDigits || (precision > 6 ? Math.max(3, valueDigits + 1) : precision > 3 ? Math.max(4, valueDigits + 1) : Math.max(7, valueDigits + 1))));
-  const negativeAllowed = /^(accountOpening|actualBalance|checkupBalance\d+)$/.test(input.id);
-  const previousOverflow = document.body.style.overflow;
-  numberWheelState = { type: 'number', input, precision, integerDigits, min, max, step, negative: initial < 0, negativeAllowed, previousOverflow };
-  document.body.style.overflow = 'hidden';
-  const picker = document.createElement('div');
-  picker.id = 'numberWheel';
-  picker.className = 'numberWheelLayer';
-  picker.innerHTML = `<section class="numberWheelCard" role="dialog" aria-modal="true" aria-labelledby="numberWheelTitle">
-    <header><button type="button" class="wheelTextButton" data-wheel-action="cancel">Cancel</button><div><small>SCROLL UP OR DOWN</small><b id="numberWheelTitle">${esc(numberWheelLabel(input))}</b></div><button type="button" class="wheelTextButton done" data-wheel-action="done">Done</button></header>
-    <div class="wheelReadout"><button type="button" id="wheelSign" class="wheelSign${negativeAllowed ? '' : ' hidden'}" aria-label="Change positive or negative">${initial < 0 ? '−' : '+'}</button><span id="numberWheelReadout"></span></div>
-    <div class="digitRack" style="--wheel-count:${integerDigits + precision + (precision ? 1 : 0)}">${wheelDigitsHtml(initial, integerDigits, precision)}<i class="wheelSelection" aria-hidden="true"></i></div>
-    <div class="wheelFooter"><span>Move each number vertically like a slot machine.</span>${input.required ? '' : '<button type="button" data-wheel-action="clear">Clear value</button>'}</div>
-  </section>`;
-  document.body.appendChild(picker);
-  const wheels = [...picker.querySelectorAll('.digitWheel')];
-  wheels.forEach(wheel => {
-    const startIndex = 20 + Number(wheel.dataset.digit);
-    wheel.scrollTop = startIndex * 44;
-    let settleTimer;
-    wheel.addEventListener('scroll', () => {
-      const rawIndex = Math.round(wheel.scrollTop / 44);
-      const digit = ((rawIndex % 10) + 10) % 10;
-      if (wheel.dataset.digit !== String(digit)) {
-        wheel.dataset.digit = String(digit);
-        wheel.setAttribute('aria-valuenow', String(digit));
-        updateWheelReadout();
-        if (navigator.vibrate) navigator.vibrate(4);
-      }
-      clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        wheel.scrollTo({ top: (20 + digit) * 44, behavior: 'auto' });
-      }, 140);
-    }, { passive: true });
-    wheel.addEventListener('keydown', event => {
-      if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
-      event.preventDefault();
-      wheel.scrollBy({ top: event.key === 'ArrowDown' ? 44 : -44, behavior: 'smooth' });
-    });
-    wheel.addEventListener('click', event => {
-      const item = event.target.closest('.wheelDigit');
-      if (item) wheel.scrollTo({ top: Number(item.dataset.wheelIndex) * 44, behavior: 'smooth' });
-    });
-  });
-  picker.querySelector('[data-wheel-action="cancel"]').onclick = () => closeNumberWheel(false);
-  picker.querySelector('[data-wheel-action="done"]').onclick = () => closeNumberWheel(true);
-  picker.querySelector('[data-wheel-action="clear"]')?.addEventListener('click', () => closeNumberWheel(true, true));
-  $('wheelSign').onclick = () => {
-    numberWheelState.negative = !numberWheelState.negative;
-    $('wheelSign').textContent = numberWheelState.negative ? '−' : '+';
-    updateWheelReadout();
-  };
-  picker.addEventListener('click', event => { if (event.target === picker) closeNumberWheel(false); });
-  updateWheelReadout();
-  wheels.at(-1)?.focus({ preventScroll: true });
+  let value = input.value === '' ? (Number.isFinite(min) ? min : 0) : Number(input.value);
+  value += direction * step * units;
+  value = Math.max(min, Math.min(max, value));
+  input.value = numberPrecision(input) ? value.toFixed(numberPrecision(input)) : String(Math.round(value));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  updateInlineNumber(input);
+  haptic();
 }
 
-function openOptionWheel(select) {
-  if (!select || select.disabled) return;
-  closeNumberWheel(false);
-  const options = [...select.options];
-  if (!options.length) return;
-  const selectedIndex = Math.max(0, select.selectedIndex);
-  const previousOverflow = document.body.style.overflow;
-  numberWheelState = { type: 'option', select, optionIndex: selectedIndex, previousOverflow };
-  document.body.style.overflow = 'hidden';
-  const picker = document.createElement('div');
-  picker.id = 'numberWheel';
-  picker.className = 'numberWheelLayer';
-  picker.innerHTML = `<section class="numberWheelCard optionWheelCard" role="dialog" aria-modal="true" aria-labelledby="numberWheelTitle">
-    <header><button type="button" class="wheelTextButton" data-wheel-action="cancel">Cancel</button><div><small>SCROLL UP OR DOWN</small><b id="numberWheelTitle">${esc(numberWheelLabel(select))}</b></div><button type="button" class="wheelTextButton done" data-wheel-action="done">Done</button></header>
-    <div class="optionWheelList" tabindex="0" role="listbox">${options.map((option, index) => `<button type="button" class="optionWheelItem${index === selectedIndex ? ' active' : ''}" data-option-index="${index}" role="option" aria-selected="${index === selectedIndex}">${esc(option.textContent)}</button>`).join('')}</div>
-    <i class="optionWheelSelection" aria-hidden="true"></i>
-    <div class="wheelFooter"><span>Move the list vertically and stop on your choice.</span></div>
-  </section>`;
-  document.body.appendChild(picker);
-  const list = picker.querySelector('.optionWheelList');
-  const setOption = index => {
-    const bounded = Math.max(0, Math.min(options.length - 1, index));
-    if (numberWheelState?.type !== 'option') return;
-    numberWheelState.optionIndex = bounded;
-    list.querySelectorAll('.optionWheelItem').forEach((item, itemIndex) => {
-      item.classList.toggle('active', itemIndex === bounded);
-      item.setAttribute('aria-selected', itemIndex === bounded ? 'true' : 'false');
-    });
-  };
-  list.scrollTop = selectedIndex * 48;
-  let settleTimer;
-  list.addEventListener('scroll', () => {
-    const index = Math.round(list.scrollTop / 48);
-    if (index !== numberWheelState?.optionIndex) {
-      setOption(index);
-      if (navigator.vibrate) navigator.vibrate(4);
+function updateInlineNumber(input) {
+  const shell = input.closest('.inlineNumberWheel');
+  if (!shell) return;
+  const step = input.step && input.step !== 'any' ? Number(input.step) : 1;
+  const min = input.hasAttribute('min') ? Number(input.min) : -Infinity;
+  const max = input.hasAttribute('max') ? Number(input.max) : Infinity;
+  const value = input.value === '' ? (Number.isFinite(min) ? min : 0) : Number(input.value);
+  const before = value - step;
+  const after = value + step;
+  shell.querySelector('.numberBefore').textContent = before < min ? '—' : formatWheelNumber(input, before);
+  shell.querySelector('.numberAfter').textContent = after > max ? '—' : formatWheelNumber(input, after);
+}
+
+function enhanceNumberInput(input) {
+  if (input.dataset.inlineWheelReady) return;
+  input.dataset.inlineWheelReady = 'true';
+  input.classList.add('inlineNumberInput');
+  input.inputMode = numberPrecision(input) ? 'decimal' : 'numeric';
+  const shell = document.createElement('div');
+  shell.className = 'inlineNumberWheel';
+  input.parentNode.insertBefore(shell, input);
+  shell.innerHTML = '<div class="numberNudge numberAfter" role="button" tabindex="0" aria-label="Increase"></div>';
+  shell.appendChild(input);
+  shell.insertAdjacentHTML('beforeend', '<div class="numberNudge numberBefore" role="button" tabindex="0" aria-label="Decrease"></div><small>Swipe vertically or tap the centre number to type the exact value.</small>');
+  shell.querySelector('.numberAfter').onclick = () => nudgeInlineNumber(input, 1);
+  shell.querySelector('.numberBefore').onclick = () => nudgeInlineNumber(input, -1);
+  shell.querySelectorAll('.numberNudge').forEach(control => control.onkeydown = event => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    control.click();
+  });
+  let startY = null;
+  shell.addEventListener('pointerdown', event => { if (event.target === input) return; startY = event.clientY; });
+  shell.addEventListener('pointerup', event => {
+    if (startY == null || event.target === input) { startY = null; return; }
+    const distance = startY - event.clientY;
+    if (Math.abs(distance) > 18) nudgeInlineNumber(input, distance > 0 ? 1 : -1, Math.max(1, Math.round(Math.abs(distance) / 35)));
+    startY = null;
+  });
+  shell.addEventListener('wheel', event => {
+    event.preventDefault();
+    nudgeInlineNumber(input, event.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+  input.addEventListener('input', () => updateInlineNumber(input));
+  updateInlineNumber(input);
+}
+
+function syncInlineOptionWheel(select, scroll = true) {
+  const rail = select.parentElement?.querySelector(':scope > .inlineOptionRail');
+  if (!rail) return;
+  rail.classList.toggle('disabled', select.disabled);
+  const index = Math.max(0, select.selectedIndex);
+  rail.querySelectorAll('.inlineOptionItem').forEach((item, itemIndex) => {
+    item.classList.toggle('active', itemIndex === index);
+    item.setAttribute('aria-selected', itemIndex === index ? 'true' : 'false');
+  });
+  if (scroll) requestAnimationFrame(() => rail.scrollTo({ top: index * 48, behavior: 'smooth' }));
+}
+
+function buildInlineOptionWheel(select) {
+  select.parentElement?.querySelector(':scope > .inlineOptionRail')?.remove();
+  const rail = document.createElement('div');
+  rail.className = 'inlineOptionRail';
+  rail.tabIndex = 0;
+  rail.setAttribute('role', 'listbox');
+  rail.setAttribute('aria-label', select.getAttribute('aria-label') || 'Choose an option');
+  rail.innerHTML = [...select.options].map((option, index) => `<button type="button" class="inlineOptionItem${index === select.selectedIndex ? ' active' : ''}" data-option-index="${index}" role="option" aria-selected="${index === select.selectedIndex}">${esc(option.textContent)}</button>`).join('');
+  select.insertAdjacentElement('afterend', rail);
+  const choose = (index, userInitiated = true) => {
+    if (select.disabled) return;
+    const bounded = Math.max(0, Math.min(select.options.length - 1, index));
+    if (select.selectedIndex !== bounded) {
+      select.selectedIndex = bounded;
+      if (userInitiated) {
+        select.dispatchEvent(new Event('input', { bubbles: true }));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        haptic();
+      }
     }
-    clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      if (numberWheelState?.type === 'option') list.scrollTo({ top: numberWheelState.optionIndex * 48, behavior: 'smooth' });
-    }, 100);
-  }, { passive: true });
-  list.addEventListener('click', event => {
-    const item = event.target.closest('.optionWheelItem');
+    syncInlineOptionWheel(select, false);
+    queueMicrotask(() => syncAllInlineControls());
+  };
+  rail.onclick = event => {
+    const item = event.target.closest('.inlineOptionItem');
     if (!item) return;
     const index = Number(item.dataset.optionIndex);
-    setOption(index);
-    list.scrollTo({ top: index * 48, behavior: 'smooth' });
-  });
-  list.addEventListener('keydown', event => {
+    choose(index);
+    rail.scrollTo({ top: index * 48, behavior: 'smooth' });
+  };
+  let settleTimer;
+  rail.addEventListener('scroll', () => {
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => choose(Math.round(rail.scrollTop / 48)), 90);
+  }, { passive: true });
+  rail.onkeydown = event => {
     if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
     event.preventDefault();
-    const next = numberWheelState.optionIndex + (event.key === 'ArrowDown' ? 1 : -1);
-    setOption(next);
-    list.scrollTo({ top: numberWheelState.optionIndex * 48, behavior: 'smooth' });
+    choose(select.selectedIndex + (event.key === 'ArrowDown' ? 1 : -1));
+    syncInlineOptionWheel(select);
+  };
+  requestAnimationFrame(() => {
+    rail.scrollTop = Math.max(0, select.selectedIndex) * 48;
+    syncInlineOptionWheel(select, false);
   });
-  picker.querySelector('[data-wheel-action="cancel"]').onclick = () => closeNumberWheel(false);
-  picker.querySelector('[data-wheel-action="done"]').onclick = () => closeNumberWheel(true);
-  picker.addEventListener('click', event => { if (event.target === picker) closeNumberWheel(false); });
-  list.focus({ preventScroll: true });
 }
 
-function prepareWheelInputs(root = document) {
-  if (root.matches?.('input[type="number"]')) root = root.parentElement || document;
-  if (root.matches?.('select')) root = root.parentElement || document;
-  root.querySelectorAll?.('input[type="number"]').forEach(input => {
-    if (input.dataset.wheelReady) return;
-    input.dataset.wheelReady = 'true';
-    input.readOnly = true;
-    input.inputMode = 'none';
-    input.classList.add('numberWheelInput');
-    input.setAttribute('aria-haspopup', 'dialog');
+function enhanceSelect(select) {
+  if (select.dataset.inlineWheelReady) return;
+  select.dataset.inlineWheelReady = 'true';
+  select.classList.add('inlineSelectSource');
+  buildInlineOptionWheel(select);
+  select.addEventListener('change', () => syncInlineOptionWheel(select));
+  new MutationObserver(() => buildInlineOptionWheel(select)).observe(select, { childList: true, subtree: true });
+  setTimeout(() => syncInlineOptionWheel(select), 0);
+}
+
+function prepareInlineControls(root = document) {
+  const numbers = [...(root.matches?.('input[type="number"]') ? [root] : []), ...(root.querySelectorAll?.('input[type="number"]') || [])];
+  const selects = [...(root.matches?.('select') ? [root] : []), ...(root.querySelectorAll?.('select') || [])];
+  numbers.forEach(enhanceNumberInput);
+  selects.forEach(enhanceSelect);
+}
+
+function syncAllInlineControls(root = document) {
+  root.querySelectorAll?.('input[type="number"]').forEach(updateInlineNumber);
+  root.querySelectorAll?.('select').forEach(select => syncInlineOptionWheel(select, !!select.closest('.flowStep.active')));
+}
+
+function flowStepIsAvailable(step) {
+  return [...step.children].some(child => !child.matches('.flowStepHead, .flowActions') && !child.classList.contains('hidden'));
+}
+
+function showFormStep(form, requestedIndex) {
+  const available = [...form.querySelectorAll(':scope > .flowStep')].filter(flowStepIsAvailable);
+  if (!available.length) return;
+  const index = Math.max(0, Math.min(available.length - 1, requestedIndex));
+  form.dataset.flowIndex = String(index);
+  form.querySelectorAll(':scope > .flowStep').forEach(step => step.classList.toggle('active', step === available[index]));
+  available.forEach((step, stepIndex) => {
+    const head = step.querySelector(':scope > .flowStepHead');
+    const title = step.dataset.flowTitle || step.querySelector('label')?.childNodes[0]?.textContent?.trim() || 'Next detail';
+    if (head) head.innerHTML = `<span>Step ${stepIndex + 1} of ${available.length}</span><b>${esc(title)}</b><i style="--flow-progress:${(stepIndex + 1) / available.length * 100}%"></i>`;
   });
-  root.querySelectorAll?.('select').forEach(select => {
-    if (select.dataset.wheelReady) return;
-    select.dataset.wheelReady = 'true';
-    select.classList.add('optionWheelInput');
-    select.setAttribute('aria-haspopup', 'dialog');
+  requestAnimationFrame(() => {
+    syncAllInlineControls(available[index]);
+    available[index].querySelector('input:not([type="hidden"]), textarea, .inlineOptionRail')?.focus({ preventScroll: true });
   });
+}
+
+function validateFlowStep(step) {
+  const controls = [...step.querySelectorAll('input, select, textarea')].filter(control => !control.disabled && !control.closest('.hidden'));
+  for (const control of controls) {
+    if (control.checkValidity()) continue;
+    control.reportValidity();
+    return false;
+  }
+  return true;
+}
+
+function setupFormFlow(form) {
+  if (form.dataset.flowReady) return;
+  form.dataset.flowReady = 'true';
+  let steps = [...form.querySelectorAll(':scope > .flowStep')];
+  const submit = [...form.children].find(child => child.matches?.('button[type="submit"]'));
+  if (!steps.length) {
+    const children = [...form.children].filter(child => child !== submit);
+    let pendingNotes = [];
+    children.forEach(child => {
+      if (child.matches('.friendlyNote, .warningNote') && !child.querySelector('input,select,textarea')) { pendingNotes.push(child); return; }
+      const step = document.createElement('section');
+      step.className = 'flowStep';
+      pendingNotes.forEach(note => step.appendChild(note));
+      pendingNotes = [];
+      step.appendChild(child);
+      form.appendChild(step);
+      steps.push(step);
+    });
+    if (pendingNotes.length && steps.length) pendingNotes.forEach(note => steps[0].prepend(note));
+    if (submit && steps.length) steps.at(-1).appendChild(submit);
+  }
+  if (steps.length < 2) { steps[0]?.classList.add('active'); return; }
+  steps.forEach((step, index) => {
+    step.insertAdjacentHTML('afterbegin', '<div class="flowStepHead"></div>');
+    const actions = document.createElement('div');
+    actions.className = 'flowActions';
+    if (index > 0) actions.innerHTML += '<button type="button" class="flowBack">Back</button>';
+    if (index < steps.length - 1) actions.innerHTML += '<button type="button" class="primary flowNext">Continue</button>';
+    step.appendChild(actions);
+    actions.querySelector('.flowBack')?.addEventListener('click', () => showFormStep(form, Number(form.dataset.flowIndex || 0) - 1));
+    actions.querySelector('.flowNext')?.addEventListener('click', () => {
+      if (validateFlowStep(step)) showFormStep(form, Number(form.dataset.flowIndex || 0) + 1);
+    });
+  });
+  form.addEventListener('submit', event => {
+    const available = [...form.querySelectorAll(':scope > .flowStep')].filter(flowStepIsAvailable);
+    const index = Number(form.dataset.flowIndex || 0);
+    if (index >= available.length - 1) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (validateFlowStep(available[index])) showFormStep(form, index + 1);
+  }, true);
+  showFormStep(form, 0);
 }
 
 async function runOperation(operation) {
@@ -1705,6 +1711,7 @@ function render() {
   $('rateAED').value = state.settings.rates.AED;
   $('rateMVR').value = state.settings.rates.MVR;
   $('rateINR').value = state.settings.rates.INR;
+  queueMicrotask(() => syncAllInlineControls());
 }
 
 function accountSelectOptions(selected = '', includeEmpty = true) {
@@ -1758,18 +1765,33 @@ function openQuickTransaction(type, options = {}) {
     : (EXPENSE_CATEGORIES.some(([category]) => category === state.settings.lastExpenseCategory) ? state.settings.lastExpenseCategory : 'Food');
   const categories = isIncome ? INCOME_CATEGORIES.map(category => [category, INCOME_CATEGORY_ICONS[category]]) : EXPENSE_CATEGORIES;
   const suggestedNote = options.note || quickNote(rememberedCategory);
-  openModal(isIncome ? 'Add income' : 'Add spend', `<form id="quickTransactionForm" class="form quickEntryForm">
-    <label class="amountField">Amount<span id="quickAmountPrefix" class="amountPrefix">${esc(accounts.find(a => a.id === rememberedAccount)?.currency || options.currency || state.settings.lastCurrency)}</span><input id="quickAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(options.amount || '')}" required></label>
-    <div class="fieldRow quickChoiceRow"><label>${isIncome ? 'Income type' : 'What was it for?'}<select id="quickCategory">${categories.map(([category, icon]) => `<option value="${esc(category)}"${category === rememberedCategory ? ' selected' : ''}>${icon} ${esc(category)}</option>`).join('')}</select></label><label>${isIncome ? 'Received in' : 'Paid from'}<select id="quickAccount">${accounts.length ? accounts.map(account => `<option value="${account.id}"${account.id === rememberedAccount ? ' selected' : ''}>${esc(account.name)} · ${account.currency}</option>`).join('') : '<option value="">Not linked</option>'}</select></label></div>
-    <div class="fieldRow"><label>${isIncome ? 'Received by' : 'Who paid?'}<select id="quickPaidBy">${peopleOptions(options.paidBy || defaultPerson())}</select></label><label>Date<input id="quickDate" type="date" value="${options.date || today()}" required></label></div>
-    <label>Short note<input id="quickNote" maxlength="160" value="${esc(suggestedNote)}" aria-describedby="quickNoteHint"><small id="quickNoteHint" class="fieldHint">Suggested from the selected category—edit or clear it.</small></label>
-    ${accounts.length ? '' : '<div class="friendlyNote">You can still save this. Add the bank account later to make its running balance automatic.</div>'}
-    <button class="primary quickSave" type="submit">${isIncome ? 'Save income' : 'Save spend'}</button>
+  const startingCurrency = accounts.find(a => a.id === rememberedAccount)?.currency || options.currency || state.settings.lastCurrency;
+  openModal(isIncome ? 'Add income' : 'Add spend', `<form id="quickTransactionForm" class="form quickEntryForm" data-flow-manual="true">
+    <section class="flowStep" data-flow-title="Date, amount and currency">
+      <label>Date<input id="quickDate" type="date" value="${options.date || today()}" required></label>
+      <label class="amountField">Amount<span id="quickAmountPrefix" class="amountPrefix">${esc(startingCurrency)}</span><input id="quickAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(options.amount || '')}" required></label>
+      <label>Currency<select id="quickCurrency">${currencyOptions(startingCurrency)}</select></label>
+    </section>
+    <section class="flowStep" data-flow-title="${isIncome ? 'Received in' : 'Paid from'}">
+      <label>${isIncome ? 'Which account received it?' : 'Which account paid?'}<select id="quickAccount">${accounts.length ? accounts.map(account => `<option value="${account.id}"${account.id === rememberedAccount ? ' selected' : ''}>${esc(account.name)} · ${account.currency}</option>`).join('') : '<option value="">Not linked</option>'}</select></label>
+      ${accounts.length ? '' : '<div class="friendlyNote">You can save now and add the bank account later.</div>'}
+    </section>
+    <section class="flowStep" data-flow-title="${isIncome ? 'Income type' : 'Reason'}">
+      <label>${isIncome ? 'What type of income?' : 'What was it for?'}<select id="quickCategory">${categories.map(([category, icon]) => `<option value="${esc(category)}"${category === rememberedCategory ? ' selected' : ''}>${icon} ${esc(category)}</option>`).join('')}</select></label>
+    </section>
+    <section class="flowStep" data-flow-title="${isIncome ? 'Received by' : 'Who paid'}">
+      <label>${isIncome ? 'Who received it?' : 'Who paid?'}<select id="quickPaidBy">${peopleOptions(options.paidBy || defaultPerson())}</select></label>
+    </section>
+    <section class="flowStep" data-flow-title="Note and save">
+      <label>Short note<input id="quickNote" maxlength="160" value="${esc(suggestedNote)}" aria-describedby="quickNoteHint"><small id="quickNoteHint" class="fieldHint">Suggested from the reason—edit it or clear it.</small></label>
+      <button class="primary quickSave" type="submit">${isIncome ? 'Save income' : 'Save spend'}</button>
+    </section>
   </form>`);
   let category = rememberedCategory;
   let accountId = rememberedAccount;
   let autoNote = suggestedNote;
   $('quickPaidBy').value = options.paidBy || defaultPerson();
+  $('quickCurrency').onchange = () => { $('quickAmountPrefix').textContent = $('quickCurrency').value; };
   $('quickCategory').onchange = () => {
     category = $('quickCategory').value;
     const note = $('quickNote');
@@ -1780,7 +1802,12 @@ function openQuickTransaction(type, options = {}) {
   };
   $('quickAccount').onchange = () => {
     accountId = $('quickAccount').value;
-    $('quickAmountPrefix').textContent = accounts.find(a => a.id === accountId)?.currency || options.currency || state.settings.lastCurrency;
+    const accountCurrency = accounts.find(a => a.id === accountId)?.currency;
+    if (accountCurrency) {
+      $('quickCurrency').value = accountCurrency;
+      syncInlineOptionWheel($('quickCurrency'), false);
+    }
+    $('quickAmountPrefix').textContent = accountCurrency || $('quickCurrency').value;
   };
   $('quickTransactionForm').onsubmit = async event => {
     event.preventDefault();
@@ -1789,7 +1816,7 @@ function openQuickTransaction(type, options = {}) {
     if (account && date < account.openingDate) { toast(`Choose ${account.openingDate} or later for this account.`); return; }
     const transaction = {
       id: crypto.randomUUID(), type, amount: +$('quickAmount').value,
-      currency: account?.currency || options.currency || state.settings.lastCurrency, category, paidBy: $('quickPaidBy').value,
+      currency: account?.currency || $('quickCurrency').value, category, paidBy: $('quickPaidBy').value,
       accountId: account?.id || '', account: account?.name || '', toAccountId: '', toAmount: null,
       debtId: '', debtPrincipal: null, debtInterest: 0, recurringItemId: options.recurringItemId || '', recurringMonth: options.recurringMonth || '',
       date, note: $('quickNote').value.trim(), createdAt: new Date().toISOString()
@@ -1814,14 +1841,16 @@ function openTransaction(type, id = null, options = {}) {
   const categories = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES.map(([category]) => category);
   const selectedCategory = existing?.category || options.category || categories[0];
   const selectedAccount = existing?.accountId || options.accountId || '';
-  openModal(existing ? `Edit ${type}` : type === 'income' ? 'Add income' : 'Add expense', `<form class="form" id="transactionForm">
-    <label>Amount<input id="transactionAmount" type="number" step="0.01" min="0.01" required value="${existing?.amount ?? options.amount ?? ''}"></label>
-    <div class="fieldRow"><label>Currency<select id="transactionCurrency">${currencyOptions(existing?.currency || options.currency || state.settings.lastCurrency)}</select></label><label>${type === 'income' ? 'Income type' : 'Category'}<select id="transactionCategory">${[...new Set([selectedCategory, ...categories])].map(category => `<option>${esc(category)}</option>`).join('')}</select></label></div>
-    <label>Account<select id="transactionAccount">${accountSelectOptions(selectedAccount)}</select></label>
-    <div class="fieldRow"><label>${type === 'income' ? 'Received by' : 'Paid by'}<select id="transactionPaidBy">${peopleOptions(existing?.paidBy || options.paidBy || defaultPerson())}</select></label><label>Date<input id="transactionDate" type="date" required value="${existing?.date || options.date || today()}"></label></div>
-    <label>Note<input id="transactionNote" maxlength="200" value="${esc(existing?.note || options.note || '')}" placeholder="Optional"></label>
-    ${activeAccounts().length ? '' : '<div class="friendlyNote">Add a bank or cash account on Money to make its balance update automatically.</div>'}
-    <button class="primary" type="submit">Save ${type}</button>
+  openModal(existing ? `Edit ${type}` : type === 'income' ? 'Add income' : 'Add expense', `<form class="form" id="transactionForm" data-flow-manual="true">
+    <section class="flowStep" data-flow-title="Date, amount and currency">
+      <label>Date<input id="transactionDate" type="date" required value="${existing?.date || options.date || today()}"></label>
+      <label>Amount<input id="transactionAmount" type="number" step="0.01" min="0.01" required value="${existing?.amount ?? options.amount ?? ''}"></label>
+      <label>Currency<select id="transactionCurrency">${currencyOptions(existing?.currency || options.currency || state.settings.lastCurrency)}</select></label>
+    </section>
+    <section class="flowStep" data-flow-title="${type === 'income' ? 'Received in' : 'Paid from'}"><label>Account<select id="transactionAccount">${accountSelectOptions(selectedAccount)}</select></label>${activeAccounts().length ? '' : '<div class="friendlyNote">Add a bank or cash account later to update its balance automatically.</div>'}</section>
+    <section class="flowStep" data-flow-title="${type === 'income' ? 'Income type' : 'Reason'}"><label>${type === 'income' ? 'Income type' : 'What was it for?'}<select id="transactionCategory">${[...new Set([selectedCategory, ...categories])].map(category => `<option>${esc(category)}</option>`).join('')}</select></label></section>
+    <section class="flowStep" data-flow-title="${type === 'income' ? 'Received by' : 'Who paid'}"><label>${type === 'income' ? 'Received by' : 'Paid by'}<select id="transactionPaidBy">${peopleOptions(existing?.paidBy || options.paidBy || defaultPerson())}</select></label></section>
+    <section class="flowStep" data-flow-title="Note and save"><label>Note<input id="transactionNote" maxlength="200" value="${esc(existing?.note || options.note || '')}" placeholder="Optional"></label><button class="primary" type="submit">Save ${type}</button></section>
   </form>`);
   $('transactionCategory').value = selectedCategory;
   $('transactionPaidBy').value = existing?.paidBy || options.paidBy || defaultPerson();
@@ -1830,6 +1859,7 @@ function openTransaction(type, id = null, options = {}) {
     const account = state.accounts.find(a => a.id === $('transactionAccount').value);
     $('transactionCurrency').disabled = !!account;
     if (account) $('transactionCurrency').value = account.currency;
+    syncInlineOptionWheel($('transactionCurrency'), false);
   };
   $('transactionAccount').onchange = syncCurrency;
   syncCurrency();
@@ -2681,28 +2711,15 @@ async function signOut() {
 }
 
 $('modal').addEventListener('click', event => { if (event.target === $('modal')) closeModal(); });
-document.addEventListener('pointerdown', event => {
-  const control = event.target.closest?.('input[type="number"], select');
-  if (!control || control.disabled || control.closest('#numberWheel')) return;
-  event.preventDefault();
-  if (control.matches('select')) openOptionWheel(control);
-  else openNumberWheel(control);
-}, true);
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && numberWheelState) { closeNumberWheel(false); return; }
   if (event.key === 'Escape' && !$('modal').classList.contains('hidden')) { closeModal(); return; }
-  if (!['Enter', ' '].includes(event.key)) return;
-  const control = event.target.closest?.('input[type="number"], select');
-  if (!control || control.disabled || control.closest('#numberWheel')) return;
-  event.preventDefault();
-  if (control.matches('select')) openOptionWheel(control);
-  else openNumberWheel(control);
 });
 const wheelObserver = new MutationObserver(mutations => mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
-  if (node.nodeType === Node.ELEMENT_NODE) prepareWheelInputs(node);
+  if (node.nodeType === Node.ELEMENT_NODE) prepareInlineControls(node);
 })));
 wheelObserver.observe(document.body, { childList: true, subtree: true });
-prepareWheelInputs();
+prepareInlineControls();
+setupFormFlow($('settingsFlow'));
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
