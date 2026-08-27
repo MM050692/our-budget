@@ -52,6 +52,7 @@ let calendarMonth = '';
 let toastTimer = null;
 let pendingQuickAction = new URLSearchParams(location.search).get('quick') || '';
 let pendingRestoreData = null;
+let numberWheelState = null;
 
 const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
@@ -210,14 +211,244 @@ function haptic() { if (navigator.vibrate) navigator.vibrate(18); }
 function openModal(title, html) {
   $('modalTitle').textContent = title;
   $('modalContent').innerHTML = html;
+  prepareWheelInputs($('modalContent'));
   $('modal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   setTimeout(() => $('modalContent').querySelector('input:not([type="hidden"]), select, button')?.focus(), 80);
 }
 function closeModal() {
+  closeNumberWheel(false);
   $('modal').classList.add('hidden');
   $('modalContent').innerHTML = '';
   document.body.style.overflow = '';
+}
+
+function numberPrecision(input) {
+  const step = input.getAttribute('step');
+  if (!step || step === 'any') return 0;
+  const match = String(step).match(/\.(\d+)/);
+  return Math.min(8, match ? match[1].length : 0);
+}
+
+function numberWheelLabel(input) {
+  if (input.getAttribute('aria-label')) return input.getAttribute('aria-label');
+  const label = input.closest('label');
+  if (!label) return 'Choose number';
+  return [...label.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent.trim()).filter(Boolean).join(' ') || 'Choose number';
+}
+
+function wheelDigitsHtml(value, integerDigits, precision) {
+  const fixed = Math.abs(value).toFixed(precision).split('.');
+  const whole = fixed[0].padStart(integerDigits, '0').slice(-integerDigits);
+  const digits = [...whole, ...(fixed[1] || '')];
+  return digits.map((digit, position) => {
+    const decimalClass = precision && position === integerDigits ? ' afterDecimal' : '';
+    const items = Array.from({ length: 50 }, (_, index) => `<button type="button" class="wheelDigit" data-wheel-index="${index}" tabindex="-1">${index % 10}</button>`).join('');
+    return `${decimalClass ? '<span class="wheelDecimal" aria-hidden="true">.</span>' : ''}<div class="digitWheel${decimalClass}" data-position="${position}" data-digit="${digit}" tabindex="0" role="spinbutton" aria-label="Digit ${position + 1}" aria-valuemin="0" aria-valuemax="9" aria-valuenow="${digit}">${items}</div>`;
+  }).join('');
+}
+
+function currentWheelValue() {
+  if (!numberWheelState) return 0;
+  const digits = [...document.querySelectorAll('#numberWheel .digitWheel')].map(wheel => wheel.dataset.digit || '0');
+  const { integerDigits, precision, negative } = numberWheelState;
+  const whole = digits.slice(0, integerDigits).join('') || '0';
+  const decimal = precision ? `.${digits.slice(integerDigits).join('')}` : '';
+  return Number(`${negative ? '-' : ''}${whole}${decimal}`) || 0;
+}
+
+function updateWheelReadout() {
+  const readout = $('numberWheelReadout');
+  if (!readout || !numberWheelState) return;
+  const value = currentWheelValue();
+  readout.textContent = new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: numberWheelState.precision,
+    maximumFractionDigits: numberWheelState.precision
+  }).format(value);
+}
+
+function closeNumberWheel(commit = false, clear = false) {
+  if (!numberWheelState) return;
+  if (numberWheelState.type === 'option') {
+    const { select, optionIndex, previousOverflow } = numberWheelState;
+    if (commit) {
+      select.selectedIndex = optionIndex;
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    document.getElementById('numberWheel')?.remove();
+    numberWheelState = null;
+    document.body.style.overflow = previousOverflow;
+    return;
+  }
+  const { input, min, max, step, precision, previousOverflow } = numberWheelState;
+  if (commit) {
+    if (clear && !input.required) input.value = '';
+    else {
+      let value = currentWheelValue();
+      if (Number.isFinite(step) && step > 0) {
+        const anchor = Number.isFinite(min) ? min : 0;
+        value = anchor + Math.round((value - anchor) / step) * step;
+      }
+      if (Number.isFinite(min)) value = Math.max(min, value);
+      if (Number.isFinite(max)) value = Math.min(max, value);
+      input.value = precision ? value.toFixed(precision) : String(Math.round(value));
+    }
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  document.getElementById('numberWheel')?.remove();
+  numberWheelState = null;
+  document.body.style.overflow = previousOverflow;
+}
+
+function openNumberWheel(input) {
+  if (!input || input.disabled) return;
+  closeNumberWheel(false);
+  const precision = numberPrecision(input);
+  const raw = input.value === '' ? Number(input.min || 0) : Number(input.value);
+  const initial = Number.isFinite(raw) ? raw : 0;
+  const min = input.hasAttribute('min') ? Number(input.min) : -Infinity;
+  const max = input.hasAttribute('max') ? Number(input.max) : Infinity;
+  const step = input.hasAttribute('step') && input.step !== 'any' ? Number(input.step) : 1;
+  const maxDigits = Number.isFinite(max) ? String(Math.floor(Math.abs(max))).length : 0;
+  const valueDigits = String(Math.floor(Math.abs(initial))).length;
+  const integerDigits = Math.max(1, Math.min(8, maxDigits || (precision > 6 ? Math.max(3, valueDigits + 1) : precision > 3 ? Math.max(4, valueDigits + 1) : Math.max(7, valueDigits + 1))));
+  const negativeAllowed = /^(accountOpening|actualBalance|checkupBalance\d+)$/.test(input.id);
+  const previousOverflow = document.body.style.overflow;
+  numberWheelState = { type: 'number', input, precision, integerDigits, min, max, step, negative: initial < 0, negativeAllowed, previousOverflow };
+  document.body.style.overflow = 'hidden';
+  const picker = document.createElement('div');
+  picker.id = 'numberWheel';
+  picker.className = 'numberWheelLayer';
+  picker.innerHTML = `<section class="numberWheelCard" role="dialog" aria-modal="true" aria-labelledby="numberWheelTitle">
+    <header><button type="button" class="wheelTextButton" data-wheel-action="cancel">Cancel</button><div><small>SCROLL UP OR DOWN</small><b id="numberWheelTitle">${esc(numberWheelLabel(input))}</b></div><button type="button" class="wheelTextButton done" data-wheel-action="done">Done</button></header>
+    <div class="wheelReadout"><button type="button" id="wheelSign" class="wheelSign${negativeAllowed ? '' : ' hidden'}" aria-label="Change positive or negative">${initial < 0 ? '−' : '+'}</button><span id="numberWheelReadout"></span></div>
+    <div class="digitRack" style="--wheel-count:${integerDigits + precision + (precision ? 1 : 0)}">${wheelDigitsHtml(initial, integerDigits, precision)}<i class="wheelSelection" aria-hidden="true"></i></div>
+    <div class="wheelFooter"><span>Move each number vertically like a slot machine.</span>${input.required ? '' : '<button type="button" data-wheel-action="clear">Clear value</button>'}</div>
+  </section>`;
+  document.body.appendChild(picker);
+  const wheels = [...picker.querySelectorAll('.digitWheel')];
+  wheels.forEach(wheel => {
+    const startIndex = 20 + Number(wheel.dataset.digit);
+    wheel.scrollTop = startIndex * 44;
+    let settleTimer;
+    wheel.addEventListener('scroll', () => {
+      const rawIndex = Math.round(wheel.scrollTop / 44);
+      const digit = ((rawIndex % 10) + 10) % 10;
+      if (wheel.dataset.digit !== String(digit)) {
+        wheel.dataset.digit = String(digit);
+        wheel.setAttribute('aria-valuenow', String(digit));
+        updateWheelReadout();
+        if (navigator.vibrate) navigator.vibrate(4);
+      }
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        wheel.scrollTo({ top: (20 + digit) * 44, behavior: 'auto' });
+      }, 140);
+    }, { passive: true });
+    wheel.addEventListener('keydown', event => {
+      if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      event.preventDefault();
+      wheel.scrollBy({ top: event.key === 'ArrowDown' ? 44 : -44, behavior: 'smooth' });
+    });
+    wheel.addEventListener('click', event => {
+      const item = event.target.closest('.wheelDigit');
+      if (item) wheel.scrollTo({ top: Number(item.dataset.wheelIndex) * 44, behavior: 'smooth' });
+    });
+  });
+  picker.querySelector('[data-wheel-action="cancel"]').onclick = () => closeNumberWheel(false);
+  picker.querySelector('[data-wheel-action="done"]').onclick = () => closeNumberWheel(true);
+  picker.querySelector('[data-wheel-action="clear"]')?.addEventListener('click', () => closeNumberWheel(true, true));
+  $('wheelSign').onclick = () => {
+    numberWheelState.negative = !numberWheelState.negative;
+    $('wheelSign').textContent = numberWheelState.negative ? '−' : '+';
+    updateWheelReadout();
+  };
+  picker.addEventListener('click', event => { if (event.target === picker) closeNumberWheel(false); });
+  updateWheelReadout();
+  wheels.at(-1)?.focus({ preventScroll: true });
+}
+
+function openOptionWheel(select) {
+  if (!select || select.disabled) return;
+  closeNumberWheel(false);
+  const options = [...select.options];
+  if (!options.length) return;
+  const selectedIndex = Math.max(0, select.selectedIndex);
+  const previousOverflow = document.body.style.overflow;
+  numberWheelState = { type: 'option', select, optionIndex: selectedIndex, previousOverflow };
+  document.body.style.overflow = 'hidden';
+  const picker = document.createElement('div');
+  picker.id = 'numberWheel';
+  picker.className = 'numberWheelLayer';
+  picker.innerHTML = `<section class="numberWheelCard optionWheelCard" role="dialog" aria-modal="true" aria-labelledby="numberWheelTitle">
+    <header><button type="button" class="wheelTextButton" data-wheel-action="cancel">Cancel</button><div><small>SCROLL UP OR DOWN</small><b id="numberWheelTitle">${esc(numberWheelLabel(select))}</b></div><button type="button" class="wheelTextButton done" data-wheel-action="done">Done</button></header>
+    <div class="optionWheelList" tabindex="0" role="listbox">${options.map((option, index) => `<button type="button" class="optionWheelItem${index === selectedIndex ? ' active' : ''}" data-option-index="${index}" role="option" aria-selected="${index === selectedIndex}">${esc(option.textContent)}</button>`).join('')}</div>
+    <i class="optionWheelSelection" aria-hidden="true"></i>
+    <div class="wheelFooter"><span>Move the list vertically and stop on your choice.</span></div>
+  </section>`;
+  document.body.appendChild(picker);
+  const list = picker.querySelector('.optionWheelList');
+  const setOption = index => {
+    const bounded = Math.max(0, Math.min(options.length - 1, index));
+    if (numberWheelState?.type !== 'option') return;
+    numberWheelState.optionIndex = bounded;
+    list.querySelectorAll('.optionWheelItem').forEach((item, itemIndex) => {
+      item.classList.toggle('active', itemIndex === bounded);
+      item.setAttribute('aria-selected', itemIndex === bounded ? 'true' : 'false');
+    });
+  };
+  list.scrollTop = selectedIndex * 48;
+  let settleTimer;
+  list.addEventListener('scroll', () => {
+    const index = Math.round(list.scrollTop / 48);
+    if (index !== numberWheelState?.optionIndex) {
+      setOption(index);
+      if (navigator.vibrate) navigator.vibrate(4);
+    }
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      if (numberWheelState?.type === 'option') list.scrollTo({ top: numberWheelState.optionIndex * 48, behavior: 'smooth' });
+    }, 100);
+  }, { passive: true });
+  list.addEventListener('click', event => {
+    const item = event.target.closest('.optionWheelItem');
+    if (!item) return;
+    const index = Number(item.dataset.optionIndex);
+    setOption(index);
+    list.scrollTo({ top: index * 48, behavior: 'smooth' });
+  });
+  list.addEventListener('keydown', event => {
+    if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const next = numberWheelState.optionIndex + (event.key === 'ArrowDown' ? 1 : -1);
+    setOption(next);
+    list.scrollTo({ top: numberWheelState.optionIndex * 48, behavior: 'smooth' });
+  });
+  picker.querySelector('[data-wheel-action="cancel"]').onclick = () => closeNumberWheel(false);
+  picker.querySelector('[data-wheel-action="done"]').onclick = () => closeNumberWheel(true);
+  picker.addEventListener('click', event => { if (event.target === picker) closeNumberWheel(false); });
+  list.focus({ preventScroll: true });
+}
+
+function prepareWheelInputs(root = document) {
+  if (root.matches?.('input[type="number"]')) root = root.parentElement || document;
+  if (root.matches?.('select')) root = root.parentElement || document;
+  root.querySelectorAll?.('input[type="number"]').forEach(input => {
+    if (input.dataset.wheelReady) return;
+    input.dataset.wheelReady = 'true';
+    input.readOnly = true;
+    input.inputMode = 'none';
+    input.classList.add('numberWheelInput');
+    input.setAttribute('aria-haspopup', 'dialog');
+  });
+  root.querySelectorAll?.('select').forEach(select => {
+    if (select.dataset.wheelReady) return;
+    select.dataset.wheelReady = 'true';
+    select.classList.add('optionWheelInput');
+    select.setAttribute('aria-haspopup', 'dialog');
+  });
 }
 
 async function runOperation(operation) {
@@ -1529,8 +1760,7 @@ function openQuickTransaction(type, options = {}) {
   const suggestedNote = options.note || quickNote(rememberedCategory);
   openModal(isIncome ? 'Add income' : 'Add spend', `<form id="quickTransactionForm" class="form quickEntryForm">
     <label class="amountField">Amount<span id="quickAmountPrefix" class="amountPrefix">${esc(accounts.find(a => a.id === rememberedAccount)?.currency || options.currency || state.settings.lastCurrency)}</span><input id="quickAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(options.amount || '')}" required></label>
-    <div class="quickOptionGroup"><div class="chipHeading"><span>${isIncome ? 'Income type' : 'What was it for?'}</span><small>Swipe for all →</small></div><div id="quickCategoryChips" class="chips optionRail" role="listbox" aria-label="${isIncome ? 'Income type' : 'Expense category'}">${categories.map(([category, icon]) => `<button type="button" role="option" aria-selected="${category === rememberedCategory}" data-value="${esc(category)}" class="${category === rememberedCategory ? 'active' : ''}">${icon} ${esc(category)}</button>`).join('')}</div></div>
-    <div class="quickOptionGroup"><div class="chipHeading"><span>${isIncome ? 'Received in' : 'Paid from'}</span><small>Swipe for all →</small></div><div id="quickAccountChips" class="chips accounts optionRail" role="listbox" aria-label="Account">${accounts.length ? accounts.map(account => `<button type="button" role="option" aria-selected="${account.id === rememberedAccount}" data-value="${account.id}" class="${account.id === rememberedAccount ? 'active' : ''}">${esc(account.name)} · ${account.currency}</button>`).join('') : '<button type="button" role="option" aria-selected="true" data-value="" class="active">Not linked</button>'}</div></div>
+    <div class="fieldRow quickChoiceRow"><label>${isIncome ? 'Income type' : 'What was it for?'}<select id="quickCategory">${categories.map(([category, icon]) => `<option value="${esc(category)}"${category === rememberedCategory ? ' selected' : ''}>${icon} ${esc(category)}</option>`).join('')}</select></label><label>${isIncome ? 'Received in' : 'Paid from'}<select id="quickAccount">${accounts.length ? accounts.map(account => `<option value="${account.id}"${account.id === rememberedAccount ? ' selected' : ''}>${esc(account.name)} · ${account.currency}</option>`).join('') : '<option value="">Not linked</option>'}</select></label></div>
     <div class="fieldRow"><label>${isIncome ? 'Received by' : 'Who paid?'}<select id="quickPaidBy">${peopleOptions(options.paidBy || defaultPerson())}</select></label><label>Date<input id="quickDate" type="date" value="${options.date || today()}" required></label></div>
     <label>Short note<input id="quickNote" maxlength="160" value="${esc(suggestedNote)}" aria-describedby="quickNoteHint"><small id="quickNoteHint" class="fieldHint">Suggested from the selected category—edit or clear it.</small></label>
     ${accounts.length ? '' : '<div class="friendlyNote">You can still save this. Add the bank account later to make its running balance automatic.</div>'}
@@ -1540,29 +1770,18 @@ function openQuickTransaction(type, options = {}) {
   let accountId = rememberedAccount;
   let autoNote = suggestedNote;
   $('quickPaidBy').value = options.paidBy || defaultPerson();
-  const revealActive = rail => requestAnimationFrame(() => rail.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'center' }));
-  revealActive($('quickCategoryChips'));
-  revealActive($('quickAccountChips'));
-  $('quickCategoryChips').querySelectorAll('button').forEach(button => button.onclick = () => {
-    category = button.dataset.value;
-    $('quickCategoryChips').querySelectorAll('button').forEach(item => {
-      item.classList.toggle('active', item === button);
-      item.setAttribute('aria-selected', item === button ? 'true' : 'false');
-    });
+  $('quickCategory').onchange = () => {
+    category = $('quickCategory').value;
     const note = $('quickNote');
     if (!note.value.trim() || note.value === autoNote) {
       autoNote = quickNote(category);
       note.value = autoNote;
     }
-  });
-  $('quickAccountChips').querySelectorAll('button').forEach(button => button.onclick = () => {
-    accountId = button.dataset.value;
-    $('quickAccountChips').querySelectorAll('button').forEach(item => {
-      item.classList.toggle('active', item === button);
-      item.setAttribute('aria-selected', item === button ? 'true' : 'false');
-    });
+  };
+  $('quickAccount').onchange = () => {
+    accountId = $('quickAccount').value;
     $('quickAmountPrefix').textContent = accounts.find(a => a.id === accountId)?.currency || options.currency || state.settings.lastCurrency;
-  });
+  };
   $('quickTransactionForm').onsubmit = async event => {
     event.preventDefault();
     const account = accounts.find(a => a.id === accountId);
@@ -2462,7 +2681,28 @@ async function signOut() {
 }
 
 $('modal').addEventListener('click', event => { if (event.target === $('modal')) closeModal(); });
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('modal').classList.contains('hidden')) closeModal(); });
+document.addEventListener('pointerdown', event => {
+  const control = event.target.closest?.('input[type="number"], select');
+  if (!control || control.disabled || control.closest('#numberWheel')) return;
+  event.preventDefault();
+  if (control.matches('select')) openOptionWheel(control);
+  else openNumberWheel(control);
+}, true);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && numberWheelState) { closeNumberWheel(false); return; }
+  if (event.key === 'Escape' && !$('modal').classList.contains('hidden')) { closeModal(); return; }
+  if (!['Enter', ' '].includes(event.key)) return;
+  const control = event.target.closest?.('input[type="number"], select');
+  if (!control || control.disabled || control.closest('#numberWheel')) return;
+  event.preventDefault();
+  if (control.matches('select')) openOptionWheel(control);
+  else openNumberWheel(control);
+});
+const wheelObserver = new MutationObserver(mutations => mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
+  if (node.nodeType === Node.ELEMENT_NODE) prepareWheelInputs(node);
+})));
+wheelObserver.observe(document.body, { childList: true, subtree: true });
+prepareWheelInputs();
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
