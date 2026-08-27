@@ -923,13 +923,27 @@ function openSafeBreakdown() {
   </div>`);
 }
 
+function setPriceRefreshUi(message, busy = false) {
+  ['priceStatus', 'moneyRateStatus'].forEach(id => {
+    const element = $(id);
+    if (element) element.textContent = message;
+  });
+  const button = $('moneyRefreshRates');
+  if (button) {
+    button.disabled = busy;
+    button.classList.toggle('isRefreshing', busy);
+  }
+  const label = $('moneyRefreshLabel');
+  if (label) label.textContent = busy ? 'Refreshing…' : 'Refresh rates';
+}
+
 async function refreshPrices(force = false) {
   if (priceRefresh) return priceRefresh;
   priceRefresh = (async () => {
     const defaults = ['XAU', 'XAG', 'BTC', 'ETH'];
     const owned = state.assets.filter(a => ['metal', 'crypto'].includes(a.type)).map(a => a.symbol).filter(Boolean);
     const symbols = [...new Set([...defaults, ...owned])];
-    if ($('priceStatus')) $('priceStatus').textContent = 'Refreshing free market prices…';
+    setPriceRefreshUi('Refreshing free market rates…', true);
     await Promise.allSettled(symbols.map(async symbol => {
       const cached = state.prices[symbol];
       if (!force && cached && Date.now() - new Date(cached.updated).getTime() < 15 * 60 * 1000) return;
@@ -946,15 +960,22 @@ async function refreshPrices(force = false) {
     cache();
     render();
     const newest = Object.values(state.prices).map(p => new Date(p.updated).getTime()).filter(Number.isFinite).sort((a, b) => b - a)[0];
-    if ($('priceStatus')) {
-      const stale = newest && Date.now() - newest > 60 * 60 * 1000;
-      $('priceStatus').textContent = newest
-        ? `${stale ? 'Last saved prices' : 'Prices updated'} ${new Date(newest).toLocaleString()}`
-        : 'Live prices unavailable; market assets are excluded for now.';
-    }
+    const stale = newest && Date.now() - newest > 60 * 60 * 1000;
+    setPriceRefreshUi(newest
+      ? `${stale ? 'Last saved rates' : 'Live rates updated'} · ${new Date(newest).toLocaleString()}`
+      : 'Live rates unavailable · using saved values');
   })();
   try { return await priceRefresh; }
-  finally { priceRefresh = null; }
+  finally {
+    priceRefresh = null;
+    const button = $('moneyRefreshRates');
+    if (button) {
+      button.disabled = false;
+      button.classList.remove('isRefreshing');
+    }
+    const label = $('moneyRefreshLabel');
+    if (label) label.textContent = 'Refresh rates';
+  }
 }
 
 async function ensureTodaySnapshot() {
