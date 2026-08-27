@@ -262,14 +262,14 @@
           <button class="secondary compact" onclick="showPage('today')">Done</button>
         </div>
 
-        <div class="card form">
+        <form id="settingsFlow" class="card form" onsubmit="event.preventDefault();saveSettings()">
           <label>Dashboard currency<select id="baseCurrency"><option>AED</option><option>MVR</option><option>INR</option><option>USD</option></select></label>
           <label>Salary day each month<input id="paydayDay" type="number" min="1" max="31" placeholder="Example: 25"></label>
           <label>1 USD = AED<input id="rateAED" type="number" step="0.0001"></label>
           <label>1 USD = MVR<input id="rateMVR" type="number" step="0.0001"></label>
           <label>1 USD = INR<input id="rateINR" type="number" step="0.0001"></label>
-          <button class="primary" onclick="saveSettings()">Save settings</button>
-        </div>
+          <button class="primary" type="submit">Save settings</button>
+        </form>
 
         <div class="settingsCard top">
           <div class="settingsIcon">⚡</div>
