@@ -6,6 +6,14 @@ const EXPENSE_CATEGORIES = [
   ['Entertainment', '🎬'], ['Travel', '✈️'], ['Other', '•••']
 ];
 const INCOME_CATEGORIES = ['Salary', 'Bonus', 'Side income', 'Gift', 'Refund', 'Other income'];
+const INCOME_CATEGORY_ICONS = { Salary: '💼', Bonus: '✨', 'Side income': '🛠️', Gift: '🎁', Refund: '↩️', 'Other income': '＋' };
+const QUICK_NOTE_SUGGESTIONS = {
+  Housing: 'Rent or home cost', Food: 'Groceries or meal', Transport: 'Taxi, bus or fuel', Bills: 'Monthly bill',
+  Health: 'Medicine or care', Debt: 'Debt payment', Savings: 'Money set aside', Shopping: 'Household shopping',
+  Entertainment: 'Movie or outing', Travel: 'Trip expense', Other: 'Other expense',
+  Salary: 'Monthly salary', Bonus: 'Work bonus', 'Side income': 'Extra income', Gift: 'Gift received',
+  Refund: 'Refund received', 'Other income': 'Other income'
+};
 const ESSENTIAL_CATEGORIES = ['Housing', 'Food', 'Transport', 'Bills', 'Health'];
 const WANT_CATEGORIES = ['Shopping', 'Entertainment', 'Travel', 'Other'];
 const METALS = [['XAU', 'Gold'], ['XAG', 'Silver'], ['XPT', 'Platinum'], ['XPD', 'Palladium']];
@@ -14,7 +22,7 @@ const DEFAULT = {
   version: VERSION,
   settings: {
     base: 'MVR', lastCurrency: 'MVR', rates: { USD: 1, AED: 3.6725, MVR: 15.42, INR: 88 },
-    paydayDay: null, funMode: true, debtStrategy: 'avalanche', lastExpenseCategory: 'Food', lastExpenseAccountId: ''
+    paydayDay: null, funMode: true, debtStrategy: 'avalanche', lastExpenseCategory: 'Food', lastExpenseAccountId: '', lastIncomeAccountId: ''
   },
   member: { displayName: '', role: '' }, people: [],
   transactions: [],
@@ -444,7 +452,7 @@ function handleQuickAction() {
   pendingQuickAction = '';
   history.replaceState({}, '', `${location.pathname}${location.hash || ''}`);
   if (action === 'expense') openQuickExpense();
-  else if (action === 'income') openTransaction('income', null, { category: 'Salary' });
+  else if (action === 'income') openQuickIncome({ category: 'Salary' });
   else if (action === 'transfer') openTransfer();
 }
 
@@ -660,7 +668,7 @@ function openSafeBreakdown() {
   const metrics = moneyMetrics();
   const safe = safeSpendPlan(metrics, allocationBuckets(metrics));
   if (!safe.ready) {
-    openModal('Safe-to-spend guide', `<div class="form"><div class="friendlyNote">Add this month’s salary and set the salary day first. The app then protects real cash, goals, upcoming bills, debt minimums and a three-day essentials buffer.</div><button class="primary" onclick="closeModal();openTransaction('income',null,{category:'Salary'})">Add salary</button></div>`);
+    openModal('Safe-to-spend guide', `<div class="form"><div class="friendlyNote">Add this month’s salary and set the salary day first. The app then protects real cash, goals, upcoming bills, debt minimums and a three-day essentials buffer.</div><button class="primary" onclick="closeModal();openQuickIncome({category:'Salary'})">Add salary</button></div>`);
     return;
   }
   openModal('Safe-to-spend guide', `<div class="form">
@@ -1058,7 +1066,7 @@ function openDebtSimulator() {
 }
 
 function paydayAssistantHtml(metrics, buckets) {
-  if (!(metrics.incomeUSD > 0)) return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>Add salary and the app will turn 40–30–20–10 into exact actions.</p></div><button class="primary compact" onclick="openTransaction('income',null,{category:'Salary'})">Add salary</button></div>`;
+  if (!(metrics.incomeUSD > 0)) return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>Add salary and the app will turn 40–30–20–10 into exact actions.</p></div><button class="primary compact" onclick="openQuickIncome({category:'Salary'})">Add salary</button></div>`;
   return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>One salary, four simple jobs. These targets update automatically.</p></div><button class="primary compact" onclick="openPaydayAssistant()">Use plan</button></div>
     <div class="paydayBuckets">${buckets.map(bucket => `<div><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b></div>`).join('')}</div>`;
 }
@@ -1066,7 +1074,7 @@ function paydayAssistantHtml(metrics, buckets) {
 function openPaydayAssistant() {
   const metrics = moneyMetrics();
   const buckets = allocationBuckets(metrics);
-  if (!(metrics.incomeUSD > 0)) { openTransaction('income', null, { category: 'Salary' }); return; }
+  if (!(metrics.incomeUSD > 0)) { openQuickIncome({ category: 'Salary' }); return; }
   const debtPlan = simulateDebtPlan(metrics.incomeUSD);
   const debtAction = debtPlan.firstAllocations.filter(item => item.amountUSD > .005).sort((a, b) => b.amountUSD - a.amountUSD)[0];
   const goal = activeGoals().find(item => item.saved < item.target);
@@ -1497,48 +1505,84 @@ function transactionRow(transaction) {
   };
 }
 
+function quickNote(category) {
+  return QUICK_NOTE_SUGGESTIONS[category] || '';
+}
+
 function openQuickExpense() {
+  openQuickTransaction('expense');
+}
+
+function openQuickIncome(options = {}) {
+  openQuickTransaction('income', options);
+}
+
+function openQuickTransaction(type, options = {}) {
   const accounts = activeAccounts();
-  const rememberedAccount = accounts.some(a => a.id === state.settings.lastExpenseAccountId) ? state.settings.lastExpenseAccountId : accounts[0]?.id || '';
-  const rememberedCategory = EXPENSE_CATEGORIES.some(([category]) => category === state.settings.lastExpenseCategory) ? state.settings.lastExpenseCategory : 'Food';
-  openModal('Add spend', `<form id="quickExpenseForm" class="form quickExpenseForm">
-    <label class="amountField">Amount<span id="quickAmountPrefix" class="amountPrefix">${esc(accounts.find(a => a.id === rememberedAccount)?.currency || state.settings.lastCurrency)}</span><input id="quickAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" required></label>
-    <div><div class="chipLabel">What was it for?</div><div id="quickCategoryChips" class="chips">${EXPENSE_CATEGORIES.map(([category, icon]) => `<button type="button" data-value="${esc(category)}" class="${category === rememberedCategory ? 'active' : ''}">${icon} ${esc(category)}</button>`).join('')}</div></div>
-    <div><div class="chipLabel">Paid from</div><div id="quickAccountChips" class="chips accounts">${accounts.length ? accounts.map(account => `<button type="button" data-value="${account.id}" class="${account.id === rememberedAccount ? 'active' : ''}">${esc(account.name)} · ${account.currency}</button>`).join('') : '<button type="button" data-value="" class="active">Not linked</button>'}</div></div>
-    <div class="fieldRow"><label>Who paid?<select id="quickPaidBy">${peopleOptions()}</select></label><label>Date<input id="quickDate" type="date" value="${today()}" required></label></div>
-    <label>Note (optional)<input id="quickNote" maxlength="160" placeholder="Coffee, groceries…"></label>
+  const isIncome = type === 'income';
+  const rememberedAccountId = isIncome ? state.settings.lastIncomeAccountId : state.settings.lastExpenseAccountId;
+  const rememberedAccount = accounts.some(a => a.id === rememberedAccountId) ? rememberedAccountId : accounts[0]?.id || '';
+  const rememberedCategory = isIncome
+    ? (INCOME_CATEGORIES.includes(options.category) ? options.category : 'Salary')
+    : (EXPENSE_CATEGORIES.some(([category]) => category === state.settings.lastExpenseCategory) ? state.settings.lastExpenseCategory : 'Food');
+  const categories = isIncome ? INCOME_CATEGORIES.map(category => [category, INCOME_CATEGORY_ICONS[category]]) : EXPENSE_CATEGORIES;
+  const suggestedNote = options.note || quickNote(rememberedCategory);
+  openModal(isIncome ? 'Add income' : 'Add spend', `<form id="quickTransactionForm" class="form quickEntryForm">
+    <label class="amountField">Amount<span id="quickAmountPrefix" class="amountPrefix">${esc(accounts.find(a => a.id === rememberedAccount)?.currency || options.currency || state.settings.lastCurrency)}</span><input id="quickAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(options.amount || '')}" required></label>
+    <div class="quickOptionGroup"><div class="chipHeading"><span>${isIncome ? 'Income type' : 'What was it for?'}</span><small>Swipe for all →</small></div><div id="quickCategoryChips" class="chips optionRail" role="listbox" aria-label="${isIncome ? 'Income type' : 'Expense category'}">${categories.map(([category, icon]) => `<button type="button" role="option" aria-selected="${category === rememberedCategory}" data-value="${esc(category)}" class="${category === rememberedCategory ? 'active' : ''}">${icon} ${esc(category)}</button>`).join('')}</div></div>
+    <div class="quickOptionGroup"><div class="chipHeading"><span>${isIncome ? 'Received in' : 'Paid from'}</span><small>Swipe for all →</small></div><div id="quickAccountChips" class="chips accounts optionRail" role="listbox" aria-label="Account">${accounts.length ? accounts.map(account => `<button type="button" role="option" aria-selected="${account.id === rememberedAccount}" data-value="${account.id}" class="${account.id === rememberedAccount ? 'active' : ''}">${esc(account.name)} · ${account.currency}</button>`).join('') : '<button type="button" role="option" aria-selected="true" data-value="" class="active">Not linked</button>'}</div></div>
+    <div class="fieldRow"><label>${isIncome ? 'Received by' : 'Who paid?'}<select id="quickPaidBy">${peopleOptions(options.paidBy || defaultPerson())}</select></label><label>Date<input id="quickDate" type="date" value="${options.date || today()}" required></label></div>
+    <label>Short note<input id="quickNote" maxlength="160" value="${esc(suggestedNote)}" aria-describedby="quickNoteHint"><small id="quickNoteHint" class="fieldHint">Suggested from the selected category—edit or clear it.</small></label>
     ${accounts.length ? '' : '<div class="friendlyNote">You can still save this. Add the bank account later to make its running balance automatic.</div>'}
-    <button class="primary saveSpend" type="submit">Save spend</button>
+    <button class="primary quickSave" type="submit">${isIncome ? 'Save income' : 'Save spend'}</button>
   </form>`);
   let category = rememberedCategory;
   let accountId = rememberedAccount;
-  $('quickPaidBy').value = defaultPerson();
+  let autoNote = suggestedNote;
+  $('quickPaidBy').value = options.paidBy || defaultPerson();
+  const revealActive = rail => requestAnimationFrame(() => rail.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'center' }));
+  revealActive($('quickCategoryChips'));
+  revealActive($('quickAccountChips'));
   $('quickCategoryChips').querySelectorAll('button').forEach(button => button.onclick = () => {
     category = button.dataset.value;
-    $('quickCategoryChips').querySelectorAll('button').forEach(item => item.classList.toggle('active', item === button));
+    $('quickCategoryChips').querySelectorAll('button').forEach(item => {
+      item.classList.toggle('active', item === button);
+      item.setAttribute('aria-selected', item === button ? 'true' : 'false');
+    });
+    const note = $('quickNote');
+    if (!note.value.trim() || note.value === autoNote) {
+      autoNote = quickNote(category);
+      note.value = autoNote;
+    }
   });
   $('quickAccountChips').querySelectorAll('button').forEach(button => button.onclick = () => {
     accountId = button.dataset.value;
-    $('quickAccountChips').querySelectorAll('button').forEach(item => item.classList.toggle('active', item === button));
-    $('quickAmountPrefix').textContent = accounts.find(a => a.id === accountId)?.currency || state.settings.lastCurrency;
+    $('quickAccountChips').querySelectorAll('button').forEach(item => {
+      item.classList.toggle('active', item === button);
+      item.setAttribute('aria-selected', item === button ? 'true' : 'false');
+    });
+    $('quickAmountPrefix').textContent = accounts.find(a => a.id === accountId)?.currency || options.currency || state.settings.lastCurrency;
   });
-  $('quickExpenseForm').onsubmit = async event => {
+  $('quickTransactionForm').onsubmit = async event => {
     event.preventDefault();
     const account = accounts.find(a => a.id === accountId);
     const date = $('quickDate').value;
     if (account && date < account.openingDate) { toast(`Choose ${account.openingDate} or later for this account.`); return; }
     const transaction = {
-      id: crypto.randomUUID(), type: 'expense', amount: +$('quickAmount').value,
-      currency: account?.currency || state.settings.lastCurrency, category, paidBy: $('quickPaidBy').value,
+      id: crypto.randomUUID(), type, amount: +$('quickAmount').value,
+      currency: account?.currency || options.currency || state.settings.lastCurrency, category, paidBy: $('quickPaidBy').value,
       accountId: account?.id || '', account: account?.name || '', toAccountId: '', toAmount: null,
-      debtId: '', debtPrincipal: null, debtInterest: 0, recurringItemId: '', recurringMonth: '',
+      debtId: '', debtPrincipal: null, debtInterest: 0, recurringItemId: options.recurringItemId || '', recurringMonth: options.recurringMonth || '',
       date, note: $('quickNote').value.trim(), createdAt: new Date().toISOString()
     };
-    state.settings.lastExpenseCategory = category;
-    state.settings.lastExpenseAccountId = transaction.accountId;
+    if (isIncome) state.settings.lastIncomeAccountId = transaction.accountId;
+    else {
+      state.settings.lastExpenseCategory = category;
+      state.settings.lastExpenseAccountId = transaction.accountId;
+    }
     rememberCurrency(transaction.currency);
     state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: 'Spend recorded ✓' });
+    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: isIncome ? 'Income added ✓' : 'Spend recorded ✓', celebrate: isIncome });
     ensureTodaySnapshot();
   };
 }
