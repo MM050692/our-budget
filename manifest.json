@@ -1,7 +1,7 @@
 {
-  "name": "Our Budget",
-  "short_name": "Our Budget",
-  "description": "A private shared household money planner for safer spending, debt freedom and goals.",
+  "name": "Our DHAN",
+  "short_name": "Our DHAN",
+  "description": "Dhani and Sakhi's private shared money planner.",
   "id": "./",
   "start_url": "./?source=pwa",
   "scope": "./",

@@ -483,11 +483,84 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
 .confetti { position: fixed; inset: 0; z-index: 45; pointer-events: none; overflow: hidden; }
 .confetti i { position: absolute; top: -16px; width: 8px; height: 13px; border-radius: 3px; animation: confettiFall 1.3s ease-in forwards; }
 
-.bottomNav { position: fixed; left: 50%; bottom: max(10px, env(safe-area-inset-bottom)); z-index: 20; width: min(520px, calc(100% - 24px)); height: 68px; transform: translateX(-50%); padding: 6px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; border: 1px solid rgba(220,229,223,.9); border-radius: 23px; background: rgba(255,253,247,.94); box-shadow: 0 13px 40px rgba(31,68,56,.17); backdrop-filter: blur(18px); }
+.bottomNav { position: fixed; left: 50%; bottom: max(10px, env(safe-area-inset-bottom)); z-index: 20; width: min(570px, calc(100% - 24px)); height: 68px; transform: translateX(-50%); padding: 6px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; border: 1px solid rgba(220,229,223,.9); border-radius: 23px; background: rgba(255,253,247,.94); box-shadow: 0 13px 40px rgba(31,68,56,.17); backdrop-filter: blur(18px); }
 .bottomNav button { min-width: 0; border-radius: 17px; background: transparent; color: var(--muted); display: grid; place-items: center; align-content: center; gap: 2px; }
 .bottomNav button span { font-size: 19px; line-height: 1; }
 .bottomNav button b { font-size: 9px; }
 .bottomNav button.active { color: var(--green); background: var(--mint); }
+
+.fundSummary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.fundSummary:empty { display: none; }
+.fundSummary > div { padding: 13px; border-radius: 16px; background: var(--blue-soft); }
+.fundSummary span, .closeStats span, .moneyDateStats span { display: block; color: var(--muted); font-size: 9px; margin-bottom: 4px; }
+.fundSummary b { font-size: 14px; }
+.fundCard { padding: 16px; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); box-shadow: 0 5px 18px rgba(31,68,56,.05); }
+
+.moneyDateHero { padding: 22px; border-radius: 28px; color: white; background: linear-gradient(135deg, #173f35, #2c7561 66%, #467f6d); box-shadow: 0 18px 42px rgba(31,101,82,.2); overflow: hidden; position: relative; }
+.moneyDateHero:after { content: ""; position: absolute; right: -60px; bottom: -100px; width: 210px; height: 210px; border: 28px solid rgba(255,255,255,.07); border-radius: 50%; }
+.moneyDateTop { display: flex; justify-content: space-between; gap: 15px; position: relative; z-index: 1; }
+.moneyDateTop .eyebrow { color: #bfe6d6; }
+.moneyDateTop h2 { font-size: 23px; margin: 5px 0 3px; }
+.moneyDateTop p { color: rgba(255,255,255,.75); font-size: 11px; margin: 0; }
+.coupleMark { flex: none; width: 60px; height: 60px; display: grid; place-items: center; border-radius: 20px; background: rgba(255,255,255,.12); font-weight: 900; letter-spacing: -1px; }
+.coupleMark span { color: var(--sun); padding: 0 2px; }
+.moneyDateStats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin: 18px 0 10px; position: relative; z-index: 1; }
+.moneyDateStats > div { min-width: 0; padding: 10px; border-radius: 14px; background: rgba(255,255,255,.1); }
+.moneyDateStats span { color: rgba(255,255,255,.62); }
+.moneyDateStats b { display: block; font-size: 11px; overflow-wrap: anywhere; }
+.moneyDateAction { padding: 11px 13px; margin-bottom: 12px; display: grid; gap: 3px; border-radius: 14px; background: rgba(241,185,75,.15); position: relative; z-index: 1; }
+.moneyDateAction span { color: #ffe6a6; font-size: 9px; text-transform: uppercase; letter-spacing: .7px; }
+.moneyDateAction b { font-size: 11px; }
+.moneyDateHero button { position: relative; z-index: 1; }
+.moneyDateHero .secondary { background: rgba(255,255,255,.9); }
+
+.calendarControls { display: flex; align-items: center; gap: 7px; }
+.calendarControls button { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 10px; background: var(--mint); color: var(--green); font-size: 20px; }
+.calendarControls b { min-width: 95px; text-align: center; font-size: 10px; }
+.moneyCalendar { padding: 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--paper); }
+.calendarWeek, .calendarGrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.calendarWeek span { padding: 3px 0 8px; color: var(--muted); text-align: center; font-size: 8px; font-weight: 800; }
+.calendarDay { min-height: 48px; padding: 6px 4px; border-radius: 11px; background: #f5f5ef; }
+.calendarDay.empty { visibility: hidden; }
+.calendarDay b { display: block; font-size: 9px; }
+.calendarDay.today { color: white; background: var(--green); }
+.calendarDay > div { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 7px; }
+.calendarDay i, .agendaItem > i { width: 6px; height: 6px; border-radius: 50%; background: var(--coral); }
+.calendarDay i.income, .agendaItem > i.income { background: var(--green-2); }
+.calendarDay i.debt, .agendaItem > i.debt { background: var(--coral); }
+.calendarDay i.goal, .agendaItem > i.goal { background: var(--blue); }
+.calendarDay i.fund, .agendaItem > i.fund { background: var(--purple); }
+.calendarAgenda { display: grid; gap: 7px; margin-top: 9px; }
+.agendaItem { display: grid; grid-template-columns: 55px 8px 1fr; gap: 9px; align-items: center; padding: 9px 12px; border-radius: 14px; background: rgba(255,253,247,.75); }
+.agendaItem time { color: var(--muted); font-size: 9px; }
+.agendaItem b, .agendaItem span { display: block; font-size: 10px; }
+.agendaItem span { color: var(--muted); margin-top: 2px; }
+
+.runwayCard, .monthCloseCard { padding: 18px; border: 1px solid var(--line); border-radius: 23px; background: var(--paper); box-shadow: var(--shadow); }
+.runwayTop { display: grid; grid-template-columns: 112px 1fr; gap: 15px; align-items: center; }
+.runwayTop h3 { font-size: 18px; }
+.runwayTop p { color: var(--muted); font-size: 10px; margin: 5px 0 0; }
+.runwayGauge { width: 108px; height: 108px; display: grid; place-items: center; border-radius: 50%; background: conic-gradient(var(--green-2) var(--runway), var(--line) 0); position: relative; }
+.runwayGauge:after { content: ""; position: absolute; inset: 10px; border-radius: 50%; background: var(--paper); }
+.runwayGauge div { position: relative; z-index: 1; text-align: center; }
+.runwayGauge b { display: block; font-size: 25px; }
+.runwayGauge span { color: var(--muted); font-size: 9px; }
+.scenarioList { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 15px 0 12px; }
+.scenarioList div { padding: 10px; border-radius: 13px; background: var(--mint); }
+.scenarioList div.caution { background: var(--sun-soft); }
+.scenarioList div.shock { background: var(--coral-soft); }
+.scenarioList span, .scenarioList b { display: block; font-size: 9px; }
+.scenarioList span { color: var(--muted); margin-bottom: 4px; }
+.rangeLabel { color: var(--green); font-size: 12px; font-weight: 900; }
+
+.closeTop { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
+.closeTop h3 { font-size: 18px; }
+.closeTop p { color: var(--muted); font-size: 10px; margin: 5px 0 0; }
+.closeSeal { width: 48px; height: 48px; flex: none; display: grid; place-items: center; border-radius: 17px; color: white; background: var(--purple); font-weight: 900; }
+.closeStats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0; }
+.closeStats > div { padding: 11px; border-radius: 14px; background: #f3f4ee; }
+.closeStats b { display: block; font-size: 12px; }
+.closeStats small { display: block; color: var(--muted); font-size: 8px; margin-top: 4px; }
 
 @keyframes pageIn { from { opacity: 0; transform: translateY(5px); } }
 @keyframes fadeIn { from { opacity: 0; } }
@@ -508,6 +581,7 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
   .allocationPanel { grid-template-columns: 1fr; }
   .marketStrip { grid-template-columns: 1fr 1fr; }
   .paydayBuckets { grid-template-columns: 1fr 1fr; }
+  .moneyDateStats { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 430px) {
@@ -527,6 +601,11 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
   .debtPlanStats div:last-child { grid-column: 1 / -1; }
   .strategyRow { align-items: stretch; flex-direction: column; }
   .strategyRow > button { align-self: flex-start; }
+  .runwayTop { grid-template-columns: 90px 1fr; }
+  .runwayGauge { width: 86px; height: 86px; }
+  .scenarioList, .closeStats { grid-template-columns: 1fr; }
+  .bottomNav button span { font-size: 17px; }
+  .bottomNav button b { font-size: 8px; }
 }
 
 @media (max-width: 355px) {
@@ -537,6 +616,9 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
   .checkupAccount { grid-template-columns: 1fr; }
   .checkupAccount input { text-align: left; }
   .forecastAccounts, .restorePreview { grid-template-columns: 1fr; }
+  .fundSummary { grid-template-columns: 1fr; }
+  .calendarDay { min-height: 40px; padding: 5px 3px; }
+  .calendarControls b { min-width: 78px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

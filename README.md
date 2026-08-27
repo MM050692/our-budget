@@ -1,13 +1,13 @@
-# Our Budget v8
+# Our DHAN v9
 
 A private shared household money app for a couple. It runs on GitHub Pages with the existing Supabase Free project. It has no paid API, bank connection, AI runtime or ChatGPT subscription dependency.
 
 ## What is included
 
-- Four simple areas: **Today**, **Money**, **Plan** and an automatic **Timeline**
+- Five simple areas: **Today**, **Money**, **Plan**, automatic **Timeline** and shared **Together**
 - A friendly fast-expense form, plus iPhone Back Tap and Android/PWA shortcuts
 - Bank, cash and wallet accounts with opening balances, linked transactions, daily statements and transparent balance corrections
-- A safer daily-spending guide that protects goal money, upcoming bills, debt minimums and a three-day essentials buffer
+- A safer daily-spending guide that protects goals, sinking funds, upcoming bills, debt minimums and a three-day essentials buffer
 - One linked transfer that updates both accounts without inflating income or spending
 - A household-wide debt plan with interest-saving and quick-win strategies, minimum protection and extra-payment simulation
 - Goals with dated contributions that reserve existing cash without double-counting net worth
@@ -18,13 +18,15 @@ A private shared household money app for a couple. It runs on GitHub Pages with 
 - Actual daily net-worth snapshots and cautious/current/improved 12-month scenarios
 - A 30/60/90-day cash-flow outlook from regular income, bills and debt minimums
 - A shared monthly balance check-up with transparent corrections and Timeline history
+- Sinking funds with monthly set-asides for annual bills, travel, gifts, repairs and other predictable costs
+- A five-minute weekly money date, combined money calendar, emergency runway scenarios and monthly close
 - Assets and free market-price refresh for metals and crypto
 - Household-scoped Row Level Security, Realtime updates, local cache and an offline change queue
 - Complete JSON backup, validated merge restore with an automatic safety copy, and transaction CSV export
 
 ## Data model and migration
 
-Apply SQL files in `supabase/migrations/` in timestamp order. The v8 migration adds the shared debt strategy and monthly check-ups with RLS, explicit authenticated grants, actor validation, indexes and Realtime publication. Earlier migrations retain linked accounts, transfers, recurring items, contributions, net-worth snapshots and automatic debt/goal balance triggers.
+Apply SQL files in `supabase/migrations/` in timestamp order. The v9 migration adds household sinking funds, weekly money dates and richer month closes with RLS, explicit authenticated grants, actor validation, indexes and Realtime publication. Earlier migrations retain linked accounts, transfers, recurring items, contributions, net-worth snapshots, decision tools and automatic debt/goal balance triggers.
 
 The repository uses only the public Supabase publishable/anon key. Never put a secret or service-role key in `config.js`.
 
@@ -47,7 +49,7 @@ The repository uses only the public Supabase publishable/anon key. Never put a s
 
 ### Android
 
-Install the PWA from Chrome. Long-press **Our Budget** and choose **Add spend**, or drag that shortcut to the home screen. On Pixel, Settings → System → Gestures → Quick Tap can open Our Budget.
+Install the PWA from Chrome. Long-press **Our DHAN** and choose **Add spend**, or drag that shortcut to the home screen. On Pixel, Settings → System → Gestures → Quick Tap can open Our DHAN.
 
 ## Free deployment
 
@@ -67,3 +69,5 @@ Serve `main` through GitHub Pages. The app uses the existing GitHub Pages site, 
 10. Restore a recent backup and confirm the automatic safety copy downloads before the merge begins.
 11. Sign in on the second phone and confirm settings and data update in realtime.
 12. Go offline, save an expense, reconnect and confirm the waiting-sync message clears.
+13. Add a sinking fund, record its monthly set-aside and confirm safe-to-spend remains protected before and after.
+14. Complete a weekly money date and month close, then confirm both appear on the other phone and in Timeline.
