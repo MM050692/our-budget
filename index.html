@@ -117,6 +117,15 @@
           <div class="netWorthTop"><span>Household net worth</span><span id="netWorthMood">🌱</span></div>
           <b id="netWorth">MVR 0</b>
           <p id="wealthMessage">Every honest update is progress.</p>
+          <div class="netWorthRateBar">
+            <div class="netWorthRateCopy">
+              <span id="moneyRateStatus" aria-live="polite">Gold &amp; crypto market rates</span>
+              <small>Free live data · updates the dashboard</small>
+            </div>
+            <button id="moneyRefreshRates" class="liveRateButton" type="button" onclick="refreshPrices(true)">
+              <span aria-hidden="true">↻</span><span id="moneyRefreshLabel">Refresh rates</span>
+            </button>
+          </div>
         </div>
 
         <div class="metricGrid four">
