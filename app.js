@@ -35,139 +35,6 @@ const DEFAULT = {
   sinkingFunds: [], weeklyReviews: [], prices: {}
 };
 
-const SAKHI_HELP = {
-  'sign-in': { en: 'Sign in', mr: 'अ‍ॅपमध्ये प्रवेश', body: 'हे फक्त धनी आणि सखी यांच्या खाजगी घरगुती खात्यासाठीचे लॉगिन आहे. योग्य ईमेल आणि पासवर्ड टाकल्यावर दोघांनाही एकच अद्ययावत माहिती दिसते.', action: 'तुमच्यासाठी तयार केलेला ईमेल आणि पासवर्ड वापरा. पासवर्ड कोणासोबत शेअर करू नका.' },
-  'auth-email': { en: 'Email', mr: 'ईमेल', body: 'तुमच्या Our DHAN खात्याशी जोडलेला ईमेल येथे टाका.', action: 'पूर्ण ईमेल पत्ता टाका. स्पेलिंग किंवा शेवटी मोकळी जागा राहू देऊ नका.' },
-  'auth-password': { en: 'Password', mr: 'पासवर्ड', body: 'हा तुमच्या खाजगी आर्थिक माहितीचा प्रवेश संकेत आहे.', action: 'तुमचा ठरलेला पासवर्ड टाका.', tip: 'पासवर्ड फोनच्या नोट्समध्ये उघडपणे ठेवू नका.' },
-
-  'today-page': { en: 'Today', mr: 'आजचे पान', body: 'रोज वापरण्यासाठी हे मुख्य पान आहे. आज किती सुरक्षित खर्च करता येईल, या महिन्याची स्थिती, नियमित बिले आणि अलीकडील नोंदी येथे दिसतात.', action: 'पैसे आले किंवा गेले की लगेच नोंद करा आणि नियमित नोंदी Confirm करा.' },
-  'safe-spend': { en: 'Safe to spend today', mr: 'आजची सुरक्षित खर्च मर्यादा', body: 'खात्यातील उपलब्ध पैसे, ध्येयांसाठी राखीव रक्कम, येणारी बिले, कर्जाचे किमान हप्ते आणि तीन दिवसांचा गरजेचा साठा लक्षात घेऊन ही रक्कम ठरते.', action: 'फक्त गरज नसलेल्या किंवा मजेच्या खर्चासाठी ही मर्यादा वापरा.', tip: 'ही तुमची पूर्ण बँक शिल्लक नाही. मर्यादा शून्य असेल तर ऐच्छिक खर्च थांबवा.' },
-  'safe-week': { en: 'This week', mr: 'या आठवड्याची सुरक्षित मर्यादा', body: 'पुढील पगारापर्यंतच्या सुरक्षित दैनिक मर्यादेवरून सात दिवसांसाठी अंदाज दिला जातो.', action: 'आठवड्याचा बाहेर खाणे, खरेदी किंवा मनोरंजन खर्च याच्या आत ठेवा.' },
-  'next-payday': { en: 'Next payday', mr: 'पुढचा पगाराचा दिवस', body: 'Settings मध्ये दिलेल्या पगाराच्या तारखेवरून पुढचा पगार कधी येईल ते दाखवते.', action: 'पगाराची तारीख बदलल्यास Settings मध्ये लगेच दुरुस्त करा.' },
-  'protected-first': { en: 'Protected first', mr: 'आधी बाजूला ठेवायची रक्कम', body: 'पगार येण्यापूर्वी भरायची बिले, कर्जाचे किमान हप्ते आणि नियोजित निधी यांची एकूण रक्कम.', action: 'ही रक्कम सामान्य खर्चासाठी वापरू नका.' },
-  'safety-buffer': { en: 'Safety buffer', mr: 'सुरक्षित राखीव रक्कम', body: 'तीन दिवसांच्या अत्यावश्यक खर्चासाठी ठेवलेली छोटी आपत्कालीन मर्यादा.', action: 'फक्त खरोखर आवश्यक खर्चासाठीच वापरा.' },
-  'add-spend': { en: 'Add spend', mr: 'खर्च नोंदवा', body: 'खात्यातून किंवा रोखीतून पैसे गेले की ही नोंद करा. तारीख, रक्कम, चलन, कोणत्या खात्यातून पैसे गेले, कारण आणि कोणी पैसे दिले हे निवडा.', action: 'खर्च झाल्यानंतर लगेच नोंद करा म्हणजे खाते शिल्लक बरोबर राहील.', tip: 'एका खात्यातून दुसऱ्या खात्यात पैसे हलवले असतील तर Add spend न वापरता Transfer वापरा.' },
-  'add-income': { en: 'Add income', mr: 'उत्पन्न नोंदवा', body: 'पगार, बोनस, अतिरिक्त कमाई, भेट किंवा परतावा प्रत्यक्ष खात्यात जमा झाला की ही नोंद करा.', action: 'पैसे ज्या खात्यात आले तेच खाते निवडा.', tip: 'खाते शिल्लक दुरुस्त करण्यासाठी खोटे उत्पन्न टाकू नका.' },
-  'transfer': { en: 'Transfer', mr: 'खात्यांमधील पैसे हलवा', body: 'एका स्वतःच्या खात्यातून दुसऱ्या खात्यात पैसे पाठवण्यासाठी Transfer वापरा. यामुळे एक खाते कमी आणि दुसरे वाढते; उत्पन्न, खर्च किंवा निव्वळ संपत्ती बदलत नाही.', action: 'From account, To account आणि दोन्ही खात्यांत प्रत्यक्ष गेलेली/आलेली रक्कम निवडा.', tip: 'चलने वेगवेगळी असल्यास पाठवलेली आणि मिळालेली रक्कम वेगळी असू शकते.' },
-  'phone-shortcut': { en: 'Phone shortcut', mr: 'फोनवरून पटकन खर्च नोंदवा', body: 'iPhone Back Tap किंवा Android home-screen shortcut वापरून Add spend थेट उघडता येते.', action: 'Settings मधील Fast expense shortcut उघडून तुमच्या फोनसाठी दिलेल्या पायऱ्या पूर्ण करा.' },
-  'money-available': { en: 'Money available', mr: 'सध्या उपलब्ध एकूण पैसे', body: 'सर्व सक्रिय बँक, रोख आणि मोबाइल वॉलेट खात्यांची सध्याची एकूण शिल्लक.', action: 'प्रत्येक खाते नियमितपणे वास्तविक शिल्लकीशी जुळवा.' },
-  'reserved-goals': { en: 'Reserved for goals', mr: 'ध्येयांसाठी राखीव पैसे', body: 'Goals आणि नियोजित निधीसाठी आधीच बाजूला ठेवलेली रक्कम. हे पैसे खात्यातच असू शकतात पण सामान्य खर्चासाठी उपलब्ध नाहीत.', action: 'ध्येयासाठी ठेवलेले पैसे खर्च करू नका.' },
-  'month-left': { en: 'This month left', mr: 'या महिन्याचे उत्पन्न वजा खर्च', body: 'या कॅलेंडर महिन्यात नोंदलेले उत्पन्न वजा नोंदलेला खर्च.', action: 'हा आकडा खाते शिल्लक नसून महिन्याचा परिणाम आहे.' },
-  'monthly-checklist': { en: 'Monthly checklist', mr: 'दर महिन्याची नियमित नोंद', body: 'पगार, भाडे, इंटरनेट किंवा इतर नियमित रक्कम एकदा तयार करा आणि ती प्रत्यक्ष आली किंवा गेली की Confirm करा.', action: 'रक्कम प्रत्यक्ष हलल्याशिवाय Confirm करू नका.' },
-  'recent-activity': { en: 'Recent activity', mr: 'अलीकडील व्यवहार', body: 'धनी आणि सखी यांनी नोंदवलेले नवीन खर्च, उत्पन्न आणि transfers येथे दिसतात.', action: 'चुकीची नोंद दिसल्यास ती उघडून दुरुस्त करा.' },
-
-  'money-page': { en: 'Money', mr: 'संपूर्ण आर्थिक चित्र', body: 'सर्व खाती, इतर मालमत्ता, कर्ज आणि निव्वळ संपत्ती एका ठिकाणी दाखवणारे पान.', action: 'आठवड्यातून एकदा खाते शिल्लक तपासा आणि बाजारभाव Refresh करा.' },
-  'net-worth': { en: 'Household net worth', mr: 'घराची निव्वळ संपत्ती', body: 'सर्व खात्यांतील पैसे + इतर मालमत्तेची किंमत − उरलेले कर्ज = निव्वळ संपत्ती.', action: 'खाती, मालमत्ता आणि कर्जाची शिल्लक खरी ठेवली तरच हा आकडा उपयोगी आहे.', tip: 'ध्येयासाठी राखीव पैसे आधीच खात्यांत आहेत; ते पुन्हा मालमत्ता म्हणून जोडू नका.' },
-  'live-rates': { en: 'Refresh rates', mr: 'ताजे बाजारभाव आणा', body: 'सोने, चांदी आणि crypto चे मोफत live भाव आणून मालमत्ता आणि निव्वळ संपत्ती पुन्हा मोजते.', action: 'Money पान पाहताना Refresh rates वर टॅप करा.', tip: 'हे AED, MVR किंवा INR चे विनिमय दर बदलत नाही. ते Settings मध्ये हाताने तपासायचे आहेत.' },
-  'accounts': { en: 'Accounts', mr: 'बँक, रोख आणि वॉलेट खाती', body: 'Starting balance पासून त्या खात्याशी जोडलेले प्रत्येक उत्पन्न, खर्च आणि transfer धरून सध्याची शिल्लक मोजली जाते.', action: 'Statement मध्ये रोजची हालचाल पहा. वास्तविक शिल्लक वेगळी असेल तर Correct balance वापरा.' },
-  'spendable-goals': { en: 'Spendable after goals', mr: 'ध्येयांची रक्कम वगळून उपलब्ध पैसे', body: 'सर्व खात्यांची शिल्लक वजा Goals आणि नियोजित निधीसाठी राखीव रक्कम.', action: 'सामान्य खर्चासाठी यापेक्षा जास्त पैसे उपलब्ध आहेत असे समजू नका.' },
-  'assets': { en: 'Other assets', mr: 'इतर मालमत्ता', body: 'सोने, चांदी, crypto, गुंतवणूक, मालमत्ता किंवा इतर मूल्यवान गोष्टी येथे नोंदवा. Metals आणि crypto बाजारभावाने; इतर गोष्टी हाताने दिलेल्या किंमतीने मोजल्या जातात.', action: 'खरेदी किंवा विक्रीनंतर quantity किंवा current value दुरुस्त करा.', tip: 'मालमत्ता खरेदी करताना खात्यातून गेलेले पैसेही नोंदवा; नाहीतर निव्वळ संपत्ती चुकीची वाढेल.' },
-  'wealth-journey': { en: 'Wealth journey', mr: 'संपत्तीची वाटचाल', body: 'Actual मध्ये जतन केलेली खरी निव्वळ संपत्ती दिसते. 12-month plan मध्ये सध्याचे उत्पन्न, खर्च, कर्ज आणि 40–30–20–10 पद्धतीवर आधारित अंदाज दिसतो.', action: 'अंदाजाला हमी समजू नका; दर महिन्याला खरी प्रगती तपासा.' },
-  'best-next-moves': { en: 'Best next moves', mr: 'पुढे काय करावे', body: 'तुमच्या नोंदवलेल्या आकड्यांवरून अ‍ॅप सर्वात उपयोगी पुढची पावले सुचवते.', action: 'एकावेळी एक सोपी कृती निवडा.', tip: 'ही सामान्य दिशा आहे; बँक किंवा गुंतवणूक सल्ला नाही.' },
-
-  'plan-page': { en: 'Plan', mr: 'पैशांचा आराखडा', body: '40–30–20–10 वाटप, पगाराचा वापर, कर्ज, Goals, नियोजित निधी, category budget आणि नियमित व्यवहार येथे सांभाळा.', action: 'पगाराच्या दिवशी हे पान उघडून प्रत्येक रुपयाला काम द्या.' },
-  'allocation': { en: '40–30–20–10', mr: 'उत्पन्नाची 40–30–20–10 विभागणी', body: '40% गरजेचे खर्च, 30% कर्जमुक्ती, 20% भविष्य/बचत आणि 10% इच्छा व मजा. अ‍ॅप नोंदवलेल्या उत्पन्नावरून प्रत्येक मर्यादा मोजते.', action: 'ही खर्च करण्याची सक्ती नाही. न वापरलेले पैसे बचत किंवा कर्जाकडे वळवा.', tip: 'कर्ज संपल्यावर 30% Future मध्ये वळवता येते.' },
-  'payday-assistant': { en: 'Payday assistant', mr: 'पगार आल्यावर काय करावे', body: 'या महिन्याच्या पगाराला 40–30–20–10 प्रमाणे चार कामांत विभागून अचूक लक्ष्य रक्कम दाखवते.', action: 'अ‍ॅप आपोआप पैसे हलवत नाही. प्रत्यक्ष payment किंवा saving केल्यानंतरच नोंद करा.' },
-  'emergency-fund': { en: 'Emergency fund', mr: 'आपत्कालीन निधी', body: 'नोकरी, आरोग्य किंवा अचानक गरजेच्या वेळी अत्यावश्यक खर्च भागवण्यासाठीचा निधी. अ‍ॅप आधी 3 महिने आणि नंतर 6 महिन्यांचे लक्ष्य दाखवते.', action: 'हा निधी सामान्य खरेदी किंवा सहलीसाठी वापरू नका.' },
-  'debt-freedom': { en: 'Debt freedom', mr: 'कर्जमुक्ती योजना', body: 'सर्व कर्जांचे उरलेले पैसे, व्याज, किमान हप्ता आणि अपेक्षित कर्जमुक्त तारीख दाखवते. Save interest जास्त व्याजाचे कर्ज आधी कमी करते; Quick wins लहान कर्ज आधी संपवते.', action: 'प्रत्येक कर्ज payment योग्य खात्यातून नोंदवा आणि principal व interest वेगळे भरा.' },
-  'goals': { en: 'Goals', mr: 'मोठ्या ध्येयांसाठी बचत', body: 'आपत्कालीन निधी, घर, सोने, प्रवास किंवा इतर मोठ्या ध्येयासाठी ठराविक रक्कम आणि तारीख ठेवता येते.', action: 'Add saving वापरून प्रत्येक बचतीची तारीख आणि ती कोणत्या खात्यात आहे ते नोंदवा.', tip: 'Goal saving ही खात्यातीलच राखीव रक्कम आहे; ती नवीन उत्पन्न नाही.' },
-  'sinking-funds': { en: 'Sinking funds', mr: 'आधीच माहित असलेल्या खर्चासाठी निधी', body: 'वार्षिक विमा, दुरुस्ती, भेटवस्तू, वैद्यकीय खर्च किंवा सहल यांसारख्या भविष्यातील अपेक्षित खर्चासाठी हळूहळू पैसे बाजूला ठेवा.', action: 'Target आणि Needed by तारीख दिल्यावर अ‍ॅप दर महिन्याची आवश्यक रक्कम मोजते.', tip: 'दीर्घकालीन स्वप्नासाठी Goal वापरा; ठरलेला आगामी खर्च असेल तर Sinking fund वापरा.' },
-  'category-budget': { en: 'Category budget', mr: 'प्रत्येक खर्च प्रकाराची मासिक मर्यादा', body: 'Food, Housing, Bills, Transport, Shopping इत्यादींसाठी महिन्याची जास्तीत जास्त मर्यादा ठरवा.', action: 'मर्यादा वास्तववादी ठेवा आणि महिन्यात वापर किती झाला ते पहा.' },
-  'recurring-items': { en: 'Recurring items', mr: 'दर महिन्याला पुन्हा होणारे व्यवहार', body: 'पगार, भाडे, इंटरनेट किंवा EMI सारखी रक्कम एकदा तयार केल्यावर Monthly checklist मध्ये दर महिन्याला दिसते.', action: 'प्रत्यक्ष व्यवहार झाल्यावर Confirm करा; हे automatic bank payment नाही.' },
-
-  'timeline-page': { en: 'Timeline', mr: 'संपूर्ण आर्थिक इतिहास', body: 'खर्च, उत्पन्न, transfers, Goals, कर्ज, मालमत्ता, budgets आणि जिंकलेले टप्पे तारीखवार आपोआप दिसतात.', action: 'Money, Plans आणि Wins filters वापरून हवी ती माहिती पहा.' },
-  'cashflow-outlook': { en: 'Cash-flow outlook', mr: 'पुढील खातेशिल्लकीचा अंदाज', body: 'नियमित पगार आणि बिलांच्या तारखांवरून पुढील 30, 60 किंवा 90 दिवसांत खात्यांत किती पैसे राहू शकतात ते दाखवते.', action: 'नियमित व्यवहार आणि त्यांची तारीख बरोबर ठेवा.', tip: 'हा अंदाज आहे; अचानक खर्च किंवा नोंद न केलेला व्यवहार यात दिसणार नाही.' },
-  'together-page': { en: 'Together', mr: 'धनी आणि सखीची एकत्र पाहणी', body: 'आठवड्याची छोटी money date, आर्थिक calendar, emergency runway आणि महिन्याचा आढावा एका शांत पानावर.', action: 'आठवड्यातून एकदा पाच मिनिटे एकत्र बसा; दोष न देता फक्त आकडे आणि एक पुढची कृती ठरवा.' },
-  'money-date': { en: 'Money date', mr: 'आठवड्याची पाच मिनिटांची पैशांची चर्चा', body: 'या आठवड्यात काय चांगले झाले आणि पुढील सात दिवसांत एक कोणते काम करायचे ते दोघे लिहितात.', action: 'एक लहान आणि स्पष्ट कृती ठरवा—उदा. बिल भरणे किंवा आपत्कालीन निधीत पैसे ठेवणे.' },
-  'money-calendar': { en: 'Money calendar', mr: 'पैशांचे कॅलेंडर', body: 'पगार, नियमित बिले, कर्जाचे हप्ते, Goal dates आणि नियोजित खर्च तारीखवार दाखवते.', action: 'महिन्याच्या सुरुवातीला मोठ्या तारखा तपासा.' },
-  'emergency-runway': { en: 'Emergency runway', mr: 'उत्पन्न थांबल्यास पैसे किती महिने पुरतील', body: 'ध्येयांसाठी राखीव रक्कम सुरक्षित ठेवून उपलब्ध पैसे अत्यावश्यक मासिक खर्च किती महिने भागवू शकतात ते दाखवते.', action: 'पहिले 1 महिना, नंतर 3 आणि शेवटी 6 महिन्यांचे संरक्षण तयार करा.' },
-  'close-month': { en: 'Close the month', mr: 'महिन्याचा आढावा पूर्ण करा', body: 'महिन्याचा खर्च, कर्ज कमी झालेले पैसे, Goal saving, एक शिकवण आणि पुढील महिन्याचे एक लक्ष जतन करते.', action: 'महिना बंद करण्यापूर्वी सर्व खात्यांची खरी शिल्लक तपासा.', tip: 'Close केल्याने कोणतीही नोंद delete किंवा lock होत नाही.' },
-
-  'settings-page': { en: 'Settings', mr: 'अ‍ॅपची मूलभूत सेटिंग्ज', body: 'मुख्य चलन, पगाराची तारीख, विनिमय दर, फोन shortcut आणि data backup येथे सांभाळा.', action: 'चलन किंवा पगाराची तारीख बदलल्यास Save settings करा.' },
-  'dashboard-currency': { en: 'Dashboard currency', mr: 'सर्व आकडे दाखवायचे मुख्य चलन', body: 'AED, MVR, INR किंवा USD पैकी निवडलेल्या चलनात dashboard ची एकूण रक्कम दिसते. मूळ व्यवहाराचे चलन बदलत नाही.', action: 'तुम्ही रोज विचार करता ते चलन निवडा.' },
-  'salary-day': { en: 'Salary day each month', mr: 'दर महिन्याचा पगाराचा दिवस', body: 'पगार साधारण कोणत्या तारखेला येतो ते द्या. Safe-to-spend आणि cash-flow यासाठी ही तारीख वापरली जाते.', action: '1 ते 31 मधील दिवस निवडा.' },
-  'exchange-rates': { en: 'USD exchange rates', mr: 'USD चा हाताने दिलेला विनिमय दर', body: '1 USD इतके AED, MVR किंवा INR किती होतात ते येथे लिहा. वेगवेगळ्या चलनांतील रकमा एकत्र मोजण्यासाठी हा दर वापरला जातो.', action: 'महिन्यातून एकदा विश्वसनीय स्रोत पाहून दर दुरुस्त करा.', tip: 'Refresh rates बटण metals आणि crypto साठी आहे; हे currency rates आपोआप बदलत नाहीत.' },
-  'backup': { en: 'Backup, Restore and CSV', mr: 'तुमच्या माहितीची सुरक्षित प्रत', body: 'Backup पूर्ण अ‍ॅप माहितीची JSON प्रत डाउनलोड करते. Restore त्या प्रतीतून माहिती परत आणते. CSV फक्त व्यवहारांची साधी यादी देते.', action: 'महिन्याच्या शेवटी एक Backup सुरक्षित ठेवा.', tip: 'Restore करण्यापूर्वी योग्य फाइल निवडली आहे याची खात्री करा.' },
-  'free-independent': { en: 'Free and independent', mr: 'पूर्णपणे मोफत आणि स्वतंत्र', body: 'अ‍ॅप वापरण्यासाठी ChatGPT subscription, paid market API किंवा paid bank connection लागत नाही.', action: 'तुम्ही नोंदवलेली माहिती वापरून अ‍ॅप चालते.' },
-
-  'field-date': { en: 'Date', mr: 'व्यवहाराची तारीख', body: 'पैसे प्रत्यक्ष आले किंवा गेले त्या दिवसाची तारीख निवडा.', action: 'जुनी नोंद करताना आजची तारीख चुकीने वापरू नका.' },
-  'field-amount': { en: 'Amount', mr: 'रक्कम', body: 'प्रत्यक्ष आलेली, गेलेली किंवा ठरवलेली संख्या टाका.', action: 'दशांश आणि चलन काळजीपूर्वक तपासा.' },
-  'field-currency': { en: 'Currency', mr: 'चलन', body: 'ही रक्कम AED, MVR, INR किंवा USD पैकी कोणत्या चलनात आहे ते निवडा.', action: 'बँक व्यवहारावर दिसणारे मूळ चलन निवडा.' },
-  'field-account': { en: 'Account', mr: 'संबंधित खाते', body: 'पैसे ज्या बँक, रोख किंवा wallet खात्यात आले किंवा गेले ते खाते निवडा.', action: 'योग्य खाते निवडल्यावर त्याची शिल्लक आपोआप बदलते.' },
-  'field-category': { en: 'Category / reason', mr: 'पैसे कशासाठी होते', body: 'उत्पन्न किंवा खर्चाचा योग्य प्रकार निवडा. यावर budget आणि 40–30–20–10 गणना अवलंबून असते.', action: 'सर्वात जवळचा खरा प्रकार निवडा.' },
-  'field-person': { en: 'Paid or received by', mr: 'कोणी पैसे दिले किंवा घेतले', body: 'हा व्यवहार धनी, सखी किंवा Shared यापैकी कोणाशी संबंधित आहे ते निवडा.', action: 'ज्याच्या खात्यातून व्यवहार झाला त्याचे नाव निवडा; दोघांचा असेल तर Shared.' },
-  'field-note': { en: 'Note', mr: 'छोटी ओळख', body: 'नंतर व्यवहार समजण्यासाठी छोटी माहिती लिहा.', action: 'उदा. महिन्याचे किराणा, ऑगस्ट पगार किंवा कार दुरुस्ती. आवश्यक नसल्यास रिकामे ठेवा.' },
-  'field-name': { en: 'Name', mr: 'ओळखण्यास सोपे नाव', body: 'खाते, कर्ज, Goal किंवा नियमित नोंद लगेच समजेल असे स्पष्ट नाव द्या.', action: 'उदा. Main MVR account, Credit card किंवा Emergency fund.' },
-  'field-choice': { en: 'Choose an option', mr: 'योग्य पर्याय निवडा', body: 'वर-खाली scroll करून मधोमध दिसणारा योग्य पर्याय निवडा.', action: 'Continue करण्यापूर्वी निवड पुन्हा पहा.' },
-  'field-text': { en: 'Enter information', mr: 'माहिती लिहा', body: 'या प्रश्नाला लागू होणारी थोडक्यात खरी माहिती लिहा.', action: 'अंदाजाऐवजी शक्य तितकी अचूक माहिती वापरा.' },
-  'account-type': { en: 'Account type', mr: 'खात्याचा प्रकार', body: 'Bank account, हातातील Cash किंवा Mobile wallet यापैकी योग्य प्रकार निवडा.', action: 'यामुळे खाते ओळखायला सोपे होते; गणना समान राहते.' },
-  'starting-balance': { en: 'Starting balance', mr: 'नोंद सुरू करतानाची खरी शिल्लक', body: 'Track from तारखेला त्या खात्यात प्रत्यक्ष किती पैसे होते ते लिहा. पुढील व्यवहार त्यावर जोडले किंवा वजा केले जातात.', action: 'आजपासून सुरुवात करत असाल तर आजची वास्तविक शिल्लक टाका.', tip: 'जुने पगार आणि खर्च पुन्हा टाकून शिल्लक तयार करू नका.' },
-  'track-from': { en: 'Track from', mr: 'खाते मोजायला सुरुवात केलेली तारीख', body: 'Starting balance कोणत्या दिवसापासून लागू आहे ती तारीख.', action: 'Starting balance पाहिलेल्या दिवसाची तारीख निवडा.' },
-  'actual-balance': { en: 'Actual balance', mr: 'बँकेत आत्ता दिसणारी खरी शिल्लक', body: 'बँक app, cash किंवा wallet मध्ये प्रत्यक्ष दिसणारी सध्याची रक्कम.', action: 'अ‍ॅपच्या शिल्लकीशी तुलना करून फरक असल्यास correction जतन करा.', tip: 'रोजच्या खर्चाऐवजी correction वापरू नका; आधी हरवलेली नोंद शोधा.' },
-  'transfer-from': { en: 'From account', mr: 'पैसे ज्या खात्यातून गेले', body: 'Transfer सुरू झालेलं खाते निवडा.', action: 'या खात्याची शिल्लक कमी होईल.' },
-  'transfer-to': { en: 'To account', mr: 'पैसे ज्या खात्यात आले', body: 'Transfer मिळालेलं खाते निवडा.', action: 'या खात्याची शिल्लक वाढेल.' },
-  'transfer-sent': { en: 'Amount sent', mr: 'पाठवलेली रक्कम', body: 'पहिल्या खात्यातून प्रत्यक्ष वजा झालेली रक्कम.', action: 'बँक शुल्क असेल तर statement पाहून खरी रक्कम टाका.' },
-  'transfer-received': { en: 'Amount received', mr: 'दुसऱ्या खात्यात मिळालेली रक्कम', body: 'दुसऱ्या खात्यात प्रत्यक्ष जमा झालेली रक्कम.', action: 'चलन बदलले असल्यास ही रक्कम Amount sent पेक्षा वेगळी असू शकते.' },
-  'target-amount': { en: 'Target amount', mr: 'पूर्ण करायचे एकूण लक्ष्य', body: 'Goal किंवा निधी पूर्ण होण्यासाठी लागणारी एकूण रक्कम.', action: 'अवास्तव round number ऐवजी खरा अंदाज वापरा.' },
-  'saved-amount': { en: 'Already saved', mr: 'आधीच बाजूला ठेवलेली रक्कम', body: 'या Goal किंवा निधीसाठी आजपर्यंत प्रत्यक्ष राखीव ठेवलेले पैसे.', action: 'खात्यात खरोखर उपलब्ध असलेलीच रक्कम लिहा.' },
-  'target-date': { en: 'Target / needed date', mr: 'पैसे कधीपर्यंत हवे', body: 'Goal पूर्ण करायचा किंवा खर्च करायचा अपेक्षित दिवस.', action: 'तारीख माहित नसेल तर रिकामी ठेवू शकता.' },
-  'asset-type': { en: 'Asset type', mr: 'मालमत्तेचा प्रकार', body: 'हाताने किंमत देणारी मालमत्ता, precious metal किंवा crypto यापैकी निवडा.', action: 'बाजारभाव हवा असल्यास योग्य metal किंवा crypto प्रकार निवडा.' },
-  'asset-symbol': { en: 'Asset', mr: 'नेमकी मालमत्ता', body: 'Gold, Silver, Bitcoin इत्यादी नेमका बाजार symbol निवडा.', action: 'चुकीचा symbol निवडल्यास किंमत चुकीची येईल.' },
-  'asset-quantity': { en: 'Amount / quantity', mr: 'तुमच्याकडे असलेले प्रमाण', body: 'Metal साठी troy ounces, crypto साठी units आणि इतर प्रकारासाठी लागू असलेले प्रमाण टाका.', action: 'खरेदी किंवा विक्रीनंतर प्रमाण बदला.' },
-  'asset-value': { en: 'Current total value', mr: 'आजची एकूण अंदाजे किंमत', body: 'Manual asset आज विकल्यास साधारण किती मूल्य मिळेल ते लिहा.', action: 'किंमत बदलल्यावर हाताने अपडेट करा.' },
-  'debt-original': { en: 'Original amount', mr: 'कर्ज घेतानाची मूळ रक्कम', body: 'कर्ज किंवा card balance सुरू झाल्यावेळी एकूण किती होते.', action: 'जुना statement किंवा loan document वापरा.' },
-  'debt-remaining': { en: 'Remaining now', mr: 'आत्ता फेडायची उरलेली रक्कम', body: 'आजच्या statement प्रमाणे अजून किती कर्ज बाकी आहे.', action: 'कर्ज payment नोंदवल्यावर principal इतकी रक्कम कमी होते.' },
-  'debt-apr': { en: 'Annual interest %', mr: 'वर्षाचे व्याज टक्के', body: 'कर्जावर एका वर्षासाठी आकारला जाणारा APR व्याजदर.', action: 'loan document किंवा card statement मधील टक्केवारी टाका; व्याज नसेल तर 0.' },
-  'debt-minimum': { en: 'Minimum monthly payment', mr: 'दर महिन्याचा किमान हप्ता', body: 'उशीर किंवा दंड टाळण्यासाठी महिन्याला कमीत कमी भरायची रक्कम.', action: 'अ‍ॅप प्रथम प्रत्येक कर्जाचा किमान हप्ता सुरक्षित ठेवते.' },
-  'debt-payment-day': { en: 'Usual payment day', mr: 'साधारण हप्ता भरण्याचा दिवस', body: 'दर महिन्याला हप्ता कोणत्या तारखेला भरायचा असतो.', action: '1 ते 31 मधील दिवस द्या; माहित नसेल तर रिकामे ठेवा.' },
-  'debt-payoff-date': { en: 'Target payoff date', mr: 'कर्ज पूर्ण संपवायची लक्ष्य तारीख', body: 'हे कर्ज कधीपर्यंत शून्य करायचे ते ठरवा.', action: 'वेगवान पण शक्य अशी तारीख निवडा.' },
-  'debt-extra': { en: 'Extra each month', mr: 'दर महिन्याला अतिरिक्त कर्जफेड', body: 'किमान हप्त्यांपेक्षा जास्त किती रक्कम दिल्यास वेळ आणि व्याज किती वाचेल याची चाचणी.', action: 'ही फक्त what-if गणना आहे; खरी नोंद बदलत नाही.' },
-  'debt-pay-from': { en: 'Pay from', mr: 'हप्ता ज्या खात्यातून गेला', body: 'कर्ज payment प्रत्यक्ष ज्या बँक किंवा cash खात्यातून झाला ते निवडा.', action: 'या खात्याची शिल्लक payment इतकी कमी होईल.' },
-  'debt-total': { en: 'Total leaving account', mr: 'खात्यातून गेलेली पूर्ण रक्कम', body: 'Principal, interest आणि fees धरून खात्यातून प्रत्यक्ष वजा झालेली एकूण रक्कम.', action: 'बँक statement वरील debit amount वापरा.' },
-  'debt-principal': { en: 'Principal', mr: 'मूळ कर्ज कमी करणारी रक्कम', body: 'Payment मधील फक्त कर्जाची उरलेली शिल्लक कमी करणारा भाग.', action: 'statement मध्ये principal/मूळ रक्कम म्हणून दाखवलेला भाग टाका.' },
-  'debt-interest': { en: 'Interest / fees', mr: 'व्याज आणि शुल्क', body: 'Payment मधील कर्जाची मूळ शिल्लक कमी न करणारा भाग.', action: 'Total आणि Principal मधील फरक तपासा.' },
-  'goal-account': { en: 'Where is it held?', mr: 'Goal चे पैसे कोणत्या खात्यात आहेत', body: 'राखीव बचत प्रत्यक्ष कोणत्या बँक, cash किंवा wallet खात्यात ठेवली आहे ते निवडा.', action: 'ठराविक खाते नसेल तर Not assigned निवडा; रक्कम तरीही राखीव मोजली जाईल.' },
-  'recurring-kind': { en: 'Recurring type', mr: 'दर महिन्याला येणारे की जाणारे पैसे', body: 'Salary सारखे पैसे येत असतील तर Income; Rent किंवा bill सारखे पैसे जात असतील तर Expense.', action: 'योग्य प्रकार निवडल्यावर category पर्याय बदलतात.' },
-  'recurring-day': { en: 'Day each month', mr: 'दर महिन्याची तारीख', body: 'हा नियमित व्यवहार साधारण कोणत्या दिवशी होतो.', action: '1 ते 31 मधील दिवस निवडा.' },
-  'weekly-win': { en: 'What went well?', mr: 'या आठवड्यात पैशांबाबत काय चांगले झाले', body: 'छोटी जिंकलेली गोष्ट लिहा—खर्च नोंदवला, बिल वेळेवर भरले किंवा बचत केली.', action: 'दोष शोधू नका; एक खरी सकारात्मक गोष्ट लिहा.' },
-  'weekly-action': { en: 'Our one next action', mr: 'पुढील सात दिवसांचे एक काम', body: 'दोघांनी मान्य केलेले एक छोटे आणि पूर्ण करता येणारे काम.', action: 'उदा. Friday ला credit card भरणे किंवा Goal मध्ये ठराविक रक्कम ठेवणे.' },
-  'month-note': { en: 'What should we remember?', mr: 'या महिन्यातून काय शिकायचे', body: 'पुढे उपयोगी पडेल अशी एक खरी शिकवण लिहा.', action: 'दोष न देता काय काम केले किंवा कुठे सुधारणा हवी ते लिहा.' },
-  'month-focus': { en: 'One focus for next month', mr: 'पुढील महिन्याचे एक मुख्य लक्ष', body: 'पुढच्या महिन्यात सर्वात महत्त्वाची एक आर्थिक गोष्ट ठरवा.', action: 'एकच स्पष्ट लक्ष निवडा म्हणजे दोघांनाही ते लक्षात राहील.' },
-  'runway-drop': { en: 'Monthly income reduction', mr: 'उत्पन्न किती टक्के कमी होईल', body: 'What-if चाचणीत पगार कमी झाल्यास emergency runway कशी बदलेल ते पाहण्यासाठी टक्केवारी निवडा.', action: 'ही चाचणी खरी माहिती बदलत नाही.' },
-  'runway-expense': { en: 'Unexpected expense', mr: 'अचानक आलेला अतिरिक्त खर्च', body: 'Emergency runway वर परिणाम पाहण्यासाठी काल्पनिक अचानक खर्च टाका.', action: 'ही फक्त planning चाचणी आहे.' },
-  'budget-amount': { en: 'Category limit', mr: 'या प्रकारासाठी महिन्याची मर्यादा', body: 'या category वर एका महिन्यात जास्तीत जास्त किती खर्च करायचा ते ठरवा.', action: 'मागील खरा खर्च पाहून साध्य मर्यादा ठेवा.' }
-};
-
-const SAKHI_GUIDE_GROUPS = [
-  { title: 'दररोज वापरायच्या गोष्टी', keys: ['today-page', 'safe-spend', 'add-spend', 'add-income', 'transfer', 'monthly-checklist', 'phone-shortcut'] },
-  { title: 'खाती आणि संपत्ती', keys: ['money-page', 'accounts', 'net-worth', 'live-rates', 'assets', 'wealth-journey', 'best-next-moves'] },
-  { title: 'पगार, कर्ज आणि बचत', keys: ['allocation', 'payday-assistant', 'emergency-fund', 'debt-freedom', 'goals', 'sinking-funds', 'category-budget', 'recurring-items'] },
-  { title: 'इतिहास आणि दोघांची पाहणी', keys: ['timeline-page', 'cashflow-outlook', 'together-page', 'money-date', 'money-calendar', 'emergency-runway', 'close-month'] },
-  { title: 'सेटिंग्ज आणि सुरक्षितता', keys: ['settings-page', 'dashboard-currency', 'salary-day', 'exchange-rates', 'backup', 'free-independent'] }
-];
-
-const SAKHI_FIELD_HELP = {
-  authEmail: 'auth-email', authPassword: 'auth-password',
-  quickDate: 'field-date', transactionDate: 'field-date', transferDate: 'field-date', debtPaymentDate: 'field-date', goalContributionDate: 'field-date',
-  quickAmount: 'field-amount', transactionAmount: 'field-amount', recurringAmount: 'field-amount', goalContributionAmount: 'field-amount',
-  quickCurrency: 'field-currency', transactionCurrency: 'field-currency', accountCurrency: 'field-currency', assetCurrency: 'field-currency', debtCurrency: 'field-currency', goalCurrency: 'field-currency', recurringCurrency: 'field-currency', fundCurrency: 'field-currency',
-  quickAccount: 'field-account', transactionAccount: 'field-account', recurringAccount: 'field-account',
-  quickCategory: 'field-category', transactionCategory: 'field-category', recurringCategory: 'field-category',
-  quickPaidBy: 'field-person', transactionPaidBy: 'field-person', recurringPaidBy: 'field-person',
-  quickNote: 'field-note', transactionNote: 'field-note', transferNote: 'field-note', accountNotes: 'field-note', assetNotes: 'field-note', debtPaymentNote: 'field-note', goalContributionNote: 'field-note', recurringNote: 'field-note', fundNote: 'field-note', checkupNote: 'field-note',
-  accountName: 'field-name', assetName: 'field-name', debtName: 'field-name', goalName: 'field-name', recurringName: 'field-name', fundName: 'field-name',
-  baseCurrency: 'dashboard-currency', paydayDay: 'salary-day', rateAED: 'exchange-rates', rateMVR: 'exchange-rates', rateINR: 'exchange-rates',
-  accountType: 'account-type', accountOpening: 'starting-balance', accountDate: 'track-from', actualBalance: 'actual-balance',
-  transferFrom: 'transfer-from', transferTo: 'transfer-to', transferAmount: 'transfer-sent', transferReceived: 'transfer-received',
-  fundTarget: 'target-amount', goalTarget: 'target-amount', fundSaved: 'saved-amount', goalStarting: 'saved-amount', fundDue: 'target-date', goalDue: 'target-date',
-  assetType: 'asset-type', assetSymbol: 'asset-symbol', assetQuantity: 'asset-quantity', assetManualValue: 'asset-value',
-  debtOriginal: 'debt-original', debtRemaining: 'debt-remaining', debtApr: 'debt-apr', debtMinimum: 'debt-minimum', debtPaymentDay: 'debt-payment-day', debtDue: 'debt-payoff-date', debtExtra: 'debt-extra',
-  debtPaymentAccount: 'debt-pay-from', debtPaymentTotal: 'debt-total', debtPaymentPrincipal: 'debt-principal', debtPaymentInterest: 'debt-interest',
-  goalContributionAccount: 'goal-account', recurringKind: 'recurring-kind', recurringDay: 'recurring-day',
-  moneyDateWin: 'weekly-win', moneyDateAction: 'weekly-action', monthCloseNote: 'month-note', monthCloseFocus: 'month-focus',
-  runwayDrop: 'runway-drop', runwayExpense: 'runway-expense', quickExpenseLink: 'phone-shortcut'
-};
-
 let state = structuredClone(DEFAULT);
 let db = null;
 let currentUser = null;
@@ -183,9 +50,12 @@ let timelineFilter = 'all';
 let cashflowDays = 30;
 let calendarMonth = '';
 let toastTimer = null;
-let marathiHelpReturnFocus = null;
 let pendingQuickAction = new URLSearchParams(location.search).get('quick') || '';
 let pendingRestoreData = null;
+let sakhiTourStep = 0;
+let sakhiTourReturnFocus = null;
+let sakhiTourCelebrated = false;
+let sakhiPractice = null;
 
 const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
@@ -347,16 +217,10 @@ function openModal(title, html) {
   $('modal').classList.remove('hidden');
   const form = $('modalContent').querySelector('form');
   $('modal').classList.toggle('flowModal', !!form);
-  attachMarathiHelp($('modalContent'));
   prepareInlineControls($('modalContent'));
   if (form) setupFormFlow(form);
   document.body.style.overflow = 'hidden';
-  setTimeout(() => {
-    const activeStep = $('modalContent').querySelector('.flowStep.active');
-    const control = activeStep?.querySelector('input:not([type="hidden"]):not(.inlineSelectSource), textarea, .inlineOptionRail')
-      || $('modalContent').querySelector('input:not([type="hidden"]):not(.inlineSelectSource), textarea, .inlineOptionRail, button:not(.marathiHelpStar)');
-    control?.focus();
-  }, 80);
+  setTimeout(() => $('modalContent').querySelector('.flowStep.active input:not([type="hidden"]), .flowStep.active textarea, input:not([type="hidden"]), textarea, button')?.focus(), 80);
 }
 function closeModal() {
   $('modal').classList.add('hidden');
@@ -365,136 +229,271 @@ function closeModal() {
   document.body.style.overflow = '';
 }
 
-function marathiHelpButton(key) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'marathiHelpStar';
-  button.textContent = '*';
-  button.setAttribute('aria-label', 'मराठीत समजावून सांगा');
-  button.title = 'मराठी मदत';
-  button.addEventListener('click', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    openMarathiHelp(key);
-  });
-  return button;
+function sakhiTourStorageKey() {
+  return `our_dhan_sakhi_practice_v1:${currentUser?.id || 'this-phone'}`;
 }
 
-function marathiHelpKeyForControl(control) {
-  if (SAKHI_FIELD_HELP[control.id]) return SAKHI_FIELD_HELP[control.id];
-  if (/^budgetAmount\d+$/.test(control.id)) return 'budget-amount';
-  if (/^budgetCurrency\d+$/.test(control.id)) return 'field-currency';
-  if (/^checkupBalance\d+$/.test(control.id)) return 'actual-balance';
-  if (control.type === 'date') return 'field-date';
-  if (control.type === 'number' || control.type === 'range') return 'field-amount';
-  if (control.tagName === 'SELECT') return 'field-choice';
-  if (control.tagName === 'TEXTAREA') return 'field-note';
-  if (['text', 'email', 'password', 'url'].includes(control.type)) return 'field-text';
-  return '';
+function sakhiTourCompleted() {
+  try { return !!safeParse(localStorage.getItem(sakhiTourStorageKey()))?.completedAt; }
+  catch (_error) { return false; }
 }
 
-function decorateMarathiHelp(target) {
-  const key = target.dataset.help;
-  if (!key || !SAKHI_HELP[key] || target.dataset.marathiHelpReady) return;
-  target.dataset.marathiHelpReady = 'true';
-  target.classList.add('marathiHelpTarget');
-  const helpButton = marathiHelpButton(key);
-  if (target.matches('label')) {
-    const textNode = [...target.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
-    if (!textNode) {
-      const control = target.querySelector('input,select,textarea');
-      const block = target.querySelector(':scope > div');
-      if (!block) return;
-      target.dataset.fieldLabel = control?.getAttribute('aria-label') || SAKHI_HELP[key].en;
-      block.classList.add('nestedFieldHelpCaption');
-      block.append(helpButton);
-      return;
-    }
-    const caption = document.createElement('span');
-    caption.className = 'fieldHelpCaption';
-    const labelText = textNode.textContent.trim();
-    target.dataset.fieldLabel = labelText;
-    caption.append(document.createTextNode(labelText), helpButton);
-    textNode.replaceWith(caption);
-    return;
-  }
-  if (target.matches('button')) {
-    const parent = target.parentElement;
-    if (!parent || parent.classList.contains('marathiHelpButtonWrap')) return;
-    const wrapper = document.createElement('div');
-    wrapper.className = 'marathiHelpButtonWrap';
-    parent.insertBefore(wrapper, target);
-    wrapper.append(target, helpButton);
-    return;
-  }
-  target.append(helpButton);
+function updateSakhiTourLauncher() {
+  const launcher = $('sakhiTourLauncher');
+  if (!launcher) return;
+  const completed = sakhiTourCompleted();
+  launcher.classList.toggle('completed', completed);
+  $('sakhiTourLauncherTitle').textContent = completed ? 'Replay Sakhi practice' : 'Sakhi practice';
+  $('sakhiTourLauncherText').textContent = completed
+    ? 'Practise again anytime · sample data only'
+    : 'Learn Our DHAN in 5 playful minutes · sample data only';
+  $('sakhiTourLauncherAction').textContent = completed ? 'Replay' : 'Start';
+  launcher.querySelector('.sakhiTourPlay').textContent = completed ? '↻' : '▶';
 }
 
-function attachMarathiHelp(root = document) {
-  const controls = [
-    ...(root.matches?.('input,select,textarea') ? [root] : []),
-    ...(root.querySelectorAll?.('input,select,textarea') || [])
-  ];
-  controls.forEach(control => {
-    if (control.type === 'hidden' || control.type === 'file') return;
-    const label = control.closest('label');
-    const key = marathiHelpKeyForControl(control);
-    if (label && key && !label.dataset.help) label.dataset.help = key;
-  });
-  const targets = [
-    ...(root.matches?.('[data-help]') ? [root] : []),
-    ...(root.querySelectorAll?.('[data-help]') || [])
-  ];
-  targets.forEach(decorateMarathiHelp);
+function freshSakhiPractice() {
+  return { action: '', actionCorrect: false, recordStage: 0, netWorthAnswer: 0, netWorthCorrect: false, buckets: [], routine: [] };
 }
 
-function showMarathiHelp(title, html) {
-  const wasHidden = $('marathiHelpModal').classList.contains('hidden');
-  if (wasHidden) marathiHelpReturnFocus = document.activeElement;
-  $('marathiHelpTitle').textContent = title;
-  $('marathiHelpContent').innerHTML = html;
-  $('marathiHelpModal').classList.remove('hidden');
-  if (!$('modal').classList.contains('hidden')) $('modal').setAttribute('aria-hidden', 'true');
+function openSakhiTour() {
+  sakhiTourReturnFocus = document.activeElement;
+  sakhiTourStep = 0;
+  sakhiTourCelebrated = false;
+  sakhiPractice = freshSakhiPractice();
+  $('sakhiTourModal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  setTimeout(() => $('marathiHelpContent').querySelector('button')?.focus(), 80);
+  renderSakhiTour();
 }
 
-function closeMarathiHelp() {
-  $('marathiHelpModal').classList.add('hidden');
-  $('marathiHelpContent').innerHTML = '';
-  $('modal').removeAttribute('aria-hidden');
+function closeSakhiTour() {
+  $('sakhiTourModal').classList.add('hidden');
+  $('sakhiTourContent').innerHTML = '';
   document.body.style.overflow = $('modal').classList.contains('hidden') ? '' : 'hidden';
-  const returnFocus = marathiHelpReturnFocus;
-  marathiHelpReturnFocus = null;
+  const returnFocus = sakhiTourReturnFocus;
+  sakhiTourReturnFocus = null;
   if (returnFocus?.isConnected) setTimeout(() => returnFocus.focus(), 0);
 }
 
-function openSakhiGuide() {
-  const groups = SAKHI_GUIDE_GROUPS.map((group, index) => `<details class="sakhiGuideGroup"${index === 0 ? ' open' : ''}>
-    <summary>${esc(group.title)}</summary>
-    <div class="sakhiTopicGrid">${group.keys.map(key => {
-      const item = SAKHI_HELP[key];
-      return `<button class="sakhiTopic" type="button" onclick="openMarathiHelp('${esc(key)}')"><b lang="mr">${esc(item.mr)}</b><small>${esc(item.en)}</small></button>`;
-    }).join('')}</div>
-  </details>`).join('');
-  showMarathiHelp('सखीचा मराठी मार्गदर्शक', `<div class="sakhiGuide" lang="mr">
-    <div class="sakhiGuideIntro"><b>Our DHAN समजून घेणे आता सोपे आहे</b>स्क्रीनवर जिथे लहान <strong>*</strong> दिसेल तिथे टॅप करा. त्या प्रश्नाचा किंवा feature चा अर्थ, काय करायचे आणि कोणती चूक टाळायची हे मराठीत दिसेल.</div>
-    <div class="sakhiGuideGroups">${groups}</div>
-  </div>`);
+function sakhiTourFooter(enabled = true, label = 'Continue') {
+  return `<footer class="sakhiTourFooter">
+    ${sakhiTourStep > 0 ? '<button class="sakhiTourBack" type="button" onclick="sakhiTourBack()">Back</button>' : ''}
+    <button class="sakhiTourContinue" type="button" onclick="sakhiTourNext()"${enabled ? '' : ' disabled'}>${label}</button>
+  </footer>`;
 }
 
-function openMarathiHelp(key) {
-  const item = SAKHI_HELP[key];
-  if (!item) { openSakhiGuide(); return; }
-  showMarathiHelp('मराठी मदत', `<div class="sakhiHelpDetail" lang="mr">
-    <div class="sakhiHelpHero"><span>* सखी मार्गदर्शक</span><h3>${esc(item.mr)}</h3><small>English: ${esc(item.en)}</small></div>
-    <div class="sakhiHelpBlocks">
-      <div class="sakhiHelpBlock"><b>याचा अर्थ काय?</b><p>${esc(item.body)}</p></div>
-      <div class="sakhiHelpBlock"><b>काय करायचे?</b><p>${esc(item.action)}</p></div>
-      ${item.tip ? `<div class="sakhiHelpBlock warning"><b>लक्षात ठेवा</b><p>${esc(item.tip)}</p></div>` : ''}
+function sakhiTourWelcomeHtml() {
+  return `<section class="sakhiTourStep">
+    <span class="sakhiTourEyebrow">LEARN BY TAPPING</span>
+    <h2>Money practice, without the worry.</h2>
+    <p class="sakhiTourLead">A short guided game for Sakhi. It uses pretend money and teaches the few actions that matter most.</p>
+    <p class="sakhiTourMarathi" lang="mr">हा फक्त सराव आहे. तुमचे खरे पैसे किंवा नोंदी बदलणार नाहीत.</p>
+    <div class="sakhiTourHeroArt" aria-hidden="true"><i class="sakhiTourSpark one"></i><div class="sakhiTourCoin">₹</div><i class="sakhiTourSpark two"></i></div>
+    <span class="sakhiTourSafety">Practice only · nothing is saved</span>
+    ${sakhiTourFooter(true, 'Start practice')}
+  </section>`;
+}
+
+function sakhiTourActionHtml() {
+  const options = [
+    ['spend', '−', 'Add spend', 'Money left an account'],
+    ['income', '＋', 'Add income', 'Money arrived'],
+    ['transfer', '⇄', 'Transfer', 'Money moved between our accounts']
+  ];
+  const feedback = !sakhiPractice.action ? '' : sakhiPractice.actionCorrect
+    ? '<div class="sakhiTourFeedback correct"><b>Exactly.</b> Groceries reduce the balance of the account that paid.</div>'
+    : '<div class="sakhiTourFeedback"><b>Almost.</b> The money left an account, so try Add spend.</div>';
+  return `<section class="sakhiTourStep">
+    <span class="sakhiTourEyebrow">LESSON 1 · PICK THE ACTION</span>
+    <h2>We paid MVR 250 for groceries.</h2>
+    <p class="sakhiTourLead">Which button should Sakhi use?</p>
+    <p class="sakhiTourMarathi" lang="mr">किराणा खरेदीसाठी योग्य पर्याय निवडा.</p>
+    <div class="sakhiTourOptions">${options.map(([value, icon, title, note]) => {
+      const selected = sakhiPractice.action === value;
+      const className = selected ? (value === 'spend' ? ' correct' : ' selected') : '';
+      return `<button class="sakhiTourOption${className}" type="button" aria-pressed="${selected}" onclick="chooseSakhiTourAction('${value}')"><span>${icon}</span><span><b>${title}</b><small>${note}</small></span><i>${value === 'spend' && selected ? '✓' : ''}</i></button>`;
+    }).join('')}</div>
+    ${feedback}
+    ${sakhiTourFooter(sakhiPractice.actionCorrect)}
+  </section>`;
+}
+
+function sakhiTourRecordHtml() {
+  const rows = [
+    ['Date, amount and currency', 'Today · MVR 250', 'Looks right'],
+    ['Paid from', 'Main account', 'Choose'],
+    ['What was it for?', 'Food', 'Choose'],
+    ['Who paid?', 'Sakhi', 'Choose'],
+    ['Note', 'Groceries', 'Use note']
+  ];
+  const rowHtml = rows.map(([label, value, action], index) => {
+    if (index < sakhiPractice.recordStage) return `<div class="sakhiPracticeRow done"><span>${label}</span><b>✓ ${value}</b></div>`;
+    if (index === sakhiPractice.recordStage) return `<div class="sakhiPracticeRow active"><span>${label}</span><button type="button" onclick="advanceSakhiPractice()">${action}: ${value}</button></div>`;
+    return `<div class="sakhiPracticeRow"><span>${label}</span><b>—</b></div>`;
+  }).join('');
+  return `<section class="sakhiTourStep">
+    <span class="sakhiTourEyebrow">LESSON 2 · REHEARSE A SPEND</span>
+    <h2>One small step at a time.</h2>
+    <p class="sakhiTourLead">Tap the highlighted row. This follows the same order as the real Add spend screen.</p>
+    <p class="sakhiTourMarathi" lang="mr">एकावेळी एक पायरी पूर्ण करा. हा सराव खऱ्या खात्यात जतन होणार नाही.</p>
+    <div class="sakhiPracticeCard">
+      <div class="sakhiPracticeAmount"><div><span>Practice amount</span><b>MVR 250</b></div><i>Sample</i></div>
+      <div class="sakhiPracticeRows">${rowHtml}</div>
     </div>
-    <div class="sakhiHelpActions"><button class="secondary" type="button" onclick="openSakhiGuide()">संपूर्ण मार्गदर्शक</button><button class="primary" type="button" onclick="closeMarathiHelp()">समजले</button></div>
-  </div>`);
+    ${sakhiPractice.recordStage >= rows.length ? '<div class="sakhiPracticeResult"><span>Main account changes by</span><b>− MVR 250</b></div>' : ''}
+    ${sakhiTourFooter(sakhiPractice.recordStage >= rows.length)}
+  </section>`;
+}
+
+function sakhiTourWorthHtml() {
+  const answers = [6500, 11500, 18500];
+  const feedback = !sakhiPractice.netWorthAnswer ? '' : sakhiPractice.netWorthCorrect
+    ? '<div class="sakhiTourFeedback correct"><b>That is it.</b> MVR 10,000 + MVR 5,000 − MVR 3,500 = MVR 11,500.</div>'
+    : '<div class="sakhiTourFeedback"><b>Try once more.</b> Debt is subtracted, not added.</div>';
+  return `<section class="sakhiTourStep">
+    <span class="sakhiTourEyebrow">LESSON 3 · READ THE MONEY PAGE</span>
+    <h2>What is our net worth?</h2>
+    <p class="sakhiTourLead">Accounts and assets help it grow. Debt pulls it down.</p>
+    <p class="sakhiTourMarathi" lang="mr">खाती + मालमत्ता − कर्ज = निव्वळ संपत्ती.</p>
+    <div class="sakhiWorthEquation">
+      <div class="sakhiWorthTerm"><span>Accounts</span><b>MVR 10,000</b></div><i class="sakhiWorthSymbol">+</i>
+      <div class="sakhiWorthTerm asset"><span>Assets</span><b>MVR 5,000</b></div><i class="sakhiWorthSymbol">−</i>
+      <div class="sakhiWorthTerm debt"><span>Debt</span><b>MVR 3,500</b></div>
+    </div>
+    <div class="sakhiWorthAnswerGrid">${answers.map(value => {
+      const selected = sakhiPractice.netWorthAnswer === value;
+      const className = selected ? (value === 11500 ? ' correct' : ' selected') : '';
+      return `<button class="sakhiWorthAnswer${className}" type="button" onclick="chooseSakhiNetWorth(${value})">MVR ${value.toLocaleString('en-US')}</button>`;
+    }).join('')}</div>
+    ${feedback}
+    ${sakhiTourFooter(sakhiPractice.netWorthCorrect)}
+  </section>`;
+}
+
+function sakhiTourBucketsHtml() {
+  const buckets = [
+    ['needs', '40%', 'Needs', 'Home, food, bills and transport'],
+    ['debt', '30%', 'Debt', 'Clear expensive debt faster'],
+    ['future', '20%', 'Future', 'Emergency fund, goals and investing'],
+    ['wants', '10%', 'Wants', 'Enjoyment after the important jobs']
+  ];
+  const allSeen = sakhiPractice.buckets.length === buckets.length;
+  return `<section class="sakhiTourStep">
+    <span class="sakhiTourEyebrow">LESSON 4 · GIVE MONEY A JOB</span>
+    <h2>Tap all four colours.</h2>
+    <p class="sakhiTourLead">The percentages are guides. Unused money can always go to debt or the future.</p>
+    <p class="sakhiTourMarathi" lang="mr">४०% गरजा, ३०% कर्ज, २०% भविष्य, १०% इच्छा.</p>
+    <div class="sakhiBucketGrid">${buckets.map(([key, pct, title, note]) => `<button class="sakhiBucket${sakhiPractice.buckets.includes(key) ? ' revealed' : ''}" type="button" aria-pressed="${sakhiPractice.buckets.includes(key)}" onclick="revealSakhiBucket('${key}')"><strong>${pct}</strong><b>${title}</b><small>${note}</small></button>`).join('')}</div>
+    ${allSeen ? '<div class="sakhiTourFeedback correct"><b>Four jobs, one plan.</b> The app turns salary into these targets automatically.</div>' : ''}
+    ${sakhiTourFooter(allSeen)}
+  </section>`;
+}
+
+function sakhiTourRoutineHtml() {
+  const items = [
+    ['daily', '✍️', 'Daily', 'Record money when it moves'],
+    ['weekly', '◉', 'Weekly', 'Check balances, rates and one next move'],
+    ['monthly', '✓', 'Monthly', 'Use the plan and close the month together']
+  ];
+  const complete = sakhiPractice.routine.length === items.length;
+  return `<section class="sakhiTourStep">
+    <span class="sakhiTourEyebrow">LESSON 5 · KEEP IT EASY</span>
+    <h2>Three tiny money habits.</h2>
+    <p class="sakhiTourLead">Tap each one to make a routine that both of you can remember.</p>
+    <p class="sakhiTourMarathi" lang="mr">रोज नोंद, आठवड्यातून तपासणी, महिन्यातून योजना.</p>
+    <div class="sakhiRoutine">${items.map(([key, icon, title, note]) => {
+      const done = sakhiPractice.routine.includes(key);
+      return `<button class="sakhiRoutineItem${done ? ' done' : ''}" type="button" aria-pressed="${done}" onclick="completeSakhiRoutine('${key}')"><span>${icon}</span><span><b>${title}</b><small>${note}</small></span><i class="sakhiRoutineCheck">✓</i></button>`;
+    }).join('')}</div>
+    ${complete ? '<div class="sakhiTourFeedback correct"><b>Perfect.</b> Honest small updates beat complicated finance systems.</div>' : ''}
+    ${sakhiTourFooter(complete, 'Finish practice')}
+  </section>`;
+}
+
+function sakhiTourDoneHtml() {
+  return `<section class="sakhiTourStep sakhiTourDone">
+    <div class="sakhiTourDoneMark">✓</div>
+    <span class="sakhiTourEyebrow">PRACTICE COMPLETE</span>
+    <h2>Sakhi is ready.</h2>
+    <p class="sakhiTourLead">You practised the full rhythm: record what moved, understand the big picture, and follow the plan together.</p>
+    <p class="sakhiTourMarathi" lang="mr">छान! आता Our DHAN वापरणे सोपे होईल. सरावातील कोणतीही माहिती जतन झालेली नाही.</p>
+    <div class="sakhiTourDoneActions"><button class="primary" type="button" onclick="openRealSpendFromTour()">Try a real spend</button><button class="secondary" type="button" onclick="closeSakhiTour()">Done for now</button></div>
+  </section>`;
+}
+
+function renderSakhiTour() {
+  if (!sakhiPractice) sakhiPractice = freshSakhiPractice();
+  const screens = [sakhiTourWelcomeHtml, sakhiTourActionHtml, sakhiTourRecordHtml, sakhiTourWorthHtml, sakhiTourBucketsHtml, sakhiTourRoutineHtml, sakhiTourDoneHtml];
+  const progress = Math.min(100, Math.max(0, sakhiTourStep * 20));
+  $('sakhiTourCounter').textContent = sakhiTourStep === 0 ? 'Sakhi practice' : sakhiTourStep === 6 ? 'Practice complete' : `Lesson ${sakhiTourStep} of 5`;
+  $('sakhiTourProgressBar').style.width = `${progress}%`;
+  $('sakhiTourProgressBar').parentElement.setAttribute('aria-valuenow', String(progress));
+  $('sakhiTourContent').innerHTML = screens[sakhiTourStep]();
+  $('sakhiTourContent').scrollTop = 0;
+  requestAnimationFrame(() => $('sakhiTourContent').querySelector('button')?.focus({ preventScroll: true }));
+}
+
+function sakhiTourNext() {
+  if (sakhiTourStep === 1 && !sakhiPractice.actionCorrect) return;
+  if (sakhiTourStep === 2 && sakhiPractice.recordStage < 5) return;
+  if (sakhiTourStep === 3 && !sakhiPractice.netWorthCorrect) return;
+  if (sakhiTourStep === 4 && sakhiPractice.buckets.length < 4) return;
+  if (sakhiTourStep === 5 && sakhiPractice.routine.length < 3) return;
+  if (sakhiTourStep === 5) { finishSakhiTour(); return; }
+  sakhiTourStep = Math.min(6, sakhiTourStep + 1);
+  haptic();
+  renderSakhiTour();
+}
+
+function sakhiTourBack() {
+  sakhiTourStep = Math.max(0, sakhiTourStep - 1);
+  haptic();
+  renderSakhiTour();
+}
+
+function chooseSakhiTourAction(value) {
+  sakhiPractice.action = value;
+  sakhiPractice.actionCorrect = value === 'spend';
+  if (sakhiPractice.actionCorrect) haptic();
+  renderSakhiTour();
+}
+
+function advanceSakhiPractice() {
+  sakhiPractice.recordStage = Math.min(5, sakhiPractice.recordStage + 1);
+  haptic();
+  renderSakhiTour();
+}
+
+function chooseSakhiNetWorth(value) {
+  sakhiPractice.netWorthAnswer = value;
+  sakhiPractice.netWorthCorrect = value === 11500;
+  if (sakhiPractice.netWorthCorrect) haptic();
+  renderSakhiTour();
+}
+
+function revealSakhiBucket(key) {
+  if (!sakhiPractice.buckets.includes(key)) sakhiPractice.buckets.push(key);
+  haptic();
+  renderSakhiTour();
+}
+
+function completeSakhiRoutine(key) {
+  if (!sakhiPractice.routine.includes(key)) sakhiPractice.routine.push(key);
+  haptic();
+  renderSakhiTour();
+}
+
+function finishSakhiTour() {
+  try { localStorage.setItem(sakhiTourStorageKey(), JSON.stringify({ completedAt: new Date().toISOString() })); }
+  catch (_error) { /* The tour still works if private storage is unavailable. */ }
+  sakhiTourStep = 6;
+  updateSakhiTourLauncher();
+  renderSakhiTour();
+  if (!sakhiTourCelebrated) { sakhiTourCelebrated = true; celebrate(); haptic(); }
+}
+
+function openRealSpendFromTour() {
+  closeSakhiTour();
+  openQuickExpense();
 }
 
 function numberPrecision(input) {
@@ -665,8 +664,7 @@ function showFormStep(form, requestedIndex) {
   form.querySelectorAll(':scope > .flowStep').forEach(step => step.classList.toggle('active', step === available[index]));
   available.forEach((step, stepIndex) => {
     const head = step.querySelector(':scope > .flowStepHead');
-    const label = step.querySelector('label');
-    const title = step.dataset.flowTitle || label?.dataset.fieldLabel || label?.childNodes[0]?.textContent?.trim() || 'Next detail';
+    const title = step.dataset.flowTitle || step.querySelector('label')?.childNodes[0]?.textContent?.trim() || 'Next detail';
     if (head) head.innerHTML = `<span>Step ${stepIndex + 1} of ${available.length}</span><b>${esc(title)}</b><i style="--flow-progress:${(stepIndex + 1) / available.length * 100}%"></i>`;
   });
   requestAnimationFrame(() => {
@@ -1597,8 +1595,8 @@ function openDebtSimulator() {
 }
 
 function paydayAssistantHtml(metrics, buckets) {
-  if (!(metrics.incomeUSD > 0)) return `<div class="paydayTop"><div><h3 data-help="payday-assistant">Payday assistant</h3><p>Add salary and the app will turn 40–30–20–10 into exact actions.</p></div><button class="primary compact" onclick="openQuickIncome({category:'Salary'})">Add salary</button></div>`;
-  return `<div class="paydayTop"><div><h3 data-help="payday-assistant">Payday assistant</h3><p>One salary, four simple jobs. These targets update automatically.</p></div><button class="primary compact" onclick="openPaydayAssistant()">Use plan</button></div>
+  if (!(metrics.incomeUSD > 0)) return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>Add salary and the app will turn 40–30–20–10 into exact actions.</p></div><button class="primary compact" onclick="openQuickIncome({category:'Salary'})">Add salary</button></div>`;
+  return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>One salary, four simple jobs. These targets update automatically.</p></div><button class="primary compact" onclick="openPaydayAssistant()">Use plan</button></div>
     <div class="paydayBuckets">${buckets.map(bucket => `<div><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b></div>`).join('')}</div>`;
 }
 
@@ -1710,7 +1708,7 @@ function moneyDateHtml(metrics) {
       : activeSinkingFunds().some(fund => fund.lastReservedMonth !== monthStart()) ? 'Make this month’s first sinking-fund set-aside.'
         : activeDebts().some(debt => debt.remaining > 0) ? 'Record the next debt payment when it leaves the bank.'
           : 'Choose one small amount to move toward your nearest goal.';
-  return `<div class="moneyDateTop"><div><div class="eyebrow">5-MINUTE MONEY DATE</div><h2 data-help="money-date">${review ? 'Reviewed together ✓' : 'One calm check-in'}</h2><p>${review ? `This week’s action: ${esc(review.nextAction || action)}` : 'Look at the facts, celebrate one win, and agree on one action.'}</p></div><div class="coupleMark">D<span>♥</span>S</div></div>
+  return `<div class="moneyDateTop"><div><div class="eyebrow">5-MINUTE MONEY DATE</div><h2>${review ? 'Reviewed together ✓' : 'One calm check-in'}</h2><p>${review ? `This week’s action: ${esc(review.nextAction || action)}` : 'Look at the facts, celebrate one win, and agree on one action.'}</p></div><div class="coupleMark">D<span>♥</span>S</div></div>
     <div class="moneyDateStats"><div><span>Came in</span><b>${baseMoney(income)}</b></div><div><span>Went out</span><b>${baseMoney(spent)}</b></div><div><span>Net worth</span><b>${baseMoney(metrics.netWorthUSD)}</b></div>${goal ? `<div><span>${esc(goal.name)}</span><b>${Math.round(goal.saved / Math.max(.01, goal.target) * 100)}%</b></div>` : '<div><span>Goals</span><b>Start one</b></div>'}</div>
     <div class="moneyDateAction"><span>Suggested action</span><b>${esc(action)}</b></div>
     <button class="${review ? 'secondary' : 'primary'} wide" onclick="openMoneyDate()">${review ? 'Update this week' : 'Review together'}</button>`;
@@ -1943,7 +1941,7 @@ function render() {
   const emergencySixUSD = essentialsBudgetUSD * 6;
   const emergencyGoal = activeGoals().find(goal => /emergency/i.test(goal.name));
   const emergencySavedUSD = emergencyGoal ? usd(emergencyGoal.saved, emergencyGoal.currency) : 0;
-  $('emergencyFundCard').innerHTML = `<div class="emergencyTop"><div class="emergencyIcon">☂️</div><div><h3 data-help="emergency-fund">Emergency fund</h3><p>Based on essential category limits of ${baseMoney(essentialsBudgetUSD)} a month. Start with 3 months, then grow toward 6.</p></div></div><div class="emergencyNumbers"><div><span>First target · 3 months</span><b>${baseMoney(emergencyThreeUSD)}</b></div><div><span>Strong target · 6 months</span><b>${baseMoney(emergencySixUSD)}</b></div></div><div class="progress" style="margin-top:11px"><i style="width:${Math.min(100, emergencySavedUSD / Math.max(.01, emergencyThreeUSD) * 100)}%"></i></div><div class="cardActions" style="margin-top:10px">${emergencyGoal ? `<button class="linkBtn" onclick="openGoalContribution('${emergencyGoal.id}')">＋ Add saving</button>` : `<button class="linkBtn" onclick="createEmergencyGoal()">Create this goal</button>`}</div>`;
+  $('emergencyFundCard').innerHTML = `<div class="emergencyTop"><div class="emergencyIcon">☂️</div><div><h3>Emergency fund</h3><p>Based on essential category limits of ${baseMoney(essentialsBudgetUSD)} a month. Start with 3 months, then grow toward 6.</p></div></div><div class="emergencyNumbers"><div><span>First target · 3 months</span><b>${baseMoney(emergencyThreeUSD)}</b></div><div><span>Strong target · 6 months</span><b>${baseMoney(emergencySixUSD)}</b></div></div><div class="progress" style="margin-top:11px"><i style="width:${Math.min(100, emergencySavedUSD / Math.max(.01, emergencyThreeUSD) * 100)}%"></i></div><div class="cardActions" style="margin-top:10px">${emergencyGoal ? `<button class="linkBtn" onclick="openGoalContribution('${emergencyGoal.id}')">＋ Add saving</button>` : `<button class="linkBtn" onclick="createEmergencyGoal()">Create this goal</button>`}</div>`;
 
   const debtPlan = simulateDebtPlan(metrics.incomeUSD);
   document.querySelectorAll('#debtStrategyTabs button').forEach(button => button.classList.toggle('active', button.dataset.strategy === state.settings.debtStrategy));
@@ -2005,6 +2003,7 @@ function render() {
   $('rateAED').value = state.settings.rates.AED;
   $('rateMVR').value = state.settings.rates.MVR;
   $('rateINR').value = state.settings.rates.INR;
+  updateSakhiTourLauncher();
   queueMicrotask(() => syncAllInlineControls());
 }
 
@@ -3005,19 +3004,15 @@ async function signOut() {
 }
 
 $('modal').addEventListener('click', event => { if (event.target === $('modal')) closeModal(); });
-$('marathiHelpModal').addEventListener('click', event => { if (event.target === $('marathiHelpModal')) closeMarathiHelp(); });
+$('sakhiTourModal').addEventListener('click', event => { if (event.target === $('sakhiTourModal')) closeSakhiTour(); });
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && !$('marathiHelpModal').classList.contains('hidden')) { closeMarathiHelp(); return; }
+  if (event.key === 'Escape' && !$('sakhiTourModal').classList.contains('hidden')) { closeSakhiTour(); return; }
   if (event.key === 'Escape' && !$('modal').classList.contains('hidden')) { closeModal(); return; }
 });
 const wheelObserver = new MutationObserver(mutations => mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
-  if (node.nodeType === Node.ELEMENT_NODE) {
-    attachMarathiHelp(node);
-    prepareInlineControls(node);
-  }
+  if (node.nodeType === Node.ELEMENT_NODE) prepareInlineControls(node);
 })));
 wheelObserver.observe(document.body, { childList: true, subtree: true });
-attachMarathiHelp();
 prepareInlineControls();
 setupFormFlow($('settingsFlow'));
 
