@@ -899,6 +899,75 @@ h3 { font-weight: 680; }
 
 @keyframes flowIn { from { opacity: 0; transform: translateX(16px); } }
 
+/* Daily snapshot and period statements */
+.todayMoneyHighlight { margin-bottom: 18px; }
+.todayMoneyCard {
+  padding: 18px;
+  border: 1px solid rgba(0,0,0,.025);
+  border-radius: 24px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 1px 2px rgba(0,0,0,.025);
+}
+.todayMoneyTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.todayMoneyTop > div { min-width: 0; }
+.todayMoneyTop span { color: var(--green-2); font-size: 8px; font-weight: 750; letter-spacing: .1em; }
+.todayMoneyTop h2 { margin-top: 4px; }
+.todayMoneyTop p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.todayMoneyTop > button { flex: none; padding: 8px 11px; border-radius: 999px; background: var(--mint); color: var(--green); font-size: 9px; font-weight: 700; }
+.todayMoneyStats, .statementTotals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.todayMoneyStats { margin-top: 15px; }
+.todayMoneyStats > div, .statementTotals > div { min-width: 0; padding: 12px; border-radius: 16px; background: #f5f5f7; }
+.todayMoneyStats span, .statementTotals span { display: block; color: var(--muted); font-size: 8px; }
+.todayMoneyStats b, .statementTotals b { display: block; margin-top: 5px; font-size: 14px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.todayMoneyStats .income, .statementTotals .income { background: var(--mint); color: var(--green); }
+.todayMoneyStats .expense, .statementTotals .expense { background: var(--coral-soft); color: var(--coral); }
+.todayMoneyStats .net, .statementTotals .net { background: var(--blue-soft); color: var(--blue); }
+.todayBudgetTitle { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 18px 0 9px; }
+.todayBudgetTitle > div { min-width: 0; }
+.todayBudgetTitle b { display: block; font-size: 11px; }
+.todayBudgetTitle span, .todayBudgetTitle small { display: block; margin-top: 3px; color: var(--muted); font-size: 8px; }
+.todayBudgetTitle small { flex: none; }
+.todayBudgetGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.todayBudgetItem { min-width: 0; padding: 11px; border-radius: 16px; background: #f7f7f8; }
+.todayBudgetItem > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.todayBudgetItem b { min-width: 0; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.todayBudgetItem span { flex: none; color: var(--muted); font-size: 8px; }
+.todayBudgetItem strong { display: block; margin-top: 7px; color: var(--green); font-size: 13px; overflow-wrap: anywhere; }
+.todayBudgetItem > small { display: block; margin-top: 5px; color: var(--muted); font-size: 8px; line-height: 1.35; }
+.todayBudgetBar { height: 5px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: #e2e2e6; }
+.todayBudgetBar i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--green-2); transition: width .65s cubic-bezier(.2,.8,.2,1); }
+.todayBudgetItem.over { background: var(--coral-soft); }
+.todayBudgetItem.over strong { color: var(--coral); }
+.todayBudgetItem.over .todayBudgetBar i { background: var(--coral); }
+.todayBudgetEmpty { padding: 14px; border-radius: 16px; background: var(--sun-soft); color: #76520f; font-size: 10px; line-height: 1.45; }
+
+.statementPanel { padding: 16px; border: 1px solid rgba(0,0,0,.025); border-radius: 24px; background: rgba(255,255,255,.94); box-shadow: 0 1px 2px rgba(0,0,0,.025); }
+.statementPeriodTabs, .statementKindTabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.statementPeriodTabs::-webkit-scrollbar, .statementKindTabs::-webkit-scrollbar { display: none; }
+.statementPeriodTabs button, .statementKindTabs button { flex: none; padding: 9px 11px; border-radius: 999px; background: #f0f0f2; color: var(--muted); font-size: 9px; font-weight: 700; white-space: nowrap; }
+.statementPeriodTabs button.active, .statementKindTabs button.active { background: var(--ink); color: white; }
+.statementCustomRange { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; padding: 12px; border-radius: 17px; background: #f5f5f7; }
+.statementCustomRange label { display: grid; gap: 5px; color: var(--muted); font-size: 8px; font-weight: 700; }
+.statementCustomRange input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: white; font-size: 11px; }
+.statementSummary { margin-top: 13px; }
+.statementRangeLabel { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.statementRangeLabel span { min-width: 0; color: var(--muted); font-size: 9px; }
+.statementRangeLabel b { flex: none; font-size: 9px; }
+.statementKindTabs { margin: 13px 0 6px; }
+.statementKindTabs button { padding-block: 7px; }
+.statementList { display: grid; }
+.statementEntry { min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.statementEntry:last-child { border-bottom: 0; }
+.statementEntryIcon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 12px; background: var(--coral-soft); font-size: 16px; }
+.statementEntry.income .statementEntryIcon { background: var(--mint); }
+.statementEntryCopy { min-width: 0; }
+.statementEntryCopy b { display: block; font-size: 10px; }
+.statementEntryCopy span { display: block; margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 8px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.statementEntry > strong { color: var(--coral); font-size: 10px; text-align: right; white-space: nowrap; }
+.statementEntry.income > strong { color: var(--green-2); }
+.statementEmpty, .statementLimitNote { padding: 18px 8px 10px; color: var(--muted); font-size: 10px; line-height: 1.45; text-align: center; }
+.statementLimitNote { padding-top: 12px; }
+
 /* Optional Sakhi practice — separate from the real money screens */
 .sakhiTourLauncher {
   width: 100%;
@@ -1060,6 +1129,11 @@ h3 { font-weight: 680; }
   .quickAction > span { width: 32px; height: 32px; margin: 0; border-radius: 11px; font-size: 18px; }
   .quickAction b { font-size: 11px; }
   .safeCard { padding: 20px; }
+  .todayMoneyCard, .statementPanel { padding: 14px; border-radius: 21px; }
+  .todayMoneyStats, .statementTotals { grid-template-columns: 1fr 1fr; }
+  .todayMoneyStats > div:last-child, .statementTotals > div:last-child { grid-column: 1 / -1; }
+  .todayBudgetItem > div:first-child { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .statementEntryCopy span { white-space: normal; }
   .flowStep { min-height: calc(100svh - 112px); }
   .sakhiTourLauncher { grid-template-columns: 40px minmax(0, 1fr) auto; padding: 10px 11px; }
   .sakhiTourPlay { width: 40px; height: 40px; border-radius: 14px; }
@@ -1073,6 +1147,12 @@ h3 { font-weight: 680; }
   .sakhiWorthTerm { padding: 12px 4px; }
   .sakhiWorthTerm b { font-size: 11px; }
   .sakhiTourFooter { position: sticky; bottom: 0; padding: 12px 0 2px; background: linear-gradient(transparent, rgba(255,255,255,.98) 22%); }
+}
+
+@media (max-width: 355px) {
+  .todayBudgetGrid, .statementCustomRange { grid-template-columns: 1fr; }
+  .statementEntry { grid-template-columns: 36px minmax(0, 1fr); }
+  .statementEntry > strong { grid-column: 2; justify-self: start; }
 }
 
 @media (prefers-reduced-motion: reduce) {
