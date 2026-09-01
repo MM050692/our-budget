@@ -48,6 +48,10 @@ let currentPage = 'today';
 let wealthChartMode = 'actual';
 let timelineFilter = 'all';
 let cashflowDays = 30;
+let statementPeriod = 'month';
+let statementKind = 'all';
+let statementFrom = '';
+let statementTo = '';
 let calendarMonth = '';
 let toastTimer = null;
 let pendingQuickAction = new URLSearchParams(location.search).get('quick') || '';
@@ -1296,6 +1300,51 @@ function transactionHtml(transaction, actions = false) {
   </div>`;
 }
 
+function todayMoneyHighlightHtml(metrics = moneyMetrics()) {
+  const dayTransactions = state.transactions.filter(transaction =>
+    transaction.date === today() &&
+    transaction.type !== 'transfer' &&
+    transaction.category !== 'Balance adjustment'
+  );
+  const incomeUSD = dayTransactions.filter(transaction => transaction.type === 'income')
+    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const spentUSD = dayTransactions.filter(transaction => transaction.type === 'expense')
+    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const netUSD = incomeUSD - spentUSD;
+  const budgetEntries = Object.entries(state.budgets);
+  const budgets = budgetEntries.length ? budgetEntries.map(([category, budget]) => {
+    const limitUSD = usd(budget.amount, budget.currency);
+    const monthSpentUSD = metrics.monthTx
+      .filter(transaction => transaction.type === 'expense' && transaction.category === category)
+      .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+    const todaySpentUSD = dayTransactions
+      .filter(transaction => transaction.type === 'expense' && transaction.category === category)
+      .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+    const remainingUSD = limitUSD - monthSpentUSD;
+    const used = limitUSD > .005 ? Math.min(100, Math.max(0, monthSpentUSD / limitUSD * 100)) : 0;
+    return { category, limitUSD, monthSpentUSD, todaySpentUSD, remainingUSD, used };
+  }) : [];
+  return `<section class="todayMoneyCard">
+    <div class="todayMoneyTop"><div><span>TODAY'S MONEY</span><h2>Income and spending</h2><p>Updates automatically when either of you records money.</p></div><button type="button" onclick="openStatementFor('today')">Statement</button></div>
+    <div class="todayMoneyStats">
+      <div class="income"><span>Came in</span><b>${baseMoney(incomeUSD)}</b></div>
+      <div class="expense"><span>Went out</span><b>${baseMoney(spentUSD)}</b></div>
+      <div class="${netUSD < 0 ? 'expense' : 'net'}"><span>Today's difference</span><b>${netUSD < 0 ? '− ' : '+ '}${baseMoney(Math.abs(netUSD))}</b></div>
+    </div>
+    <div class="todayBudgetTitle"><div><b>Category budget remaining</b><span>This month · after all recorded spending</span></div><small>${dayTransactions.length} record${dayTransactions.length === 1 ? '' : 's'} today</small></div>
+    ${budgets.length ? `<div class="todayBudgetGrid">${budgets.map(item => {
+      const over = item.remainingUSD < -.005;
+      const limitMissing = item.limitUSD <= .005;
+      return `<div class="todayBudgetItem${over ? ' over' : ''}">
+        <div><b>${esc(item.category)}</b><span>${item.todaySpentUSD > .005 ? `${baseMoney(item.todaySpentUSD)} today` : 'No spend today'}</span></div>
+        <strong>${limitMissing ? 'No budget' : over ? `${baseMoney(Math.abs(item.remainingUSD))} over` : `${baseMoney(item.remainingUSD)} left`}</strong>
+        <div class="todayBudgetBar"><i style="width:${item.used}%"></i></div>
+        <small>${limitMissing ? 'Set a limit in Plan' : `${baseMoney(item.monthSpentUSD)} of ${baseMoney(item.limitUSD)} used`}</small>
+      </div>`;
+    }).join('')}</div>` : '<div class="todayBudgetEmpty">Set category limits in Plan to see what remains here.</div>'}
+  </section>`;
+}
+
 function actualChartHtml(metrics) {
   const pointsData = [...state.snapshots].sort((a, b) => a.date.localeCompare(b.date));
   if (!pointsData.length) return '<div class="emptyChart"><b>Your honest starting point begins today</b><span>The app will save one net-worth point per day automatically.</span></div>';
@@ -1621,6 +1670,101 @@ function openPaydayAssistant() {
   </div>`);
 }
 
+function statementRange() {
+  const end = today();
+  if (statementPeriod === 'today') return { from: end, to: end };
+  if (statementPeriod === '30days') return { from: addDays(end, -29), to: end };
+  if (statementPeriod === 'month') return { from: monthStart(), to: end };
+  let from = statementFrom || monthStart();
+  let to = statementTo || end;
+  if (from > end) from = end;
+  if (to > end) to = end;
+  if (from > to) [from, to] = [to, from];
+  statementFrom = from;
+  statementTo = to;
+  return { from, to };
+}
+
+function statementTransactions(kind = statementKind) {
+  const range = statementRange();
+  return state.transactions.filter(transaction =>
+    transaction.date >= range.from &&
+    transaction.date <= range.to &&
+    ['income', 'expense'].includes(transaction.type) &&
+    transaction.category !== 'Balance adjustment' &&
+    (kind === 'all' || transaction.type === kind)
+  ).sort((a, b) => `${b.date}${b.createdAt || ''}`.localeCompare(`${a.date}${a.createdAt || ''}`));
+}
+
+function statementTransactionHtml(transaction) {
+  const source = accountName(transaction.accountId) || transaction.account || 'Not linked';
+  const amount = `${transaction.type === 'income' ? '+' : '−'} ${money(transaction.amount, transaction.currency)}`;
+  return `<div class="statementEntry ${transaction.type}">
+    <div class="statementEntryIcon">${txIcon(transaction)}</div>
+    <div class="statementEntryCopy"><b>${esc(transaction.category)}</b><span>${esc(formatDate(transaction.date, { day: 'numeric', month: 'short', year: 'numeric' }))} · ${esc(source)} · ${esc(transaction.paidBy || 'Shared')}${transaction.note ? ` · ${esc(transaction.note)}` : ''}</span></div>
+    <strong>${amount}</strong>
+  </div>`;
+}
+
+function renderStatement() {
+  if (!$('statementSummary')) return;
+  const range = statementRange();
+  const allTransactions = statementTransactions('all');
+  const visibleTransactions = statementTransactions(statementKind);
+  const incomeUSD = allTransactions.filter(transaction => transaction.type === 'income')
+    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const spentUSD = allTransactions.filter(transaction => transaction.type === 'expense')
+    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const netUSD = incomeUSD - spentUSD;
+  const rangeText = range.from === range.to
+    ? formatDate(range.from)
+    : `${formatDate(range.from, { day: 'numeric', month: 'short', year: 'numeric' })} – ${formatDate(range.to, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  document.querySelectorAll('#statementPeriodTabs button').forEach(button => button.classList.toggle('active', button.dataset.period === statementPeriod));
+  $('statementCustomRange').classList.toggle('hidden', statementPeriod !== 'custom');
+  $('statementFrom').value = range.from;
+  $('statementTo').value = range.to;
+  $('statementFrom').max = today();
+  $('statementTo').max = today();
+  $('statementSummary').innerHTML = `<div class="statementRangeLabel"><span>${esc(rangeText)}</span><b>${allTransactions.length} ${allTransactions.length === 1 ? 'entry' : 'entries'}</b></div>
+    <div class="statementTotals">
+      <div class="income"><span>Income</span><b>${baseMoney(incomeUSD)}</b></div>
+      <div class="expense"><span>Spends</span><b>${baseMoney(spentUSD)}</b></div>
+      <div class="${netUSD < 0 ? 'expense' : 'net'}"><span>Difference</span><b>${netUSD < 0 ? '− ' : '+ '}${baseMoney(Math.abs(netUSD))}</b></div>
+    </div>`;
+  document.querySelectorAll('#statementKindTabs button').forEach(button => button.classList.toggle('active', button.dataset.kind === statementKind));
+  $('statementList').innerHTML = visibleTransactions.length
+    ? `${visibleTransactions.slice(0, 250).map(statementTransactionHtml).join('')}${visibleTransactions.length > 250 ? `<div class="statementLimitNote">Showing the latest 250 of ${visibleTransactions.length} entries.</div>` : ''}`
+    : `<div class="statementEmpty">No ${statementKind === 'all' ? 'income or spends' : statementKind === 'income' ? 'income' : 'spends'} recorded in this period.</div>`;
+}
+
+function setStatementPeriod(period) {
+  statementPeriod = ['today', 'month', '30days', 'custom'].includes(period) ? period : 'month';
+  if (statementPeriod === 'custom' && (!statementFrom || !statementTo)) {
+    statementFrom = monthStart();
+    statementTo = today();
+  }
+  render();
+}
+
+function setStatementCustomRange() {
+  statementPeriod = 'custom';
+  statementFrom = $('statementFrom').value || monthStart();
+  statementTo = $('statementTo').value || today();
+  render();
+}
+
+function setStatementKind(kind) {
+  statementKind = ['all', 'income', 'expense'].includes(kind) ? kind : 'all';
+  renderStatement();
+}
+
+function openStatementFor(period = 'today') {
+  statementPeriod = ['today', 'month', '30days', 'custom'].includes(period) ? period : 'today';
+  statementKind = 'all';
+  showPage('timeline');
+  requestAnimationFrame(() => document.querySelector('.statementPanel')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
+}
+
 function timelineEvents() {
   const events = [];
   state.transactions.forEach(transaction => {
@@ -1878,6 +2022,7 @@ function render() {
   $('todayCash').textContent = baseMoney(metrics.cashUSD);
   $('todayReserved').textContent = baseMoney(metrics.goalSavedUSD + metrics.sinkingSavedUSD);
   $('todaySurplus').textContent = baseMoney(metrics.surplusUSD);
+  $('todayMoneyHighlight').innerHTML = todayMoneyHighlightHtml(metrics);
   $('todayAllocation').innerHTML = buckets.map(bucket => `<div class="bucket ${bucket.key}"><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b><small>${baseMoney(bucket.actual)} used</small></div>`).join('');
   $('monthlyCheckupCard').innerHTML = monthlyCheckupHtml();
 
@@ -1984,6 +2129,7 @@ function render() {
 
   document.querySelectorAll('#cashflowTabs button').forEach(button => button.classList.toggle('active', Number(button.dataset.days) === cashflowDays));
   $('cashflowChart').innerHTML = cashflowChartHtml(cashflowForecast(cashflowDays));
+  renderStatement();
   document.querySelectorAll('#timelineFilters button').forEach(button => button.classList.toggle('active', button.dataset.filter === timelineFilter));
   $('timelineList').innerHTML = timelineHtml();
 
