@@ -77,6 +77,8 @@
           <button class="quickAction shortcut" onclick="openShortcutHelp()"><span>⚡</span><b>Phone shortcut</b><small>Back Tap setup</small></button>
         </div>
 
+        <div id="todayMoneyHighlight" class="todayMoneyHighlight"></div>
+
         <button id="sakhiTourLauncher" class="sakhiTourLauncher" type="button" onclick="openSakhiTour()">
           <span class="sakhiTourPlay" aria-hidden="true">▶</span>
           <span class="sakhiTourLauncherCopy"><b id="sakhiTourLauncherTitle">Sakhi practice</b><small id="sakhiTourLauncherText">Learn Our DHAN in 5 playful minutes · sample data only</small></span>
@@ -240,6 +242,31 @@
           <button data-days="90" onclick="setCashflowDays(90)">90 days</button>
         </div>
         <div id="cashflowChart" class="chartCard cashflowCard"></div>
+
+        <div class="sectionHead top">
+          <div><h2>Statement</h2><p>Choose a period and see exactly what came in and went out.</p></div>
+        </div>
+        <div class="statementPanel">
+          <div id="statementPeriodTabs" class="statementPeriodTabs" aria-label="Statement period">
+            <button type="button" data-period="today" onclick="setStatementPeriod('today')">Today</button>
+            <button type="button" data-period="month" onclick="setStatementPeriod('month')">This month</button>
+            <button type="button" data-period="30days" onclick="setStatementPeriod('30days')">Last 30 days</button>
+            <button type="button" data-period="custom" onclick="setStatementPeriod('custom')">Custom</button>
+          </div>
+          <div id="statementCustomRange" class="statementCustomRange hidden">
+            <label>From<input id="statementFrom" type="date" onchange="setStatementCustomRange()"></label>
+            <label>To<input id="statementTo" type="date" onchange="setStatementCustomRange()"></label>
+          </div>
+          <div id="statementSummary" class="statementSummary"></div>
+          <div id="statementKindTabs" class="statementKindTabs" aria-label="Statement entry type">
+            <button type="button" data-kind="all" onclick="setStatementKind('all')">All</button>
+            <button type="button" data-kind="income" onclick="setStatementKind('income')">Income</button>
+            <button type="button" data-kind="expense" onclick="setStatementKind('expense')">Spends</button>
+          </div>
+          <div id="statementList" class="statementList"></div>
+        </div>
+
+        <div class="sectionHead top"><div><h2>Full history</h2><p>Money, plans and wins in one automatic timeline.</p></div></div>
         <div id="timelineFilters" class="filterChips">
           <button class="active" data-filter="all" onclick="setTimelineFilter('all')">All</button>
           <button data-filter="money" onclick="setTimelineFilter('money')">Money</button>
