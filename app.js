@@ -1012,6 +1012,36 @@ function monthTransactions() {
   );
 }
 
+function monthMoneySummary(month = monthKey()) {
+  const transactions = state.transactions.filter(transaction =>
+    transaction.date?.startsWith(month) &&
+    ['income', 'expense'].includes(transaction.type) &&
+    transaction.category !== 'Balance adjustment'
+  );
+  const incomeUSD = transactions.filter(transaction => transaction.type === 'income')
+    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const spentUSD = transactions.filter(transaction => transaction.type === 'expense')
+    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  return { month, transactions, incomeUSD, spentUSD, balanceUSD: incomeUSD - spentUSD };
+}
+
+function previousMonthSummary() {
+  return monthMoneySummary(monthKey(addMonths(monthStart(), -1)));
+}
+
+function previousMonthAllocation() {
+  const summary = previousMonthSummary();
+  const surplusUSD = Math.max(0, summary.balanceUSD);
+  const hasDebt = activeDebts().some(debt => debt.remaining > .005);
+  return {
+    ...summary,
+    label: formatDate(`${summary.month}-01`, { month: 'long', year: 'numeric' }),
+    hasDebt,
+    debtUSD: hasDebt ? surplusUSD * .6 : 0,
+    futureUSD: hasDebt ? surplusUSD * .4 : surplusUSD
+  };
+}
+
 function moneyMetrics() {
   const monthTx = monthTransactions();
   const incomeUSD = monthTx.filter(t => t.type === 'income').reduce((sum, t) => sum + usd(t.amount, t.currency), 0);
@@ -1311,6 +1341,16 @@ function todayMoneyHighlightHtml(metrics = moneyMetrics()) {
   const spentUSD = dayTransactions.filter(transaction => transaction.type === 'expense')
     .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
   const netUSD = incomeUSD - spentUSD;
+  const previous = previousMonthAllocation();
+  const previousHasRecords = previous.transactions.length > 0;
+  const previousPositive = previous.balanceUSD > .005;
+  const previousNegative = previous.balanceUSD < -.005;
+  const previousAmount = !previousHasRecords ? 'Not recorded yet'
+    : previousNegative ? `− ${baseMoney(Math.abs(previous.balanceUSD))}`
+      : `${previousPositive ? '+ ' : ''}${baseMoney(Math.abs(previous.balanceUSD))}`;
+  const previousJob = !previousHasRecords ? `Tap to check ${previous.label}`
+    : previousPositive ? previous.hasDebt ? '60% debt · 40% future' : '100% savings & investments'
+      : previousNegative ? 'Protect Future · trim Wants first' : 'Aim to grow this next month';
   const budgetEntries = Object.entries(state.budgets);
   const budgets = budgetEntries.length ? budgetEntries.map(([category, budget]) => {
     const limitUSD = usd(budget.amount, budget.currency);
@@ -1332,7 +1372,14 @@ function todayMoneyHighlightHtml(metrics = moneyMetrics()) {
       <div class="${netUSD < 0 ? 'expense' : 'net'}"><span>Today's difference</span><b>${netUSD < 0 ? '− ' : '+ '}${baseMoney(Math.abs(netUSD))}</b></div>
     </div>
     <div class="todayBudgetTitle"><div><b>Category budget remaining</b><span>This month · after all recorded spending</span></div><small>${dayTransactions.length} record${dayTransactions.length === 1 ? '' : 's'} today</small></div>
-    ${budgets.length ? `<div class="todayBudgetGrid">${budgets.map(item => {
+    <div class="todayBudgetGrid">
+      <button type="button" class="todayBudgetItem previousBalance${previousNegative ? ' short' : ''}" onclick="openStatementFor('previous')">
+        <div><b>Balance from previous month</b><span>${esc(previous.label)}</span></div>
+        <strong>${previousAmount}</strong>
+        <small>${previousHasRecords ? `${baseMoney(previous.incomeUSD)} in · ${baseMoney(previous.spentUSD)} out · already counted in Money` : 'Add or review last month’s income and spending'}</small>
+        <div class="previousBalanceJob"><b>${esc(previousJob)}</b><span aria-hidden="true">›</span></div>
+      </button>
+      ${budgets.map(item => {
       const over = item.remainingUSD < -.005;
       const limitMissing = item.limitUSD <= .005;
       return `<div class="todayBudgetItem${over ? ' over' : ''}">
@@ -1341,7 +1388,9 @@ function todayMoneyHighlightHtml(metrics = moneyMetrics()) {
         <div class="todayBudgetBar"><i style="width:${item.used}%"></i></div>
         <small>${limitMissing ? 'Set a limit in Plan' : `${baseMoney(item.monthSpentUSD)} of ${baseMoney(item.limitUSD)} used`}</small>
       </div>`;
-    }).join('')}</div>` : '<div class="todayBudgetEmpty">Set category limits in Plan to see what remains here.</div>'}
+    }).join('')}
+    </div>
+    ${budgets.length ? '' : '<div class="todayBudgetEmpty">Set category limits in Plan to see what remains here.</div>'}
   </section>`;
 }
 
@@ -1480,9 +1529,17 @@ function setCashflowDays(days) {
 
 function buildSuggestions(metrics, buckets) {
   const suggestions = [];
+  const previous = previousMonthAllocation();
   const essentialsBudgetUSD = Object.entries(state.budgets)
     .filter(([category]) => ESSENTIAL_CATEGORIES.includes(category))
     .reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
+  if (previous.transactions.length && previous.balanceUSD > .005) {
+    suggestions.push(previous.hasDebt
+      ? ['Put last month’s balance to work', `${previous.label} ended ${baseMoney(previous.balanceUSD)} ahead. If it is still available, consider ${baseMoney(previous.debtUSD)} for debt and ${baseMoney(previous.futureUSD)} for emergency savings, goals or long-term investing.`]
+      : ['Grow last month’s balance', `${previous.label} ended ${baseMoney(previous.balanceUSD)} ahead. If it is still available, consider directing it to emergency savings, goals or long-term investments.`]);
+  } else if (previous.transactions.length && previous.balanceUSD < -.005) {
+    suggestions.push(['Turn last month into a lesson', `${previous.label} spending was ${baseMoney(Math.abs(previous.balanceUSD))} above income. Protect the 20% Future target first and trim flexible Wants before touching savings.`]);
+  }
   if (!activeAccounts().length) {
     suggestions.push(['Add your real bank balance', 'Start with the amount currently in the bank. Salary and spending will then update it automatically.']);
   }
@@ -1649,6 +1706,38 @@ function paydayAssistantHtml(metrics, buckets) {
     <div class="paydayBuckets">${buckets.map(bucket => `<div><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b></div>`).join('')}</div>`;
 }
 
+function previousMonthPlanHtml() {
+  const previous = previousMonthAllocation();
+  const hasRecords = previous.transactions.length > 0;
+  const positive = previous.balanceUSD > .005;
+  const negative = previous.balanceUSD < -.005;
+  const amount = !hasRecords ? '—'
+    : negative ? `− ${baseMoney(Math.abs(previous.balanceUSD))}`
+      : `${positive ? '+ ' : ''}${baseMoney(Math.abs(previous.balanceUSD))}`;
+  let jobs = '';
+  let title = `Close ${previous.label} when ready`;
+  let message = 'Check last month’s income and spending. The app will show what remained and give it a simple next job.';
+  if (positive) {
+    title = 'Put the previous month’s win to work';
+    message = 'This result is already reflected in your Money totals. If the money is still available, use the guide below after your normal bills are protected.';
+    jobs = previous.hasDebt
+      ? `<div><span>60% · Debt freedom</span><b>${baseMoney(previous.debtUSD)}</b></div><div><span>40% · Savings & investments</span><b>${baseMoney(previous.futureUSD)}</b></div>`
+      : `<div class="full"><span>100% · Savings, goals & investments</span><b>${baseMoney(previous.futureUSD)}</b></div>`;
+  } else if (negative) {
+    title = 'Use the short month as a clean reset';
+    message = 'No blame—this is useful information. Protect Future savings first this month, then reduce Wants before essential spending.';
+    jobs = '<div><span>Keep protecting</span><b>20% Future</b></div><div><span>Trim first</span><b>10% Wants</b></div>';
+  } else if (hasRecords) {
+    title = 'A balanced month—now build a surplus';
+    message = 'Income matched recorded spending. Try to create one small amount this month for emergency savings, goals or investments.';
+    jobs = '<div class="full"><span>Next milestone</span><b>Your first positive carry-forward</b></div>';
+  }
+  return `<div class="rolloverPlanTop"><div><span>PREVIOUS MONTH BALANCE</span><h3>${esc(title)}</h3><p>${esc(message)}</p></div><button type="button" onclick="openStatementFor('previous')">Review</button></div>
+    <div class="rolloverPlanAmount${negative ? ' short' : ''}"><span>${esc(previous.label)} result</span><b>${amount}</b><small>${hasRecords ? `${baseMoney(previous.incomeUSD)} income · ${baseMoney(previous.spentUSD)} spending` : 'No income or spending recorded for this period'}</small></div>
+    ${jobs ? `<div class="rolloverPlanJobs">${jobs}</div>` : ''}
+    <div class="rolloverPlanNote">A guide only: do not enter this as new income. Move money first, then record only the real debt payment, saving or investment.</div>`;
+}
+
 function openPaydayAssistant() {
   const metrics = moneyMetrics();
   const buckets = allocationBuckets(metrics);
@@ -1675,6 +1764,7 @@ function statementRange() {
   if (statementPeriod === 'today') return { from: end, to: end };
   if (statementPeriod === '30days') return { from: addDays(end, -29), to: end };
   if (statementPeriod === 'month') return { from: monthStart(), to: end };
+  if (statementPeriod === 'previous') return { from: addMonths(monthStart(), -1), to: addDays(monthStart(), -1) };
   let from = statementFrom || monthStart();
   let to = statementTo || end;
   if (from > end) from = end;
@@ -1738,7 +1828,7 @@ function renderStatement() {
 }
 
 function setStatementPeriod(period) {
-  statementPeriod = ['today', 'month', '30days', 'custom'].includes(period) ? period : 'month';
+  statementPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'month';
   if (statementPeriod === 'custom' && (!statementFrom || !statementTo)) {
     statementFrom = monthStart();
     statementTo = today();
@@ -1759,7 +1849,7 @@ function setStatementKind(kind) {
 }
 
 function openStatementFor(period = 'today') {
-  statementPeriod = ['today', 'month', '30days', 'custom'].includes(period) ? period : 'today';
+  statementPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'today';
   statementKind = 'all';
   showPage('timeline');
   requestAnimationFrame(() => document.querySelector('.statementPanel')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
@@ -1847,6 +1937,12 @@ function moneyDateHtml(metrics) {
   const spent = weekTx.filter(transaction => transaction.type === 'expense').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
   const nextBill = recurringOccurrences(today(), addDays(today(), 14), item => item.kind === 'expense').sort((a, b) => a.date.localeCompare(b.date))[0];
   const goal = activeGoals().sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'))[0];
+  const previous = previousMonthAllocation();
+  const previousHasRecords = previous.transactions.length > 0;
+  const previousNegative = previous.balanceUSD < -.005;
+  const previousAmount = !previousHasRecords ? 'Not recorded'
+    : previousNegative ? `− ${baseMoney(Math.abs(previous.balanceUSD))}`
+      : `${previous.balanceUSD > .005 ? '+ ' : ''}${baseMoney(Math.abs(previous.balanceUSD))}`;
   const action = metrics.cashUSD < 0 ? 'Correct account balances and pause optional spending.'
     : nextBill ? `Keep ${money(nextBill.item.amount, nextBill.item.currency)} ready for ${nextBill.item.name}.`
       : activeSinkingFunds().some(fund => fund.lastReservedMonth !== monthStart()) ? 'Make this month’s first sinking-fund set-aside.'
@@ -1854,6 +1950,7 @@ function moneyDateHtml(metrics) {
           : 'Choose one small amount to move toward your nearest goal.';
   return `<div class="moneyDateTop"><div><div class="eyebrow">5-MINUTE MONEY DATE</div><h2>${review ? 'Reviewed together ✓' : 'One calm check-in'}</h2><p>${review ? `This week’s action: ${esc(review.nextAction || action)}` : 'Look at the facts, celebrate one win, and agree on one action.'}</p></div><div class="coupleMark">D<span>♥</span>S</div></div>
     <div class="moneyDateStats"><div><span>Came in</span><b>${baseMoney(income)}</b></div><div><span>Went out</span><b>${baseMoney(spent)}</b></div><div><span>Net worth</span><b>${baseMoney(metrics.netWorthUSD)}</b></div>${goal ? `<div><span>${esc(goal.name)}</span><b>${Math.round(goal.saved / Math.max(.01, goal.target) * 100)}%</b></div>` : '<div><span>Goals</span><b>Start one</b></div>'}</div>
+    <button class="moneyDateRollover${previousNegative ? ' short' : ''}" type="button" onclick="openStatementFor('previous')"><span>Balance from previous month</span><b>${previousAmount}</b><small>${previousHasRecords ? previous.balanceUSD > .005 ? 'Tap to decide how to grow it' : previousNegative ? 'Tap to learn and reset gently' : 'Tap to create the next small win' : `Tap to review ${esc(previous.label)}`}</small><i aria-hidden="true">›</i></button>
     <div class="moneyDateAction"><span>Suggested action</span><b>${esc(action)}</b></div>
     <button class="${review ? 'secondary' : 'primary'} wide" onclick="openMoneyDate()">${review ? 'Update this week' : 'Review together'}</button>`;
 }
@@ -2080,6 +2177,7 @@ function render() {
   $('planIncome').className = `statusBadge${metrics.incomeUSD > 0 ? '' : ' warn'}`;
   $('planAllocation').innerHTML = buckets.map(bucket => `<div class="allocationItem ${bucket.key}"><div class="allocationHeading"><span class="allocationColor"></span><b>${bucket.pct}% ${esc(bucket.label)}</b></div><div class="allocationTarget">${baseMoney(bucket.target)}</div><div class="allocationActual">Used ${baseMoney(bucket.actual)}</div></div>`).join('');
   $('paydayAssistant').innerHTML = paydayAssistantHtml(metrics, buckets);
+  $('previousMonthPlan').innerHTML = previousMonthPlanHtml();
 
   const essentialsBudgetUSD = Object.entries(state.budgets).filter(([category]) => ESSENTIAL_CATEGORIES.includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
   const emergencyThreeUSD = essentialsBudgetUSD * 3;
