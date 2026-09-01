@@ -188,6 +188,8 @@
 
         <div id="paydayAssistant" class="paydayCard top"></div>
 
+        <div id="previousMonthPlan" class="rolloverPlanCard top"></div>
+
         <div id="emergencyFundCard" class="emergencyCard top"></div>
 
         <div class="sectionHead top">
@@ -250,6 +252,7 @@
           <div id="statementPeriodTabs" class="statementPeriodTabs" aria-label="Statement period">
             <button type="button" data-period="today" onclick="setStatementPeriod('today')">Today</button>
             <button type="button" data-period="month" onclick="setStatementPeriod('month')">This month</button>
+            <button type="button" data-period="previous" onclick="setStatementPeriod('previous')">Previous month</button>
             <button type="button" data-period="30days" onclick="setStatementPeriod('30days')">Last 30 days</button>
             <button type="button" data-period="custom" onclick="setStatementPeriod('custom')">Custom</button>
           </div>
