@@ -1,4 +1,4 @@
-const CACHE = 'our-dhan-v9-9';
+const CACHE = 'our-dhan-v9-10';
 const CORE = [
   './', './index.html', './style.css', './app.js', './config.js', './manifest.json',
   './icon.svg', './icon-192.png', './icon-512.png', './apple-touch-icon.png',
