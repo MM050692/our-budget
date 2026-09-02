@@ -52,6 +52,9 @@ let statementPeriod = 'month';
 let statementKind = 'all';
 let statementFrom = '';
 let statementTo = '';
+let reportPeriod = 'month';
+let reportFrom = '';
+let reportTo = '';
 let calendarMonth = '';
 let toastTimer = null;
 let pendingQuickAction = new URLSearchParams(location.search).get('quick') || '';
@@ -1394,6 +1397,123 @@ function todayMoneyHighlightHtml(metrics = moneyMetrics()) {
   </section>`;
 }
 
+const MONEY_BREAKDOWN_COLORS = ['#8566a8', '#248267', '#3478b8', '#f1b94b', '#d9584b', '#6e6e73', '#62a5a0', '#b78354'];
+
+function signedBaseMoney(value, showPlus = true) {
+  const amount = Number(value || 0);
+  if (Math.abs(amount) <= .005) return baseMoney(0);
+  return `${amount < 0 ? '− ' : showPlus ? '+ ' : ''}${baseMoney(Math.abs(amount))}`;
+}
+
+function moneyBreakdownChartHtml(items, totalUSD, centerLabel = 'Total') {
+  const ordered = [...items].sort((a, b) => Math.abs(b.valueUSD) - Math.abs(a.valueUSD));
+  const colored = ordered.map((item, index) => ({ ...item, color: MONEY_BREAKDOWN_COLORS[index % MONEY_BREAKDOWN_COLORS.length] }));
+  const positive = colored.filter(item => item.valueUSD > .005);
+  const positiveTotal = positive.reduce((sum, item) => sum + item.valueUSD, 0);
+  let cursor = 0;
+  const stops = positive.map(item => {
+    const start = cursor;
+    cursor += item.valueUSD / positiveTotal * 100;
+    return `${item.color} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
+  });
+  const gradient = stops.length ? `conic-gradient(${stops.join(',')})` : 'conic-gradient(#e4e4e9 0 100%)';
+  const visible = colored.slice(0, 8);
+  return `<div class="moneyBreakdownVisual">
+    <div class="moneyBreakdownDonut" style="--money-breakdown-gradient:${gradient}" role="img" aria-label="${esc(centerLabel)} ${esc(baseMoney(totalUSD))}"><div><span>${esc(centerLabel)}</span><b>${baseMoney(totalUSD)}</b></div></div>
+    <div class="moneyBreakdownList">${visible.length ? visible.map(item => `<div><i style="background:${item.color}"></i><span><b>${esc(item.name)}</b><small>${esc(item.detail || '')}</small></span><strong class="${item.valueUSD < -.005 ? 'negative' : ''}">${item.valueUSD < -.005 ? '− ' : ''}${baseMoney(Math.abs(item.valueUSD))}</strong></div>`).join('') : '<div class="moneyBreakdownEmpty">Nothing has been added here yet.</div>'}${colored.length > visible.length ? `<small class="moneyBreakdownMore">Plus ${colored.length - visible.length} more item${colored.length - visible.length === 1 ? '' : 's'}.</small>` : ''}</div>
+  </div>`;
+}
+
+function openMoneyBreakdown(kind) {
+  const metrics = moneyMetrics();
+  let title = 'Money breakdown';
+  let description = '';
+  let body = '';
+  if (kind === 'accounts') {
+    title = 'What Accounts includes';
+    description = 'Every active bank account, cash account and mobile wallet, plus any older entries not linked to an account. Transfers only move money between accounts and never increase this total.';
+    const items = activeAccounts().map(account => ({
+      name: account.name,
+      detail: `${accountTypeLabel(account.type)} · ${money(accountBalanceNative(account), account.currency)}`,
+      valueUSD: accountBalanceUSD(account)
+    }));
+    if (Math.abs(metrics.unassignedCashUSD) > .005) items.push({ name: 'Older unlinked entries', detail: 'Income and spending not assigned to an account', valueUSD: metrics.unassignedCashUSD });
+    body = moneyBreakdownChartHtml(items, metrics.cashUSD, 'Accounts');
+  } else if (kind === 'assets') {
+    title = 'What Other assets includes';
+    description = 'Gold, crypto and other investments outside your accounts. Live-priced assets use the latest saved market rate; manual assets use the value you entered.';
+    const items = state.assets.map(asset => {
+      const waiting = ['metal', 'crypto'].includes(asset.type) && !state.prices[asset.symbol];
+      const type = asset.type === 'metal' ? 'Metal' : asset.type === 'crypto' ? 'Crypto' : asset.type === 'cash' ? 'Legacy cash asset' : 'Manual asset';
+      return { name: asset.name, detail: waiting ? `${type} · waiting for a live price` : `${type} · ${marketLabel(asset)}`, valueUSD: assetUSD(asset) };
+    });
+    body = moneyBreakdownChartHtml(items, metrics.assetsUSD, 'Assets');
+  } else if (kind === 'debt') {
+    title = 'What Debt includes';
+    description = 'The outstanding amount on every active debt. This total is subtracted once from accounts and assets to calculate household net worth.';
+    const items = activeDebts().filter(debt => debt.remaining > .005).map(debt => ({
+      name: debt.name,
+      detail: `${debt.apr ? `${debt.apr}% APR · ` : ''}${debt.minimum ? `${money(debt.minimum, debt.currency)} minimum` : 'No minimum recorded'}`,
+      valueUSD: usd(debt.remaining, debt.currency)
+    }));
+    body = moneyBreakdownChartHtml(items, metrics.debtUSD, 'Owed');
+  } else {
+    title = 'How Spendable is calculated';
+    description = 'This is money in accounts after amounts reserved for goals and sinking funds. Other assets are excluded because they may not be ready to spend.';
+    body = `<div class="moneyEquation">
+      <div><i>+</i><span><b>Money in accounts</b><small>Bank, cash, wallets and unlinked entries</small></span><strong>${baseMoney(metrics.cashUSD)}</strong></div>
+      <div><i>−</i><span><b>Reserved for goals</b><small>Already held inside your accounts</small></span><strong>${baseMoney(metrics.goalSavedUSD)}</strong></div>
+      <div><i>−</i><span><b>Reserved sinking funds</b><small>Planned costs protected from spending</small></span><strong>${baseMoney(metrics.sinkingSavedUSD)}</strong></div>
+      <div class="total"><i>=</i><span><b>Spendable after goals</b><small>${metrics.spendableUSD < -.005 ? 'Reservations are above recorded cash' : 'Available before upcoming bills'}</small></span><strong>${signedBaseMoney(metrics.spendableUSD, false)}</strong></div>
+    </div>`;
+  }
+  openModal(title, `<div class="moneyBreakdown"><p class="moneyBreakdownIntro">${esc(description)}</p>${body}<button type="button" class="primary wide" onclick="closeModal()">Done</button></div>`);
+}
+
+function openWealthPoint(index) {
+  const points = [...state.snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  const position = Math.max(0, Math.min(points.length - 1, Number(index) || 0));
+  const point = points[position];
+  if (!point) return;
+  const previous = points[position - 1] || null;
+  const insideWindow = date => date <= point.date && (previous ? date > previous.date : date === point.date);
+  const windowTransactions = state.transactions.filter(transaction => insideWindow(transaction.date));
+  const moneyTransactions = windowTransactions.filter(transaction => ['income', 'expense'].includes(transaction.type) && transaction.category !== 'Balance adjustment');
+  const incomeUSD = moneyTransactions.filter(transaction => transaction.type === 'income').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const spentUSD = moneyTransactions.filter(transaction => transaction.type === 'expense').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const debtPaidUSD = moneyTransactions.filter(transaction => transaction.debtPrincipal).reduce((sum, transaction) => sum + usd(transaction.debtPrincipal, state.debts.find(debt => debt.id === transaction.debtId)?.currency || transaction.currency), 0);
+  const correctionTransactions = windowTransactions.filter(transaction => transaction.category === 'Balance adjustment');
+  const correctionUSD = correctionTransactions.reduce((sum, transaction) => sum + (transaction.type === 'income' ? 1 : -1) * usd(transaction.amount, transaction.currency), 0);
+  const goalUSD = state.contributions.filter(contribution => insideWindow(contribution.date)).reduce((sum, contribution) => sum + usd(contribution.amount, contribution.currency), 0);
+  const netChangeUSD = previous ? point.netWorthUSD - previous.netWorthUSD : 0;
+  const cashChangeUSD = previous ? point.cashUSD - previous.cashUSD : 0;
+  const assetChangeUSD = previous ? point.assetsUSD - previous.assetsUSD : 0;
+  const debtChangeUSD = previous ? point.debtUSD - previous.debtUSD : 0;
+  const movement = !previous ? 'This is your first saved baseline.'
+    : netChangeUSD > .005 ? `Net worth grew by ${baseMoney(netChangeUSD)} since the previous point.`
+      : netChangeUSD < -.005 ? `Net worth fell by ${baseMoney(Math.abs(netChangeUSD))} since the previous point.`
+        : 'Net worth was unchanged from the previous point.';
+  const activity = [];
+  if (incomeUSD > .005) activity.push(['Income recorded', `${moneyTransactions.filter(transaction => transaction.type === 'income').length} entr${moneyTransactions.filter(transaction => transaction.type === 'income').length === 1 ? 'y' : 'ies'}`, `+ ${baseMoney(incomeUSD)}`, 'income']);
+  if (spentUSD > .005) activity.push(['Spending recorded', `${moneyTransactions.filter(transaction => transaction.type === 'expense').length} entr${moneyTransactions.filter(transaction => transaction.type === 'expense').length === 1 ? 'y' : 'ies'}`, `− ${baseMoney(spentUSD)}`, 'expense']);
+  if (debtPaidUSD > .005) activity.push(['Debt principal paid', 'Included in spending above', `− ${baseMoney(debtPaidUSD)} owed`, 'good']);
+  if (goalUSD > .005) activity.push(['Reserved for goals', 'Money already held in accounts', `+ ${baseMoney(goalUSD)}`, 'goal']);
+  if (correctionTransactions.length) activity.push(['Account balance corrected', `${correctionTransactions.length} manual reconciliation${correctionTransactions.length === 1 ? '' : 's'}`, signedBaseMoney(correctionUSD), correctionUSD >= 0 ? 'income' : 'expense']);
+  const moneyRecordCount = moneyTransactions.length + correctionTransactions.length;
+  const interval = previous ? `${formatDate(previous.date, { day: 'numeric', month: 'short' })} → ${formatDate(point.date, { day: 'numeric', month: 'short' })}` : formatDate(point.date, { day: 'numeric', month: 'long', year: 'numeric' });
+  openModal(`Wealth point · ${formatDate(point.date, { day: 'numeric', month: 'short' })}`, `<div class="wealthPointSummary">
+    <div class="wealthPointHero${previous && netChangeUSD < -.005 ? ' down' : ''}"><span>${esc(interval)}</span><small>Household net worth</small><b>${baseMoney(point.netWorthUSD)}</b><p>${esc(movement)}</p></div>
+    <div class="wealthPointStats">
+      <div><span>Accounts</span><b>${baseMoney(point.cashUSD)}</b><small>${previous ? `${signedBaseMoney(cashChangeUSD)} change` : 'Starting balance'}</small></div>
+      <div><span>Other assets</span><b>${baseMoney(point.assetsUSD)}</b><small>${previous ? `${signedBaseMoney(assetChangeUSD)} change` : 'Starting value'}</small></div>
+      <div><span>Debt owed</span><b>${baseMoney(point.debtUSD)}</b><small class="${debtChangeUSD < -.005 ? 'good' : debtChangeUSD > .005 ? 'bad' : ''}">${previous ? `${signedBaseMoney(debtChangeUSD)} change` : 'Starting balance'}</small></div>
+    </div>
+    <div class="wealthPointActivity"><div class="wealthPointActivityHead"><b>What happened</b><span>${moneyRecordCount} money record${moneyRecordCount === 1 ? '' : 's'}</span></div>${activity.length ? activity.map(([label, detail, amount, kind]) => `<div class="wealthPointActivityRow ${kind}"><span><b>${esc(label)}</b><small>${esc(detail)}</small></span><strong>${amount}</strong></div>`).join('') : `<div class="wealthPointEmpty">${previous ? 'No income, spending, goal saving or balance correction was recorded between these points. Any movement came from assets, debt edits or refreshed market values.' : 'No activity was recorded on this date; this point simply saved your starting position.'}</div>`}</div>
+    <div class="sourceNote">A snapshot explains the totals saved on that date. It does not invent missing transactions.</div>
+    <button type="button" class="primary wide" onclick="closeModal()">Done</button>
+  </div>`);
+}
+
 function actualChartHtml(metrics) {
   const pointsData = [...state.snapshots].sort((a, b) => a.date.localeCompare(b.date));
   if (!pointsData.length) return '<div class="emptyChart"><b>Your honest starting point begins today</b><span>The app will save one net-worth point per day automatically.</span></div>';
@@ -1413,16 +1533,15 @@ function actualChartHtml(metrics) {
       <line x1="42" y1="${zeroY}" x2="598" y2="${zeroY}" class="chartZero"/>
       <polygon points="${areaPoints}" class="chartArea"/>
       ${coords.length > 1 ? `<polyline points="${points}" class="chartLine"/>` : ''}
-      ${coords.map(point => `<circle cx="${point.x}" cy="${point.y}" r="5" class="chartPoint"/>`).join('')}
+      ${coords.map((point, index) => `<g class="wealthPointButton" role="button" tabindex="0" aria-label="${esc(formatDate(pointsData[index].date))}, net worth ${esc(baseMoney(pointsData[index].netWorthUSD))}" onclick="openWealthPoint(${index})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openWealthPoint(${index})}"><title>${esc(formatDate(pointsData[index].date))} · ${esc(baseMoney(pointsData[index].netWorthUSD))}</title><circle cx="${point.x}" cy="${point.y}" r="16" class="chartPointHit"/><circle cx="${point.x}" cy="${point.y}" r="5" class="chartPoint"/></g>`).join('')}
       <text x="42" y="188">${esc(pointsData[0].date.slice(5))}</text><text x="598" y="188" text-anchor="end">${esc(pointsData.at(-1).date.slice(5))}</text>
-    </svg><div class="chartFoot">Actual values use your entered account balances, assets, market prices and debt.</div>`;
+    </svg><div class="chartFoot">Tap any point for its saved balances, change and recorded activity. Actual values use accounts, assets, market prices and debt.</div>`;
 }
 
-function projectionChartHtml(metrics) {
+function projectionModel(metrics = moneyMetrics()) {
   const recurringIncomeUSD = state.recurring.filter(item => item.active !== false && item.kind === 'income')
     .reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
   const monthlyIncomeUSD = recurringIncomeUSD || metrics.incomeUSD;
-  if (!(monthlyIncomeUSD > 0)) return '<div class="emptyChart"><b>Add salary to see a one-year direction</b><span>The projection will use your regular income, bills, debt interest and current 40–30–20–10 plan.</span></div>';
   const recurringLivingUSD = state.recurring.filter(item => item.active !== false && item.kind === 'expense' && !['Debt', 'Savings'].includes(item.category))
     .reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
   const monthlyInterestUSD = activeDebts().reduce((sum, debt) => sum + usd(debt.remaining, debt.currency) * Number(debt.apr || 0) / 1200, 0);
@@ -1433,24 +1552,56 @@ function projectionChartHtml(metrics) {
   ].map(scenario => {
     const livingUSD = Math.max(recurringLivingUSD, monthlyIncomeUSD * scenario.livingShare);
     const monthlyGrowthUSD = monthlyIncomeUSD - livingUSD - monthlyInterestUSD;
-    return { ...scenario, monthlyGrowthUSD, values: Array.from({ length: 13 }, (_, index) => metrics.netWorthUSD + monthlyGrowthUSD * index) };
+    return { ...scenario, livingUSD, monthlyGrowthUSD, values: Array.from({ length: 13 }, (_, index) => metrics.netWorthUSD + monthlyGrowthUSD * index) };
   });
+  return { monthlyIncomeUSD, recurringLivingUSD, monthlyInterestUSD, scenarios };
+}
+
+function openProjectionPoint(index) {
+  const metrics = moneyMetrics();
+  const model = projectionModel(metrics);
+  if (!(model.monthlyIncomeUSD > 0)) return;
+  const month = Math.max(0, Math.min(12, Number(index) || 0));
+  const current = model.scenarios.find(scenario => scenario.key === 'current');
+  const valueUSD = current.values[month];
+  const changeUSD = valueUSD - metrics.netWorthUSD;
+  const date = addMonths(monthStart(), month);
+  openModal(month ? `Plan point · month ${month}` : 'Plan starting point', `<div class="wealthPointSummary projectionPointSummary">
+    <div class="wealthPointHero"><span>${month ? esc(formatDate(date, { month: 'long', year: 'numeric' })) : 'TODAY'}</span><small>Estimated net worth</small><b>${baseMoney(valueUSD)}</b><p>${month ? `${signedBaseMoney(changeUSD)} from today if the Current plan assumptions hold.` : 'This is the real net worth used as the projection starting point.'}</p></div>
+    <div class="projectionAssumptions">
+      <div><span>Monthly income</span><b>${baseMoney(model.monthlyIncomeUSD)}</b></div>
+      <div><span>Living estimate</span><b>− ${baseMoney(current.livingUSD)}</b></div>
+      <div><span>Debt interest</span><b>− ${baseMoney(model.monthlyInterestUSD)}</b></div>
+      <div class="total"><span>Estimated monthly growth</span><b>${signedBaseMoney(current.monthlyGrowthUSD)}</b></div>
+    </div>
+    <div class="friendlyNote">This point has not happened yet. It keeps market prices unchanged and assumes the same monthly income, living costs and debt interest.</div>
+    <button type="button" class="primary wide" onclick="closeModal()">Done</button>
+  </div>`);
+}
+
+function projectionChartHtml(metrics) {
+  const model = projectionModel(metrics);
+  if (!(model.monthlyIncomeUSD > 0)) return '<div class="emptyChart"><b>Add salary to see a one-year direction</b><span>The projection will use your regular income, bills, debt interest and current 40–30–20–10 plan.</span></div>';
+  const { scenarios } = model;
   const allValues = scenarios.flatMap(scenario => scenario.values);
   const low = Math.min(0, ...allValues);
   const high = Math.max(0, ...allValues);
   const range = Math.max(1, high - low);
   const zeroY = 164 - ((0 - low) / range) * 118;
   const current = scenarios.find(scenario => scenario.key === 'current');
-  const lines = scenarios.map(scenario => {
+  const plotted = scenarios.map(scenario => {
     const coords = scenario.values.map((value, index) => ({ x: 42 + index * (556 / 12), y: 164 - ((value - low) / range) * 118 }));
-    return `<polyline points="${coords.map(point => `${point.x},${point.y}`).join(' ')}" fill="none" stroke="${scenario.color}" stroke-width="${scenario.key === 'current' ? 5 : 3}" stroke-linecap="round" stroke-linejoin="round" opacity="${scenario.key === 'current' ? 1 : .82}"/>`;
-  }).join('');
+    return { ...scenario, coords };
+  });
+  const lines = plotted.map(scenario => `<polyline points="${scenario.coords.map(point => `${point.x},${point.y}`).join(' ')}" fill="none" stroke="${scenario.color}" stroke-width="${scenario.key === 'current' ? 5 : 3}" stroke-linecap="round" stroke-linejoin="round" opacity="${scenario.key === 'current' ? 1 : .82}"/>`).join('');
+  const currentPlot = plotted.find(scenario => scenario.key === 'current');
   return `<div class="chartLabels"><div><span>Now</span><b>${baseMoney(metrics.netWorthUSD)}</b></div><div><span>Current plan · 12 months</span><b>${baseMoney(current.values.at(-1))}</b></div></div>
     <svg class="wealthSvg" viewBox="0 0 640 195" role="img" aria-label="Projected household net worth for twelve months">
       <line x1="42" y1="${zeroY}" x2="598" y2="${zeroY}" class="chartZero"/>
       ${lines}
+      ${currentPlot.coords.map((point, index) => `<g class="wealthPointButton projection" role="button" tabindex="0" aria-label="Current plan month ${index}, ${esc(baseMoney(current.values[index]))}" onclick="openProjectionPoint(${index})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openProjectionPoint(${index})}"><title>Month ${index} · ${esc(baseMoney(current.values[index]))}</title><circle cx="${point.x}" cy="${point.y}" r="13" class="chartPointHit"/><circle cx="${point.x}" cy="${point.y}" r="4" class="chartPoint"/></g>`).join('')}
       <text x="42" y="188">NOW</text><text x="598" y="188" text-anchor="end">12 MONTHS</text>
-    </svg><div class="forecastLegend">${scenarios.map(scenario => `<span><i style="background:${scenario.color}"></i>${scenario.label}</span>`).join('')}</div><div class="chartFoot">Uses regular income and bills, your debt interest and three spending paths. Market prices stay unchanged, so this is guidance—not a promise.</div>`;
+    </svg><div class="forecastLegend">${scenarios.map(scenario => `<span><i style="background:${scenario.color}"></i>${scenario.label}</span>`).join('')}</div><div class="chartFoot">Tap a Current plan point to see its assumptions. Market prices stay unchanged, so this is guidance—not a promise.</div>`;
 }
 
 function setWealthChart(mode) {
@@ -1759,24 +1910,30 @@ function openPaydayAssistant() {
   </div>`);
 }
 
-function statementRange() {
+function statementRangeFor(period = 'month', customFrom = '', customTo = '') {
   const end = today();
-  if (statementPeriod === 'today') return { from: end, to: end };
-  if (statementPeriod === '30days') return { from: addDays(end, -29), to: end };
-  if (statementPeriod === 'month') return { from: monthStart(), to: end };
-  if (statementPeriod === 'previous') return { from: addMonths(monthStart(), -1), to: addDays(monthStart(), -1) };
-  let from = statementFrom || monthStart();
-  let to = statementTo || end;
+  if (period === 'today') return { from: end, to: end };
+  if (period === '30days') return { from: addDays(end, -29), to: end };
+  if (period === 'month') return { from: monthStart(), to: end };
+  if (period === 'previous') return { from: addMonths(monthStart(), -1), to: addDays(monthStart(), -1) };
+  let from = customFrom || monthStart();
+  let to = customTo || end;
   if (from > end) from = end;
   if (to > end) to = end;
   if (from > to) [from, to] = [to, from];
-  statementFrom = from;
-  statementTo = to;
   return { from, to };
 }
 
-function statementTransactions(kind = statementKind) {
-  const range = statementRange();
+function statementRange() {
+  const range = statementRangeFor(statementPeriod, statementFrom, statementTo);
+  if (statementPeriod === 'custom') {
+    statementFrom = range.from;
+    statementTo = range.to;
+  }
+  return range;
+}
+
+function statementTransactionsFor(range, kind = 'all') {
   return state.transactions.filter(transaction =>
     transaction.date >= range.from &&
     transaction.date <= range.to &&
@@ -1784,6 +1941,10 @@ function statementTransactions(kind = statementKind) {
     transaction.category !== 'Balance adjustment' &&
     (kind === 'all' || transaction.type === kind)
   ).sort((a, b) => `${b.date}${b.createdAt || ''}`.localeCompare(`${a.date}${a.createdAt || ''}`));
+}
+
+function statementTransactions(kind = statementKind) {
+  return statementTransactionsFor(statementRange(), kind);
 }
 
 function statementTransactionHtml(transaction) {
@@ -1854,6 +2015,98 @@ function openStatementFor(period = 'today') {
   showPage('timeline');
   requestAnimationFrame(() => document.querySelector('.statementPanel')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
 }
+
+function reportRange() { return statementRangeFor(reportPeriod, reportFrom, reportTo); }
+
+function statementReportTotals(range = reportRange()) {
+  const transactions = statementTransactionsFor(range, 'all');
+  const incomeUSD = transactions.filter(transaction => transaction.type === 'income').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  const spentUSD = transactions.filter(transaction => transaction.type === 'expense').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
+  return { transactions, incomeUSD, spentUSD, differenceUSD: incomeUSD - spentUSD };
+}
+
+function renderStatementGenerator() {
+  const root = $('statementGeneratorBody');
+  if (!root) return;
+  const range = reportRange();
+  const totals = statementReportTotals(range);
+  const periods = [['today', 'Today'], ['month', 'This month'], ['previous', 'Previous month'], ['30days', 'Last 30 days'], ['custom', 'Custom']];
+  const rangeLabel = range.from === range.to ? formatDate(range.from) : `${formatDate(range.from, { day: 'numeric', month: 'short', year: 'numeric' })} – ${formatDate(range.to, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  root.innerHTML = `<div class="statementGenerator">
+    <p>Choose the period once, then view the details or download a clean CSV statement.</p>
+    <div class="reportPeriodTabs">${periods.map(([value, label]) => `<button type="button" class="${reportPeriod === value ? 'active' : ''}" onclick="setReportPeriod('${value}')">${label}</button>`).join('')}</div>
+    ${reportPeriod === 'custom' ? `<div class="statementCustomRange reportCustomRange"><label>From<input id="reportFrom" type="date" max="${today()}" value="${esc(range.from)}" onchange="setReportCustomRange()"></label><label>To<input id="reportTo" type="date" max="${today()}" value="${esc(range.to)}" onchange="setReportCustomRange()"></label></div>` : ''}
+    <div class="statementRangeLabel"><span>${esc(rangeLabel)}</span><b>${totals.transactions.length} ${totals.transactions.length === 1 ? 'entry' : 'entries'}</b></div>
+    <div class="statementTotals">
+      <div class="income"><span>Income</span><b>${baseMoney(totals.incomeUSD)}</b></div>
+      <div class="expense"><span>Spends</span><b>${baseMoney(totals.spentUSD)}</b></div>
+      <div class="${totals.differenceUSD < 0 ? 'expense' : 'net'}"><span>Difference</span><b>${signedBaseMoney(totals.differenceUSD)}</b></div>
+    </div>
+    <div class="friendlyNote">Statements exclude transfers and balance corrections so money is not counted twice.</div>
+    <div class="buttonRow"><button type="button" class="secondary" onclick="viewGeneratedStatement()">View details</button><button type="button" class="primary" onclick="downloadGeneratedStatement()">Download CSV</button></div>
+  </div>`;
+}
+
+function openStatementGenerator(period = statementPeriod) {
+  reportPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'month';
+  reportFrom = statementFrom || monthStart();
+  reportTo = statementTo || today();
+  openModal('Generate statement', '<div id="statementGeneratorBody"></div>');
+  renderStatementGenerator();
+}
+
+function setReportPeriod(period) {
+  reportPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'month';
+  if (reportPeriod === 'custom' && (!reportFrom || !reportTo)) {
+    reportFrom = monthStart();
+    reportTo = today();
+  }
+  renderStatementGenerator();
+}
+
+function setReportCustomRange() {
+  reportPeriod = 'custom';
+  reportFrom = $('reportFrom')?.value || monthStart();
+  reportTo = $('reportTo')?.value || today();
+  renderStatementGenerator();
+}
+
+function viewGeneratedStatement() {
+  const range = reportRange();
+  statementPeriod = reportPeriod;
+  statementFrom = range.from;
+  statementTo = range.to;
+  statementKind = 'all';
+  closeModal();
+  showPage('timeline');
+  requestAnimationFrame(() => document.querySelector('.statementPanel')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
+}
+
+function downloadStatementCsv(range = statementRange()) {
+  const totals = statementReportTotals(range);
+  const dashboardCurrency = state.settings.base;
+  const rows = [
+    ['Our DHAN statement'],
+    ['From', range.from],
+    ['To', range.to],
+    ['Dashboard currency', dashboardCurrency],
+    ['Income total', Number(fromUSD(totals.incomeUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
+    ['Spending total', Number(fromUSD(totals.spentUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
+    ['Difference', Number(fromUSD(totals.differenceUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
+    [],
+    ['Date', 'Type', 'Category', 'Amount', 'Currency', `Amount in ${dashboardCurrency}`, 'Paid by', 'Account', 'Note'],
+    ...totals.transactions.map(transaction => [
+      transaction.date, transaction.type, transaction.category, transaction.amount, transaction.currency,
+      Number((fromUSD(usd(transaction.amount, transaction.currency), dashboardCurrency) * (transaction.type === 'expense' ? -1 : 1)).toFixed(2)),
+      transaction.paidBy || 'Shared', accountName(transaction.accountId) || transaction.account || 'Not linked', transaction.note || ''
+    ])
+  ];
+  downloadFile(`our-dhan-statement-${range.from}-to-${range.to}.csv`, rows.map(row => row.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
+  toast(`Statement downloaded · ${totals.transactions.length} ${totals.transactions.length === 1 ? 'entry' : 'entries'}`);
+}
+
+function downloadGeneratedStatement() { downloadStatementCsv(reportRange()); }
+function downloadCurrentStatement() { downloadStatementCsv(statementRange()); }
 
 function timelineEvents() {
   const events = [];
