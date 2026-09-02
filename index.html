@@ -136,15 +136,25 @@
           </div>
         </div>
 
-        <div class="metricGrid four">
-          <div class="metricCard"><span>Accounts</span><b id="moneyCash">MVR 0</b></div>
-          <div class="metricCard"><span>Other assets</span><b id="moneyAssets">MVR 0</b></div>
-          <div class="metricCard"><span>Debt</span><b id="moneyDebt">MVR 0</b></div>
-          <div class="metricCard"><span>Spendable after goals</span><b id="moneySpendable">MVR 0</b></div>
+        <div class="metricGrid four moneyMetricGrid">
+          <button type="button" class="metricCard moneyMetricCard" onclick="openMoneyBreakdown('accounts')"><span>Accounts <i aria-hidden="true">›</i></span><b id="moneyCash">MVR 0</b><small>What is included</small></button>
+          <button type="button" class="metricCard moneyMetricCard" onclick="openMoneyBreakdown('assets')"><span>Other assets <i aria-hidden="true">›</i></span><b id="moneyAssets">MVR 0</b><small>What is included</small></button>
+          <button type="button" class="metricCard moneyMetricCard" onclick="openMoneyBreakdown('debt')"><span>Debt <i aria-hidden="true">›</i></span><b id="moneyDebt">MVR 0</b><small>What is included</small></button>
+          <button type="button" class="metricCard moneyMetricCard" onclick="openMoneyBreakdown('spendable')"><span>Spendable after goals <i aria-hidden="true">›</i></span><b id="moneySpendable">MVR 0</b><small>How it is calculated</small></button>
+        </div>
+
+        <div class="moneyToolsCard">
+          <div class="moneyToolsHead"><div><span>YOUR DATA</span><h3>Statements &amp; backup</h3><p>View, download or protect your complete household records.</p></div></div>
+          <div class="moneyToolsGrid">
+            <button type="button" onclick="openStatementGenerator()"><i aria-hidden="true">▤</i><span><b>Generate statement</b><small>Choose a period</small></span></button>
+            <button type="button" onclick="exportBackup()"><i aria-hidden="true">↓</i><span><b>Backup data</b><small>Complete JSON copy</small></span></button>
+            <button type="button" onclick="chooseBackupFile()"><i aria-hidden="true">↥</i><span><b>Restore backup</b><small>Merge a saved copy</small></span></button>
+            <button type="button" onclick="exportTransactionsCsv()"><i aria-hidden="true">↧</i><span><b>Download records</b><small>All transactions · CSV</small></span></button>
+          </div>
         </div>
 
         <div class="sectionHead top">
-          <div><h2>Wealth journey</h2><p>Actual progress or the next 12 months.</p></div>
+          <div><h2>Wealth journey</h2><p>Actual progress or the next 12 months · tap any point for its story.</p></div>
         </div>
         <div class="chartTabs">
           <button id="actualChartButton" class="active" onclick="setWealthChart('actual')">Actual</button>
@@ -247,6 +257,7 @@
 
         <div class="sectionHead top">
           <div><h2>Statement</h2><p>Choose a period and see exactly what came in and went out.</p></div>
+          <button type="button" onclick="openStatementGenerator()">Generate</button>
         </div>
         <div class="statementPanel">
           <div id="statementPeriodTabs" class="statementPeriodTabs" aria-label="Statement period">
@@ -267,6 +278,7 @@
             <button type="button" data-kind="expense" onclick="setStatementKind('expense')">Spends</button>
           </div>
           <div id="statementList" class="statementList"></div>
+          <div class="statementActions"><button type="button" class="secondary" onclick="downloadCurrentStatement()">Download this statement</button></div>
         </div>
 
         <div class="sectionHead top"><div><h2>Full history</h2><p>Money, plans and wins in one automatic timeline.</p></div></div>
