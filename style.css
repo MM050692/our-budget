@@ -216,6 +216,12 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
 .metricCard { padding: 14px; display: grid; gap: 5px; min-width: 0; }
 .metricCard span { color: var(--muted); font-size: 10px; }
 .metricCard b { font-size: clamp(14px, 3.9vw, 20px); overflow-wrap: anywhere; }
+.moneyMetricCard { width: 100%; text-align: left; transition: transform .24s cubic-bezier(.2,.8,.2,1), box-shadow .24s ease, background .24s ease; }
+.moneyMetricCard:hover { transform: translateY(-2px); background: white; box-shadow: var(--shadow); }
+.moneyMetricCard:active { transform: scale(.985); }
+.moneyMetricCard > span { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.moneyMetricCard > span i { color: var(--purple); font-size: 16px; font-style: normal; line-height: 1; }
+.moneyMetricCard > small { color: var(--purple); font-size: 8px; font-weight: 700; }
 .card { padding: 16px; }
 .cardList { padding: 0 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
 .stack, .adviceList { display: grid; gap: 10px; }
@@ -294,6 +300,13 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
 .chartLine { fill: none; stroke: var(--green-2); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
 .chartArea { fill: url(#wealthFill); }
 .chartPoint { fill: var(--paper); stroke: var(--green-2); stroke-width: 4; }
+.chartPointHit { fill: transparent; stroke: transparent; stroke-width: 2; pointer-events: all; }
+.wealthPointButton { cursor: pointer; outline: none; }
+.wealthPointButton .chartPoint { transition: r .18s ease, fill .18s ease, stroke-width .18s ease; pointer-events: none; }
+.wealthPointButton:hover .chartPoint, .wealthPointButton:focus .chartPoint { r: 7px; fill: var(--mint); stroke-width: 5; }
+.wealthPointButton:focus .chartPointHit { stroke: rgba(52,120,184,.42); }
+.wealthPointButton.projection .chartPoint { stroke: var(--blue); }
+.wealthPointButton.projection:hover .chartPoint, .wealthPointButton.projection:focus .chartPoint { fill: var(--blue-soft); }
 .chartZero { stroke: #d5ddd8; stroke-dasharray: 5 5; }
 .chartFoot { line-height: 1.5; margin-top: 5px; }
 .emptyChart { min-height: 178px; padding: 20px; display: grid; place-content: center; text-align: center; gap: 6px; }
@@ -1037,6 +1050,95 @@ h3 { font-weight: 680; }
 .statementEntry.income > strong { color: var(--green-2); }
 .statementEmpty, .statementLimitNote { padding: 18px 8px 10px; color: var(--muted); font-size: 10px; line-height: 1.45; text-align: center; }
 .statementLimitNote { padding-top: 12px; }
+.statementActions { display: flex; justify-content: flex-end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.statementActions button { padding: 10px 13px; font-size: 9px; }
+
+.moneyToolsCard { margin-top: 12px; padding: 15px; border: 1px solid rgba(0,0,0,.025); border-radius: 22px; background: rgba(255,255,255,.9); box-shadow: 0 1px 2px rgba(0,0,0,.025); }
+.moneyToolsHead span { color: var(--purple); font-size: 8px; font-weight: 800; letter-spacing: .1em; }
+.moneyToolsHead h3 { margin-top: 3px; }
+.moneyToolsHead p { margin: 3px 0 0; color: var(--muted); font-size: 9px; }
+.moneyToolsGrid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 7px; margin-top: 12px; }
+.moneyToolsGrid button { min-width: 0; display: grid; grid-template-columns: 30px minmax(0,1fr); align-items: center; gap: 8px; padding: 10px; border-radius: 14px; background: #f5f5f7; text-align: left; transition: transform .2s ease, background .2s ease; }
+.moneyToolsGrid button:hover { transform: translateY(-1px); background: #f0eaf6; }
+.moneyToolsGrid button:active { transform: scale(.98); }
+.moneyToolsGrid button > i { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 10px; background: white; color: var(--purple); font-size: 15px; font-style: normal; font-weight: 800; }
+.moneyToolsGrid button > span { min-width: 0; }
+.moneyToolsGrid b, .moneyToolsGrid small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moneyToolsGrid b { font-size: 10px; }
+.moneyToolsGrid small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+
+.moneyBreakdown, .wealthPointSummary, .statementGenerator { display: grid; gap: 13px; }
+.moneyBreakdownIntro, .statementGenerator > p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.moneyBreakdownVisual { display: grid; grid-template-columns: 118px minmax(0,1fr); align-items: center; gap: 15px; }
+.moneyBreakdownDonut { width: 116px; height: 116px; display: grid; place-items: center; position: relative; border-radius: 50%; background: var(--money-breakdown-gradient); box-shadow: inset 0 0 0 1px rgba(0,0,0,.025); }
+.moneyBreakdownDonut:before { content: ""; width: 72px; height: 72px; position: absolute; border-radius: 50%; background: white; box-shadow: 0 1px 5px rgba(0,0,0,.04); }
+.moneyBreakdownDonut > div { width: 66px; min-width: 0; display: grid; gap: 2px; position: relative; z-index: 1; text-align: center; }
+.moneyBreakdownDonut span { color: var(--muted); font-size: 7px; }
+.moneyBreakdownDonut b { overflow-wrap: anywhere; font-size: 9px; }
+.moneyBreakdownList { min-width: 0; display: grid; }
+.moneyBreakdownList > div:not(.moneyBreakdownEmpty) { min-width: 0; display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.moneyBreakdownList > div:last-of-type { border-bottom: 0; }
+.moneyBreakdownList > div > i { width: 8px; height: 8px; border-radius: 50%; }
+.moneyBreakdownList > div > span { min-width: 0; }
+.moneyBreakdownList b, .moneyBreakdownList small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moneyBreakdownList b { font-size: 10px; }
+.moneyBreakdownList small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.moneyBreakdownList strong { font-size: 10px; text-align: right; white-space: nowrap; }
+.moneyBreakdownList strong.negative { color: var(--coral); }
+.moneyBreakdownEmpty { padding: 18px 8px; color: var(--muted); font-size: 9px; text-align: center; }
+.moneyBreakdownMore { display: block; padding-top: 6px; color: var(--muted); font-size: 7px; }
+.moneyEquation { display: grid; border-radius: 18px; background: #f5f5f7; overflow: hidden; }
+.moneyEquation > div { min-width: 0; display: grid; grid-template-columns: 22px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 11px 12px; border-bottom: 1px solid white; }
+.moneyEquation > div:last-child { border-bottom: 0; }
+.moneyEquation > div > i { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 7px; background: white; color: var(--purple); font-size: 11px; font-style: normal; font-weight: 800; }
+.moneyEquation span { min-width: 0; }
+.moneyEquation b, .moneyEquation small { display: block; }
+.moneyEquation b { font-size: 10px; }
+.moneyEquation small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.moneyEquation strong { font-size: 11px; text-align: right; overflow-wrap: anywhere; }
+.moneyEquation .total { background: #eee7f5; }
+.moneyEquation .total strong { color: #654783; font-size: 12px; }
+
+.wealthPointHero { padding: 16px; border-radius: 19px; background: linear-gradient(145deg, #173c32, #2d755f); color: white; }
+.wealthPointHero.down { background: linear-gradient(145deg, #6f3f38, #a5594e); }
+.wealthPointHero > span { color: rgba(255,255,255,.65); font-size: 8px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.wealthPointHero > small { display: block; margin-top: 10px; color: rgba(255,255,255,.7); font-size: 8px; }
+.wealthPointHero > b { display: block; margin-top: 3px; font-size: 25px; font-weight: 750; letter-spacing: -.04em; overflow-wrap: anywhere; }
+.wealthPointHero > p { margin: 7px 0 0; color: rgba(255,255,255,.76); font-size: 9px; }
+.wealthPointStats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px; }
+.wealthPointStats > div { min-width: 0; padding: 10px; border-radius: 14px; background: #f5f5f7; }
+.wealthPointStats span, .wealthPointStats small { display: block; color: var(--muted); font-size: 8px; }
+.wealthPointStats b { display: block; margin: 4px 0 3px; font-size: 11px; overflow-wrap: anywhere; }
+.wealthPointStats small.good { color: var(--green-2); }
+.wealthPointStats small.bad { color: var(--coral); }
+.wealthPointActivity { padding: 0 12px; border: 1px solid var(--line); border-radius: 17px; }
+.wealthPointActivityHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 0 7px; }
+.wealthPointActivityHead b { font-size: 10px; }
+.wealthPointActivityHead span { color: var(--muted); font-size: 8px; }
+.wealthPointActivityRow { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.wealthPointActivityRow span { min-width: 0; }
+.wealthPointActivityRow b, .wealthPointActivityRow small { display: block; }
+.wealthPointActivityRow b { font-size: 10px; }
+.wealthPointActivityRow small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.wealthPointActivityRow strong { color: var(--purple); font-size: 10px; text-align: right; white-space: nowrap; }
+.wealthPointActivityRow.income strong, .wealthPointActivityRow.good strong { color: var(--green-2); }
+.wealthPointActivityRow.expense strong { color: var(--coral); }
+.wealthPointEmpty { padding: 15px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1.5; text-align: center; }
+.projectionAssumptions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.projectionAssumptions > div { min-width: 0; display: grid; gap: 3px; padding: 11px; border-radius: 14px; background: #f5f5f7; }
+.projectionAssumptions span { color: var(--muted); font-size: 8px; }
+.projectionAssumptions b { font-size: 10px; overflow-wrap: anywhere; }
+.projectionAssumptions .total { background: var(--blue-soft); }
+.projectionAssumptions .total b { color: var(--blue); }
+
+.reportPeriodTabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.reportPeriodTabs::-webkit-scrollbar { display: none; }
+.reportPeriodTabs button { flex: none; padding: 9px 11px; border-radius: 999px; background: #f0f0f2; color: var(--muted); font-size: 9px; font-weight: 700; white-space: nowrap; }
+.reportPeriodTabs button.active { background: var(--purple); color: white; }
+.statementGenerator .statementRangeLabel { margin: 1px 0 -4px; }
+.statementGenerator .friendlyNote { background: #f2ecf8; color: #654783; }
+.statementGenerator .buttonRow { justify-content: stretch; }
+.statementGenerator .buttonRow button { flex: 1; }
 
 /* Optional Sakhi practice — separate from the real money screens */
 .sakhiTourLauncher {
@@ -1194,6 +1296,11 @@ h3 { font-weight: 680; }
 
 @media (max-width: 430px) {
   main { padding-top: 18px; }
+  .moneyToolsGrid { grid-template-columns: 1fr 1fr; }
+  .moneyBreakdownVisual { grid-template-columns: 1fr; }
+  .moneyBreakdownDonut { margin: 0 auto; }
+  .wealthPointStats { grid-template-columns: 1fr 1fr; }
+  .wealthPointStats > div:last-child { grid-column: 1 / -1; }
   .quickAction small { display: none; }
   .quickAction { min-height: 64px; grid-template-columns: 32px 1fr; align-items: center; gap: 9px; }
   .quickAction > span { width: 32px; height: 32px; margin: 0; border-radius: 11px; font-size: 18px; }
