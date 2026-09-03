@@ -1,6 +1,6 @@
-const CACHE = 'our-dhan-v9-10';
+const CACHE = 'our-dhan-v9-11';
 const CORE = [
-  './', './index.html', './style.css', './app.js', './config.js', './manifest.json',
+  './', './index.html', './recovery.html', './style.css', './app.js', './config.js', './manifest.json',
   './icon.svg', './icon-192.png', './icon-512.png', './apple-touch-icon.png',
   './shortcut-spend.png', './shortcut-income.png', './shortcut-transfer.png'
 ];

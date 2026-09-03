@@ -22,7 +22,8 @@ const DEFAULT = {
   version: VERSION,
   settings: {
     base: 'MVR', lastCurrency: 'MVR', rates: { USD: 1, AED: 3.6725, MVR: 15.42, INR: 88 },
-    paydayDay: null, funMode: true, debtStrategy: 'avalanche', lastExpenseCategory: 'Food', lastExpenseAccountId: '', lastIncomeAccountId: ''
+    paydayDay: null, funMode: true, debtStrategy: 'avalanche', lastExpenseCategory: 'Food', lastExpenseAccountId: '', lastIncomeAccountId: '',
+    emailStatements: false, statementRecipientUserId: '', lastBackupAt: '', lastBackupHash: ''
   },
   member: { displayName: '', role: '' }, people: [],
   transactions: [],
@@ -41,9 +42,18 @@ let currentUser = null;
 let householdId = null;
 let stateKey = '';
 let pendingKey = '';
+let statementEmailKey = '';
 let realtimeChannel = null;
 let realtimeTimer = null;
 let priceRefresh = null;
+let durableCacheTimer = null;
+let pendingEncryptedBackup = null;
+let pendingOperationsMemory = [];
+let statementEmailQueueMemory = [];
+let statementEmailProviderReady = null;
+let statementEmailRecipientReady = false;
+let statementEmailRecipient = '';
+let statementEmailLastStatus = '';
 let currentPage = 'today';
 let wealthChartMode = 'actual';
 let timelineFilter = 'all';
@@ -68,6 +78,7 @@ const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[char]);
 const safeParse = value => { try { return JSON.parse(value); } catch (_error) { return null; } };
+const storageGet = key => { try { return localStorage.getItem(key); } catch (_error) { return null; } };
 const localDate = date => {
   const d = date || new Date();
   const offset = d.getTimezoneOffset() * 60000;
@@ -103,13 +114,82 @@ function normalizeState(raw) {
   return next;
 }
 
-function cache() {
-  if (stateKey) localStorage.setItem(stateKey, JSON.stringify(state));
+const DURABLE_CACHE_DB = 'our_dhan_durable_cache_v1';
+const DURABLE_CACHE_STORE = 'household_states';
+const LOCAL_CACHE_LIMIT = 1_500_000;
+
+function openDurableCache() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+  return new Promise(resolve => {
+    try {
+      const request = indexedDB.open(DURABLE_CACHE_DB, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(DURABLE_CACHE_STORE)) request.result.createObjectStore(DURABLE_CACHE_STORE);
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+    } catch (_error) { resolve(null); }
+  });
 }
 
-function loadScopedState() {
+async function durableCacheGet(key) {
+  const database = await openDurableCache();
+  if (!database) return '';
+  const stored = await new Promise(resolve => {
+    try {
+      const request = database.transaction(DURABLE_CACHE_STORE, 'readonly').objectStore(DURABLE_CACHE_STORE).get(key);
+      request.onsuccess = () => { database.close(); resolve(request.result || ''); };
+      request.onerror = () => { database.close(); resolve(''); };
+    } catch (_error) { database.close(); resolve(''); }
+  });
+  if (typeof stored === 'string') return stored;
+  if (stored?.format !== 'gzip-json' || !(stored.bytes instanceof ArrayBuffer) || !('DecompressionStream' in window)) return '';
+  try {
+    const stream = new Blob([stored.bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).text();
+  } catch (_error) { return ''; }
+}
+
+async function durableCacheSet(key, value) {
+  const database = await openDurableCache();
+  if (!database) return;
+  let stored = value;
+  if (typeof value === 'string' && value.length > 4096 && 'CompressionStream' in window) {
+    try {
+      const stream = new Blob([value]).stream().pipeThrough(new CompressionStream('gzip'));
+      stored = { format: 'gzip-json', bytes: await new Response(stream).arrayBuffer() };
+    } catch (_error) { stored = value; }
+  }
+  await new Promise(resolve => {
+    try {
+      const transaction = database.transaction(DURABLE_CACHE_STORE, 'readwrite');
+      transaction.objectStore(DURABLE_CACHE_STORE).put(stored, key);
+      transaction.oncomplete = resolve;
+      transaction.onerror = resolve;
+      transaction.onabort = resolve;
+    } catch (_error) { resolve(); }
+  });
+  database.close();
+}
+
+function cache() {
+  if (!stateKey) return;
+  const key = stateKey;
+  const serialized = JSON.stringify(state);
+  try {
+    if (serialized.length <= LOCAL_CACHE_LIMIT) localStorage.setItem(key, serialized);
+    else localStorage.removeItem(key);
+  } catch (_error) {
+    try { localStorage.removeItem(key); } catch (_ignored) { /* Supabase remains the source of truth. */ }
+  }
+  clearTimeout(durableCacheTimer);
+  durableCacheTimer = setTimeout(() => durableCacheSet(key, serialized), 180);
+}
+
+async function loadScopedState() {
   stateKey = `our_dhan_v9:${householdId}:${currentUser.id}`;
   pendingKey = `our_dhan_pending_v9:${householdId}:${currentUser.id}`;
+  statementEmailKey = `our_dhan_statement_email_v1:${householdId}:${currentUser.id}`;
   const legacyStateKeys = [
     `our_budget_v8:${householdId}:${currentUser.id}`,
     `our_budget_v7:${householdId}:${currentUser.id}`,
@@ -123,32 +203,146 @@ function loadScopedState() {
     `our_budget_pending_v6:${householdId}:${currentUser.id}`,
     `our_budget_pending_v5:${householdId}:${currentUser.id}`
   ];
-  let raw = safeParse(localStorage.getItem(stateKey));
+  let raw = safeParse(storageGet(stateKey));
+  if (!raw) raw = safeParse(await durableCacheGet(stateKey));
   if (!raw) {
     for (const key of legacyStateKeys) {
-      raw = safeParse(localStorage.getItem(key));
+      raw = safeParse(storageGet(key));
       if (raw) break;
     }
   }
-  if (!localStorage.getItem(pendingKey)) {
+  let queued = safeParse(storageGet(pendingKey));
+  if (!Array.isArray(queued)) queued = safeParse(await durableCacheGet(`${pendingKey}:queue`));
+  if (!Array.isArray(queued)) {
     for (const key of legacyPendingKeys) {
-      const queued = safeParse(localStorage.getItem(key));
-      if (Array.isArray(queued) && queued.length) {
-        localStorage.setItem(pendingKey, JSON.stringify(queued));
-        break;
-      }
+      const legacyQueued = safeParse(storageGet(key));
+      if (Array.isArray(legacyQueued) && legacyQueued.length) { queued = legacyQueued; break; }
     }
   }
+  pendingOperationsMemory = Array.isArray(queued) ? queued : [];
+  savePending(pendingOperationsMemory);
+  const emailQueue = safeParse(storageGet(statementEmailKey)) || safeParse(await durableCacheGet(`${statementEmailKey}:queue`));
+  statementEmailQueueMemory = Array.isArray(emailQueue) ? emailQueue.slice(-24) : [];
+  savePendingStatementEmails(statementEmailQueueMemory);
   state = normalizeState(raw);
   cache();
 }
 
-function pending() { return safeParse(localStorage.getItem(pendingKey)) || []; }
+function pending() {
+  if (!pendingKey) return [];
+  try {
+    const stored = safeParse(localStorage.getItem(pendingKey));
+    if (Array.isArray(stored)) pendingOperationsMemory = stored;
+  } catch (_error) { /* Keep the durable in-memory copy. */ }
+  return pendingOperationsMemory;
+}
 function savePending(items) {
   if (!pendingKey) return;
-  if (items.length) localStorage.setItem(pendingKey, JSON.stringify(items));
-  else localStorage.removeItem(pendingKey);
+  pendingOperationsMemory = [...items];
+  const serialized = JSON.stringify(pendingOperationsMemory);
+  durableCacheSet(`${pendingKey}:queue`, serialized);
+  try {
+    if (items.length) localStorage.setItem(pendingKey, serialized);
+    else localStorage.removeItem(pendingKey);
+  } catch (_error) {
+    try {
+      localStorage.removeItem(stateKey);
+      if (items.length) localStorage.setItem(pendingKey, serialized);
+      else localStorage.removeItem(pendingKey);
+    } catch (_ignored) { /* IndexedDB still holds the offline queue. */ }
+  }
   updateSyncStatus();
+}
+
+function pendingStatementEmails() {
+  if (!statementEmailKey) return [];
+  try {
+    const stored = safeParse(localStorage.getItem(statementEmailKey));
+    if (Array.isArray(stored)) statementEmailQueueMemory = stored;
+  } catch (_error) { /* Keep the durable in-memory copy. */ }
+  return statementEmailQueueMemory;
+}
+
+function savePendingStatementEmails(items) {
+  if (!statementEmailKey) return;
+  statementEmailQueueMemory = items.slice(-24);
+  const serialized = JSON.stringify(statementEmailQueueMemory);
+  durableCacheSet(`${statementEmailKey}:queue`, serialized);
+  try {
+    if (statementEmailQueueMemory.length) localStorage.setItem(statementEmailKey, serialized);
+    else localStorage.removeItem(statementEmailKey);
+  } catch (_error) { /* Finance sync remains independent of email delivery. */ }
+}
+
+async function refreshStatementEmailStatus() {
+  if (!db || !currentUser || !householdId || !navigator.onLine) return;
+  const { data, error } = await db.functions.invoke('email-monthly-statement', { body: { action: 'status' } });
+  if (error || data?.error) {
+    statementEmailProviderReady = false;
+    statementEmailRecipientReady = false;
+    statementEmailLastStatus = 'Email service is not ready yet.';
+  } else {
+    statementEmailProviderReady = data.providerReady === true;
+    statementEmailRecipientReady = data.recipientReady === true;
+    statementEmailRecipient = data.recipient || '';
+    statementEmailLastStatus = statementEmailProviderReady && statementEmailRecipientReady ? 'Secure delivery is ready.'
+      : data.reason === 'external_email_not_authorized' ? 'External email relay is not authorised.' : 'One-time email connection still needed.';
+  }
+  renderStatementEmailSettings();
+}
+
+async function flushStatementEmailQueue(silent = false) {
+  if (!db || !householdId || !navigator.onLine || !state.settings.emailStatements) return false;
+  const items = pendingStatementEmails();
+  while (items.length) {
+    const item = items[0];
+    const { data, error } = await db.functions.invoke('email-monthly-statement', {
+      body: { action: 'deliver', transactionId: item.transactionId }
+    });
+    if (error || data?.error) {
+      statementEmailLastStatus = 'Statement is waiting; your money records are safe.';
+      if (!silent) toast('Statement email is waiting. Your records are already saved.');
+      renderStatementEmailSettings();
+      return false;
+    }
+    if (data?.status === 'setup_required') {
+      statementEmailProviderReady = false;
+      statementEmailLastStatus = 'One-time email connection still needed.';
+      if (!silent) toast('Statement saved. Finish email setup once to send it automatically.');
+      renderStatementEmailSettings();
+      return false;
+    }
+    if (['disabled', 'ignored'].includes(data?.status)) {
+      items.shift();
+      savePendingStatementEmails(items);
+      continue;
+    }
+    if (['sent', 'already_sent'].includes(data?.status)) {
+      statementEmailProviderReady = true;
+      statementEmailRecipientReady = true;
+      statementEmailRecipient = data.recipient || statementEmailRecipient;
+      statementEmailLastStatus = data.status === 'sent' ? 'Last monthly statement sent ✓' : 'This month’s statement was already sent ✓';
+      items.shift();
+      savePendingStatementEmails(items);
+      if (!silent && data.status === 'sent') toast('Previous month’s statement emailed ✓');
+      continue;
+    }
+    statementEmailLastStatus = 'Statement delivery is processing.';
+    renderStatementEmailSettings();
+    return false;
+  }
+  renderStatementEmailSettings();
+  return true;
+}
+
+function queueSalaryStatement(transaction) {
+  if (!state.settings.emailStatements || transaction.type !== 'income' || transaction.category !== 'Salary') return;
+  const items = pendingStatementEmails();
+  if (!items.some(item => item.transactionId === transaction.id)) {
+    items.push({ transactionId: transaction.id, queuedAt: new Date().toISOString() });
+    savePendingStatementEmails(items);
+  }
+  flushStatementEmailQueue(false);
 }
 function enqueue(operation) {
   const items = pending();
@@ -754,6 +948,9 @@ async function runOperation(operation) {
   if (operation.action === 'moneyDate') {
     return db.from('weekly_money_dates').upsert(operation.row, { onConflict: 'household_id,week_start' });
   }
+  if (operation.action === 'bulkUpsert') {
+    return db.from(operation.table).upsert(operation.rows, operation.onConflict ? { onConflict: operation.onConflict } : undefined);
+  }
   return db.from(operation.table).upsert(operation.row);
 }
 
@@ -808,6 +1005,7 @@ async function saveOperations(operations, options = {}) {
 
 window.addEventListener('online', async () => {
   if (await flushPending()) await loadRemote();
+  await flushStatementEmailQueue(true);
 });
 
 function showPage(name) {
@@ -844,6 +1042,13 @@ function showAuth() {
   householdId = null;
   stateKey = '';
   pendingKey = '';
+  statementEmailKey = '';
+  pendingOperationsMemory = [];
+  statementEmailQueueMemory = [];
+  statementEmailProviderReady = null;
+  statementEmailRecipientReady = false;
+  statementEmailRecipient = '';
+  statementEmailLastStatus = '';
   state = clone(DEFAULT);
   $('authScreen').classList.remove('hidden');
   $('app').classList.add('hidden');
@@ -870,11 +1075,13 @@ async function signedIn(user) {
     return;
   }
   householdId = member.household_id;
-  loadScopedState();
+  await loadScopedState();
   state.member = { displayName: member.display_name || 'Friend', role: member.role || 'member' };
   cache();
   await flushPending();
   await loadRemote();
+  await refreshStatementEmailStatus();
+  await flushStatementEmailQueue(true);
   subscribeRealtime();
   showPage(currentPage);
   await refreshPrices(false);
@@ -882,21 +1089,39 @@ async function signedIn(user) {
   handleQuickAction();
 }
 
+async function fetchAllHouseholdRows(table, columns = '*') {
+  const rows = [];
+  const pageSize = 500;
+  let cursor = '';
+  while (true) {
+    let query = db.from(table).select(columns).eq('household_id', householdId)
+      .order('id', { ascending: true }).limit(pageSize);
+    if (cursor) query = query.gt('id', cursor);
+    const { data, error } = await query;
+    if (error) return { data: null, error };
+    const batch = data || [];
+    rows.push(...batch);
+    if (batch.length < pageSize) return { data: rows, error: null };
+    cursor = batch.at(-1)?.id || '';
+    if (!cursor) return { data: rows, error: null };
+  }
+}
+
 async function loadRemote() {
   if (!db || !householdId) return;
   const results = await Promise.all([
-    db.from('transactions').select('*').eq('household_id', householdId),
+    fetchAllHouseholdRows('transactions'),
     db.from('budgets').select('*').eq('household_id', householdId),
     db.from('goals').select('*').eq('household_id', householdId),
     db.from('debts').select('*').eq('household_id', householdId),
     db.from('assets').select('*').eq('household_id', householdId),
     db.from('accounts').select('*').eq('household_id', householdId),
     db.from('recurring_items').select('*').eq('household_id', householdId),
-    db.from('goal_contributions').select('*').eq('household_id', householdId),
-    db.from('net_worth_snapshots').select('*').eq('household_id', householdId).order('snapshot_date'),
-    db.from('monthly_checkups').select('*').eq('household_id', householdId).order('month'),
+    fetchAllHouseholdRows('goal_contributions'),
+    fetchAllHouseholdRows('net_worth_snapshots'),
+    fetchAllHouseholdRows('monthly_checkups'),
     db.from('sinking_funds').select('*').eq('household_id', householdId).order('due_date'),
-    db.from('weekly_money_dates').select('*').eq('household_id', householdId).order('week_start'),
+    fetchAllHouseholdRows('weekly_money_dates'),
     db.from('household_settings').select('*').eq('household_id', householdId).maybeSingle(),
     db.from('household_members').select('display_name').eq('household_id', householdId)
   ]);
@@ -923,15 +1148,19 @@ async function loadRemote() {
   state.accounts = accounts.map(row => ({ id: row.id, name: row.name, type: row.account_type, currency: cleanCurrency(row.currency), openingBalance: +row.opening_balance, openingDate: row.opening_date, notes: row.notes || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
   state.recurring = recurring.map(row => ({ id: row.id, name: row.name, kind: row.kind, amount: +row.amount, currency: cleanCurrency(row.currency), category: row.category, paidBy: row.paid_by, accountId: row.account_id || '', day: row.day_of_month, note: row.note || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
   state.contributions = contributions.map(row => ({ id: row.id, goalId: row.goal_id, accountId: row.account_id || '', amount: +row.amount, currency: cleanCurrency(row.currency), date: row.date, note: row.note || '', createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.snapshots = snapshots.map(row => ({ id: row.id, date: row.snapshot_date, cashUSD: +row.cash_usd, assetsUSD: +row.assets_usd, debtUSD: +row.debt_usd, netWorthUSD: +row.net_worth_usd }));
-  state.checkups = checkups.map(row => ({ id: row.id, month: row.month, accountCount: +row.account_count, adjustmentUSD: +row.adjustment_total_usd, note: row.note || '', focus: row.focus || '', closedAt: row.closed_at || '', balancesCheckedAt: row.balances_checked_at || '', completedBy: row.completed_by || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' }));
+  state.snapshots = snapshots.map(row => ({ id: row.id, date: row.snapshot_date, cashUSD: +row.cash_usd, assetsUSD: +row.assets_usd, debtUSD: +row.debt_usd, netWorthUSD: +row.net_worth_usd })).sort((a, b) => a.date.localeCompare(b.date));
+  state.checkups = checkups.map(row => ({ id: row.id, month: row.month, accountCount: +row.account_count, adjustmentUSD: +row.adjustment_total_usd, note: row.note || '', focus: row.focus || '', closedAt: row.closed_at || '', balancesCheckedAt: row.balances_checked_at || '', completedBy: row.completed_by || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' })).sort((a, b) => a.month.localeCompare(b.month));
   state.sinkingFunds = sinkingFunds.map(row => ({ id: row.id, name: row.name, target: +row.target_amount, saved: +row.saved_amount, currency: cleanCurrency(row.currency), due: row.due_date || '', lastReservedMonth: row.last_reserved_month || '', note: row.note || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.weeklyReviews = weeklyReviews.map(row => ({ id: row.id, weekStart: row.week_start, reviewedBy: row.reviewed_by || '', win: row.win || '', nextAction: row.next_action || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' }));
+  state.weeklyReviews = weeklyReviews.map(row => ({ id: row.id, weekStart: row.week_start, reviewedBy: row.reviewed_by || '', win: row.win || '', nextAction: row.next_action || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' })).sort((a, b) => a.weekStart.localeCompare(b.weekStart));
   if (settings) {
     state.settings.base = cleanCurrency(settings.base_currency) || state.settings.base;
     state.settings.paydayDay = settings.payday_day || null;
     state.settings.funMode = settings.fun_mode !== false;
     state.settings.debtStrategy = ['avalanche', 'snowball'].includes(settings.debt_strategy) ? settings.debt_strategy : 'avalanche';
+    state.settings.emailStatements = settings.email_statements_enabled === true;
+    state.settings.statementRecipientUserId = settings.statement_recipient_user_id || '';
+    state.settings.lastBackupAt = settings.last_portable_backup_at || '';
+    state.settings.lastBackupHash = settings.last_portable_backup_sha256 || '';
     state.settings.rates = {
       USD: 1,
       AED: +(settings.usd_to_aed || state.settings.rates.AED),
@@ -2500,6 +2729,8 @@ function render() {
   $('rateAED').value = state.settings.rates.AED;
   $('rateMVR').value = state.settings.rates.MVR;
   $('rateINR').value = state.settings.rates.INR;
+  renderStatementEmailSettings();
+  renderDataSafetyStatus();
   updateSakhiTourLauncher();
   queueMicrotask(() => syncAllInlineControls());
 }
@@ -2619,6 +2850,7 @@ function openQuickTransaction(type, options = {}) {
     rememberCurrency(transaction.currency);
     state.transactions.push(transaction);
     await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: isIncome ? 'Income added ✓' : 'Spend recorded ✓', celebrate: isIncome });
+    queueSalaryStatement(transaction);
     ensureTodaySnapshot();
   };
 }
@@ -2672,6 +2904,7 @@ function openTransaction(type, id = null, options = {}) {
     if (index >= 0) state.transactions[index] = transaction;
     else state.transactions.push(transaction);
     await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: type === 'income' ? 'Income added ✓' : 'Expense saved ✓', celebrate: type === 'income' });
+    queueSalaryStatement(transaction);
     ensureTodaySnapshot();
   };
 }
@@ -3269,11 +3502,85 @@ function openBudget() {
 }
 
 function settingsRow() {
-  return {
+  const row = {
     household_id: householdId, base_currency: state.settings.base, payday_day: state.settings.paydayDay,
     fun_mode: state.settings.funMode, debt_strategy: state.settings.debtStrategy,
-    usd_to_aed: state.settings.rates.AED, usd_to_mvr: state.settings.rates.MVR, usd_to_inr: state.settings.rates.INR
+    usd_to_aed: state.settings.rates.AED, usd_to_mvr: state.settings.rates.MVR, usd_to_inr: state.settings.rates.INR,
+    last_portable_backup_at: state.settings.lastBackupAt || null,
+    last_portable_backup_sha256: state.settings.lastBackupHash || null
   };
+  if (state.member.role === 'owner') {
+    row.email_statements_enabled = state.settings.emailStatements === true;
+    row.statement_recipient_user_id = state.settings.statementRecipientUserId || null;
+  }
+  return row;
+}
+
+function renderStatementEmailSettings() {
+  const root = $('emailStatementCopy');
+  const button = $('emailStatementAction');
+  if (!root || !button) return;
+  const owner = state.member.role === 'owner';
+  if (!state.settings.emailStatements) {
+    root.innerHTML = statementEmailProviderReady
+      ? '<h3>Monthly email statement</h3><p>Off · turn it on to send the previous month after salary is recorded.</p>'
+      : '<h3>Monthly email statement</h3><p>Off · external email is not connected. Local statements remain available.</p>';
+    button.textContent = statementEmailProviderReady ? 'Turn on' : 'Not connected';
+  } else {
+    const destination = statementEmailRecipient ? ` to ${esc(statementEmailRecipient)}` : ' to the verified owner email';
+    const status = statementEmailProviderReady === true && statementEmailRecipientReady ? `On${destination}` : statementEmailLastStatus || 'On · checking secure delivery';
+    root.innerHTML = `<h3>Monthly email statement</h3><p>${esc(status)}. It sends once per month after Salary is saved.</p>`;
+    button.textContent = 'Pause';
+  }
+  button.disabled = !owner || (!state.settings.emailStatements && statementEmailProviderReady !== true);
+  if (!owner) button.textContent = 'Owner only';
+}
+
+function renderDataSafetyStatus() {
+  const root = $('dataSafetyCopy');
+  if (!root) return;
+  const bytes = new Blob([JSON.stringify(state)]).size;
+  const lastBackup = state.settings.lastBackupAt ? formatDate(state.settings.lastBackupAt.slice(0, 10)) : '';
+  const ageDays = lastBackup ? Math.floor((Date.now() - new Date(`${state.settings.lastBackupAt.slice(0, 10)}T12:00:00`).getTime()) / 86_400_000) : Infinity;
+  const status = ageDays <= 35 ? `Protected copy made ${esc(lastBackup)} ✓` : 'Private backup is due';
+  root.innerHTML = `<h3>Own your data</h3><p>${state.transactions.length.toLocaleString('en-US')} records · about ${humanBytes(bytes)} on this phone · ${status}</p>`;
+  if ($('moneyBackupStatus')) $('moneyBackupStatus').textContent = ageDays <= 35 ? `Protected ${lastBackup} ✓` : 'Private backup due';
+}
+
+async function toggleStatementEmails() {
+  if (state.member.role !== 'owner') { toast('Only the household owner can change email delivery.'); return; }
+  state.settings.emailStatements = !state.settings.emailStatements;
+  if (state.settings.emailStatements) state.settings.statementRecipientUserId = currentUser.id;
+  await saveOperation({ action: 'settings', row: settingsRow() }, {
+    close: false,
+    message: state.settings.emailStatements ? 'Monthly statement email turned on' : 'Monthly statement email paused'
+  });
+  if (state.settings.emailStatements) {
+    await refreshStatementEmailStatus();
+    await flushStatementEmailQueue(true);
+  } else {
+    savePendingStatementEmails([]);
+    statementEmailLastStatus = '';
+    renderStatementEmailSettings();
+  }
+}
+
+function openStatementEmailInfo() {
+  const destination = statementEmailRecipient || 'the verified owner login email';
+  const delivery = !state.settings.emailStatements ? 'Paused'
+    : statementEmailProviderReady && statementEmailRecipientReady ? 'Ready ✓' : 'Waiting for the one-time email connection';
+  openModal('Monthly email statement', `<div class="emailInfo">
+    <div class="emailInfoHero"><span>DELIVERY STATUS</span><b>${esc(delivery)}</b><small>${esc(destination)}</small></div>
+    <div class="emailInfoSteps">
+      <div><i>1</i><span><b>Record Salary</b><small>Saving an income entry with the Salary category is the trigger.</small></span></div>
+      <div><i>2</i><span><b>Previous month closes</b><small>Income, spending and the 40–30–20–10 guide are calculated without transfers or balance corrections.</small></span></div>
+      <div><i>3</i><span><b>One email, once</b><small>A readable CSV is attached. Repeated taps cannot send the same month twice.</small></span></div>
+    </div>
+    <div class="warningNote"><b>Privacy truth:</b> delivery uses the free Resend relay, so the statement passes through Resend and the owner’s mailbox. Resend’s free service can retain message content for 30 days. Our DHAN stores only delivery status—not the statement or its totals—in its delivery log.</div>
+    ${statementEmailProviderReady ? '' : '<div class="friendlyNote"><b>Intentionally not connected:</b> automatic email can be activated later only after the owner accepts that the statement will pass through an external relay. Any future API key must stay only in a Supabase Function secret—never this website or <code>config.js</code>.</div>'}
+    <div class="friendlyNote">This runs from Our DHAN and Supabase. ChatGPT Plus is not used and can expire without affecting it.</div>
+    <div class="buttonRow">${state.settings.emailStatements || statementEmailProviderReady ? `<button class="primary" onclick="closeModal();toggleStatementEmails()">${state.settings.emailStatements ? 'Pause emails' : 'Turn on emails'}</button>` : ''}<button class="secondary" onclick="closeModal()">Done</button></div>
+  </div>`);
 }
 
 async function saveSettings() {
@@ -3338,10 +3645,168 @@ function downloadFile(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function exportBackup(label = '') {
-  const backup = { exportedAt: new Date().toISOString(), appVersion: VERSION, household: 'Our DHAN', data: state };
+function humanBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 ** 2).toFixed(1)} MB`;
+}
+
+function backupRecordCounts() {
+  return Object.fromEntries(['transactions', 'accounts', 'assets', 'debts', 'goals', 'contributions', 'recurring', 'snapshots', 'checkups', 'sinkingFunds', 'weeklyReviews']
+    .map(key => [key, state[key]?.length || 0]));
+}
+
+function backupBody() {
+  return {
+    format: 'our-dhan-portable-backup', formatVersion: 1, appVersion: VERSION,
+    exportedAt: new Date().toISOString(), household: 'Our DHAN',
+    recovery: 'Open Our DHAN and choose Restore backup. The data is plain JSON so it can also be read without this app.',
+    recordCounts: backupRecordCounts(), data: state
+  };
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(item => item === undefined ? 'null' : canonicalJson(item)).join(',')}]`;
+  return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+}
+
+async function sha256Hex(value) {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+async function compressBackupBytes(bytes) {
+  if (!('CompressionStream' in window)) return { bytes, compression: 'none' };
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return { bytes: new Uint8Array(await new Response(stream).arrayBuffer()), compression: 'gzip' };
+}
+
+async function streamBytesWithLimit(stream, limit = 100 * 1024 * 1024) {
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) { await reader.cancel(); throw new Error('The expanded backup is unexpectedly large.'); }
+    chunks.push(value);
+  }
+  const output = new Uint8Array(total);
+  let offset = 0;
+  chunks.forEach(chunk => { output.set(chunk, offset); offset += chunk.byteLength; });
+  return output;
+}
+
+async function decompressBackupBytes(bytes, compression) {
+  if (compression === 'none') {
+    if (bytes.byteLength > 100 * 1024 * 1024) throw new Error('The backup is unexpectedly large.');
+    return bytes;
+  }
+  if (compression !== 'gzip' || !('DecompressionStream' in window)) throw new Error('This browser cannot open the compressed backup.');
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return streamBytesWithLimit(stream);
+}
+
+async function backupEncryptionKey(passphrase, salt, iterations, usages) {
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    usages
+  );
+}
+
+function recordBackupCreated(checksum, createdAt) {
+  state.settings.lastBackupAt = createdAt;
+  state.settings.lastBackupHash = checksum;
+  cache();
+  if (db && householdId) {
+    enqueue({ action: 'settings', row: settingsRow() });
+    flushPending().then(ok => { if (ok) loadRemote(); });
+  }
+}
+
+async function exportBackup(label = '', quiet = false) {
+  const body = backupBody();
+  const canonical = canonicalJson(body);
+  const checksum = await sha256Hex(canonical);
+  const backup = { ...body, integrity: { algorithm: 'SHA-256', value: checksum } };
   downloadFile(`our-dhan-${label ? `${label}-` : 'backup-'}${today()}.json`, JSON.stringify(backup, null, 2), 'application/json');
-  toast('Complete backup downloaded ✓');
+  recordBackupCreated(checksum, body.exportedAt);
+  if (!quiet) toast('Readable backup downloaded ✓');
+}
+
+function openPrivateBackupForm() {
+  openModal('Create private backup', `<form id="privateBackupForm" class="form">
+    <section class="flowStep">
+      <div class="friendlyNote">Recommended. Your complete backup is compressed, then locked with a passphrase before it leaves this phone.</div>
+      <label>Backup passphrase<input id="backupPassphrase" type="password" minlength="10" maxlength="128" autocomplete="new-password" required><small class="fieldHint">Use at least 10 characters. It is never stored or sent anywhere.</small></label>
+      <label>Repeat passphrase<input id="backupPassphraseAgain" type="password" minlength="10" maxlength="128" autocomplete="new-password" required></label>
+      <div class="warningNote">If this passphrase is lost, nobody can recover the backup. Keep it in your password manager.</div>
+      <button class="primary" type="submit">Lock and download</button>
+    </section>
+  </form>`);
+  $('privateBackupForm').onsubmit = async event => {
+    event.preventDefault();
+    const passphrase = $('backupPassphrase').value;
+    if (passphrase !== $('backupPassphraseAgain').value) { toast('The passphrases do not match.'); return; }
+    const button = event.submitter;
+    if (button) { button.disabled = true; button.textContent = 'Protecting…'; }
+    try {
+      const body = backupBody();
+      const plain = new TextEncoder().encode(JSON.stringify(body));
+      const checksum = await sha256Hex(canonicalJson(body));
+      const compressed = await compressBackupBytes(plain);
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const iterations = 310000;
+      const key = await backupEncryptionKey(passphrase, salt, iterations, ['encrypt']);
+      const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, compressed.bytes));
+      const envelope = {
+        format: 'our-dhan-private-backup', formatVersion: 1, appVersion: VERSION, createdAt: body.exportedAt,
+        encryption: { cipher: 'AES-256-GCM', kdf: 'PBKDF2-HMAC-SHA-256', iterations, salt: bytesToBase64(salt), iv: bytesToBase64(iv) },
+        compression: compressed.compression, ciphertext: bytesToBase64(ciphertext)
+      };
+      downloadFile(`our-dhan-private-${today()}.odhan`, JSON.stringify(envelope), 'application/vnd.our-dhan.backup+json');
+      recordBackupCreated(checksum, body.exportedAt);
+      closeModal();
+      toast(`Private backup downloaded · ${humanBytes(new Blob([JSON.stringify(envelope)]).size)} ✓`);
+    } catch (_error) {
+      if (button) { button.disabled = false; button.textContent = 'Lock and download'; }
+      toast('This phone could not create the private backup.');
+    }
+  };
+}
+
+function openBackupCenter() {
+  const bytes = new Blob([JSON.stringify(state)]).size;
+  const last = state.settings.lastBackupAt ? formatDate(state.settings.lastBackupAt.slice(0, 10)) : 'No verified backup yet';
+  openModal('Backup & data safety', `<div class="backupCenter">
+    <div class="backupHealth"><div><span>Current data</span><b>${humanBytes(bytes)}</b><small>${state.transactions.length.toLocaleString('en-US')} transaction records</small></div><div><span>Last backup</span><b>${esc(last)}</b><small>${state.settings.lastBackupHash ? 'Integrity recorded ✓' : 'Make two copies'}</small></div></div>
+    <div class="backupChoice recommended"><div><i>🔒</i><span><b>Private backup</b><small>Compressed and encrypted on this phone</small></span></div><button class="primary compact" onclick="openPrivateBackupForm()">Download</button></div>
+    <div class="backupChoice"><div><i>⌘</i><span><b>Readable JSON</b><small>Most future-proof; anyone with the file can read it</small></span></div><button class="secondary compact" onclick="exportBackup()">Download</button></div>
+    <div class="backupChoice"><div><i>↥</i><span><b>Restore a copy</b><small>Supports .odhan and older Our DHAN JSON files</small></span></div><button class="secondary compact" onclick="chooseBackupFile()">Choose file</button></div>
+    <div class="friendlyNote">Keep one private backup in each of two places you control, such as your phone and a personal drive. Our DHAN never uploads these backup files.</div>
+    <a class="recoveryLink" href="recovery.html" target="_blank" rel="noopener">Open the independent recovery tool <span>›</span></a>
+    <button type="button" class="secondary wide" onclick="closeModal()">Done</button>
+  </div>`);
 }
 
 function chooseBackupFile() {
@@ -3356,13 +3821,14 @@ function validateBackupData(data, version) {
   const arrayKeys = ['transactions', 'goals', 'debts', 'assets', 'accounts', 'recurring', 'contributions', 'snapshots'];
   for (const key of arrayKeys) {
     if (!Array.isArray(data[key])) return `The ${key} section is missing.`;
-    if (data[key].length > 5000) return `The ${key} section is unexpectedly large.`;
+    if (data[key].length > 250000) return `The ${key} section is unexpectedly large.`;
   }
-  for (const key of ['sinkingFunds', 'weeklyReviews']) {
+  for (const key of ['checkups', 'sinkingFunds', 'weeklyReviews']) {
     if (data[key] != null && !Array.isArray(data[key])) return `The ${key} section is invalid.`;
-    if ((data[key]?.length || 0) > 5000) return `The ${key} section is unexpectedly large.`;
+    if ((data[key]?.length || 0) > 250000) return `The ${key} section is unexpectedly large.`;
+    if (data[key] == null) data[key] = [];
   }
-  const allRecords = arrayKeys.flatMap(key => data[key]);
+  const allRecords = [...arrayKeys, 'checkups', 'sinkingFunds', 'weeklyReviews'].flatMap(key => data[key]);
   if (allRecords.some(item => !item || typeof item !== 'object' || ('id' in item && typeof item.id !== 'string'))) return 'One or more records are invalid.';
   const accountIds = new Set([...state.accounts, ...data.accounts].map(item => item.id));
   const debtIds = new Set([...state.debts, ...data.debts].map(item => item.id));
@@ -3376,32 +3842,76 @@ function validateBackupData(data, version) {
   return '';
 }
 
+async function verifyReadableBackup(payload) {
+  if (!payload?.integrity) return 'Older backup · no checksum';
+  if (payload.integrity.algorithm !== 'SHA-256' || !/^[0-9a-f]{64}$/.test(payload.integrity.value || '')) throw new Error('Invalid backup checksum.');
+  const { integrity, ...body } = payload;
+  const actual = await sha256Hex(canonicalJson(body));
+  if (actual !== integrity.value) throw new Error('The backup changed or is damaged.');
+  return 'Integrity verified ✓';
+}
+
+function prepareBackupRestore(payload, verification) {
+  const version = Number(payload?.appVersion || payload?.data?.version || 0);
+  const error = validateBackupData(payload?.data, version);
+  if (error) { toast(error); return; }
+  pendingRestoreData = normalizeState(payload.data);
+  const data = pendingRestoreData;
+  openModal('Restore backup', `<div class="form">
+    <div class="friendlyNote">${esc(verification)}. A safety copy of today’s data downloads first. Restore merges this file into the household and keeps newer records.</div>
+    <div class="restorePreview">
+      <div><span>Transactions</span><b>${data.transactions.length.toLocaleString('en-US')}</b></div>
+      <div><span>Accounts</span><b>${data.accounts.length}</b></div>
+      <div><span>Plans</span><b>${data.goals.length + data.debts.length}</b></div>
+      <div><span>Regular items</span><b>${data.recurring.length}</b></div>
+      <div><span>Assets</span><b>${data.assets.length}</b></div>
+      <div><span>Snapshots</span><b>${data.snapshots.length.toLocaleString('en-US')}</b></div>
+    </div>
+    <div class="warningNote">Keep this page open until the restore finishes. Nothing is restored while offline.</div>
+    <button id="restoreConfirm" class="primary" onclick="confirmBackupRestore()">Download safety copy and restore</button>
+    <button class="secondary" onclick="pendingRestoreData=null;closeModal()">Cancel</button>
+  </div>`);
+}
+
+async function decryptSelectedBackup() {
+  const envelope = pendingEncryptedBackup;
+  if (!envelope) return;
+  const passphrase = $('restorePassphrase').value;
+  const button = $('decryptBackupButton');
+  if (button) { button.disabled = true; button.textContent = 'Unlocking…'; }
+  try {
+    const encryption = envelope.encryption || {};
+    const iterations = Number(encryption.iterations);
+    if (encryption.cipher !== 'AES-256-GCM' || encryption.kdf !== 'PBKDF2-HMAC-SHA-256' || iterations < 100000 || iterations > 2000000) throw new Error('Unsupported encryption settings.');
+    const salt = base64ToBytes(encryption.salt || '');
+    const iv = base64ToBytes(encryption.iv || '');
+    const key = await backupEncryptionKey(passphrase, salt, iterations, ['decrypt']);
+    const decrypted = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, base64ToBytes(envelope.ciphertext || '')));
+    const plain = await decompressBackupBytes(decrypted, envelope.compression || 'none');
+    const payload = safeParse(new TextDecoder().decode(plain));
+    if (!payload) throw new Error('Invalid backup payload.');
+    pendingEncryptedBackup = null;
+    prepareBackupRestore(payload, 'Private backup unlocked and authenticated');
+  } catch (_error) {
+    if (button) { button.disabled = false; button.textContent = 'Unlock backup'; }
+    toast('Wrong passphrase or damaged backup.');
+  }
+}
+
 async function handleBackupFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) { toast('Backup files must be under 5 MB.'); return; }
+  if (file.size > 50 * 1024 * 1024) { toast('Backup files must be under 50 MB.'); return; }
   try {
     const payload = safeParse(await file.text());
-    const version = Number(payload?.appVersion || payload?.data?.version || 0);
-    const error = validateBackupData(payload?.data, version);
-    if (error) { toast(error); return; }
-    pendingRestoreData = normalizeState(payload.data);
-    const data = pendingRestoreData;
-    openModal('Restore backup', `<div class="form">
-      <div class="friendlyNote">A safety copy of today’s data will download first. Restore merges the backup into this household; it does not delete newer records.</div>
-      <div class="restorePreview">
-        <div><span>Transactions</span><b>${data.transactions.length}</b></div>
-        <div><span>Accounts</span><b>${data.accounts.length}</b></div>
-        <div><span>Plans</span><b>${data.goals.length + data.debts.length}</b></div>
-        <div><span>Regular items</span><b>${data.recurring.length}</b></div>
-        <div><span>Assets</span><b>${data.assets.length}</b></div>
-        <div><span>Snapshots</span><b>${data.snapshots.length}</b></div>
-      </div>
-      <div class="warningNote">Keep this page open until the restore finishes. Nothing is restored while offline.</div>
-      <button id="restoreConfirm" class="primary" onclick="confirmBackupRestore()">Download safety copy and restore</button>
-      <button class="secondary" onclick="pendingRestoreData=null;closeModal()">Cancel</button>
-    </div>`);
-  } catch (_error) { toast('This backup could not be read.'); }
+    if (!payload) throw new Error('Invalid JSON.');
+    if (payload.format === 'our-dhan-private-backup') {
+      pendingEncryptedBackup = payload;
+      openModal('Unlock private backup', `<form class="form" onsubmit="event.preventDefault();decryptSelectedBackup()"><section class="flowStep"><div class="friendlyNote">This file is encrypted. Enter the passphrase used when it was created.</div><label>Backup passphrase<input id="restorePassphrase" type="password" minlength="10" maxlength="128" autocomplete="current-password" required autofocus></label><button id="decryptBackupButton" class="primary" type="submit">Unlock backup</button><button class="secondary" type="button" onclick="pendingEncryptedBackup=null;closeModal()">Cancel</button></section></form>`);
+      return;
+    }
+    prepareBackupRestore(payload, await verifyReadableBackup(payload));
+  } catch (error) { toast(error?.message || 'This backup could not be read.'); }
 }
 
 function accountRestoreRow(account) {
@@ -3414,6 +3924,13 @@ function debtRestoreRow(debt, remaining = debt.remaining) {
   return { id: debt.id, household_id: householdId, name: String(debt.name || '').trim(), original_amount: Number(debt.original || 0), remaining_amount: Number(remaining || 0), currency: cleanCurrency(debt.currency), due_date: debt.due || null, annual_interest_rate: Number(debt.apr || 0), minimum_payment: Number(debt.minimum || 0), payment_day: debt.paymentDay || null, active: debt.active !== false, updated_at: new Date().toISOString() };
 }
 
+function addRestoreBatches(operations, table, rows, onConflict = '') {
+  const size = 500;
+  for (let index = 0; index < rows.length; index += size) {
+    operations.push({ action: 'bulkUpsert', table, rows: rows.slice(index, index + size), onConflict });
+  }
+}
+
 async function confirmBackupRestore() {
   const data = pendingRestoreData;
   if (!data || !db || !householdId) return;
@@ -3421,7 +3938,7 @@ async function confirmBackupRestore() {
   if (pending().length && !(await flushPending())) { toast('Waiting changes must sync before restore.'); return; }
   const button = $('restoreConfirm');
   if (button) { button.disabled = true; button.textContent = 'Restoring…'; }
-  exportBackup('before-restore');
+  await exportBackup('before-restore', true);
   const operations = [];
   operations.push({ action: 'settings', row: {
     household_id: householdId, base_currency: data.settings.base, payday_day: data.settings.paydayDay,
@@ -3430,44 +3947,48 @@ async function confirmBackupRestore() {
   } });
   const budgetRows = Object.entries(data.budgets).map(([category, budget]) => ({ household_id: householdId, category, amount: Number(budget.amount || 0), currency: cleanCurrency(budget.currency) }));
   if (budgetRows.length) operations.push({ action: 'budget', rows: budgetRows });
-  data.accounts.forEach(account => operations.push({ action: 'upsert', table: 'accounts', row: accountRestoreRow(account) }));
-  data.goals.forEach(goal => operations.push({ action: 'upsert', table: 'goals', row: goalRestoreRow(goal, 0) }));
-  data.debts.forEach(debt => operations.push({ action: 'upsert', table: 'debts', row: debtRestoreRow(debt, debt.original) }));
-  data.recurring.forEach(item => operations.push({ action: 'upsert', table: 'recurring_items', row: {
+  addRestoreBatches(operations, 'accounts', data.accounts.map(accountRestoreRow));
+  addRestoreBatches(operations, 'goals', data.goals.map(goal => goalRestoreRow(goal, 0)));
+  addRestoreBatches(operations, 'debts', data.debts.map(debt => debtRestoreRow(debt, debt.original)));
+  addRestoreBatches(operations, 'recurring_items', data.recurring.map(item => ({
     id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, kind: item.kind,
     amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category, paid_by: item.paidBy || 'Shared',
     account_id: item.accountId || null, day_of_month: Number(item.day), note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString()
-  } }));
-  data.transactions.forEach(item => operations.push({ action: 'upsert', table: 'transactions', row: transactionRow({
+  })));
+  addRestoreBatches(operations, 'transactions', data.transactions.map(item => transactionRow({
     id: item.id, type: item.type, amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category,
     paidBy: item.paidBy || 'Shared', accountId: item.accountId || '', account: item.account || '', toAccountId: item.toAccountId || '',
     toAmount: item.toAmount == null ? null : Number(item.toAmount), debtId: item.debtId || '', debtPrincipal: item.debtPrincipal == null ? null : Number(item.debtPrincipal),
     debtInterest: Number(item.debtInterest || 0), recurringItemId: item.recurringItemId || '', recurringMonth: item.recurringMonth || '',
     date: item.date, note: item.note || '', createdAt: item.createdAt || new Date().toISOString()
-  }) }));
-  data.contributions.forEach(item => operations.push({ action: 'upsert', table: 'goal_contributions', row: {
+  })));
+  addRestoreBatches(operations, 'goal_contributions', data.contributions.map(item => ({
     id: item.id, household_id: householdId, goal_id: item.goalId, account_id: item.accountId || null, user_id: currentUser.id,
     amount: Number(item.amount), currency: cleanCurrency(item.currency), date: item.date, note: item.note || null, updated_at: new Date().toISOString()
-  } }));
-  data.debts.forEach(debt => operations.push({ action: 'upsert', table: 'debts', row: debtRestoreRow(debt) }));
-  data.goals.forEach(goal => operations.push({ action: 'upsert', table: 'goals', row: goalRestoreRow(goal) }));
-  data.assets.forEach(item => operations.push({ action: 'upsert', table: 'assets', row: {
+  })));
+  addRestoreBatches(operations, 'debts', data.debts.map(debt => debtRestoreRow(debt)));
+  addRestoreBatches(operations, 'goals', data.goals.map(goal => goalRestoreRow(goal)));
+  addRestoreBatches(operations, 'assets', data.assets.map(item => ({
     id: item.id, household_id: householdId, user_id: currentUser.id, name: item.name, asset_type: item.type,
     symbol: item.symbol || null, quantity: Number(item.quantity || 0), currency: cleanCurrency(item.currency),
     manual_value: item.manualValue == null ? null : Number(item.manualValue), notes: item.notes || null, updated_at: new Date().toISOString()
-  } }));
-  data.snapshots.forEach(item => {
+  })));
+  const snapshotRows = data.snapshots.map(item => {
     const existing = state.snapshots.find(snapshot => snapshot.date === item.date);
-    operations.push({ action: 'snapshot', row: { id: existing?.id || item.id, household_id: householdId, snapshot_date: item.date, cash_usd: Number(item.cashUSD), assets_usd: Number(item.assetsUSD), debt_usd: Number(item.debtUSD), net_worth_usd: Number(item.netWorthUSD) } });
+    return { id: existing?.id || item.id, household_id: householdId, snapshot_date: item.date, cash_usd: Number(item.cashUSD), assets_usd: Number(item.assetsUSD), debt_usd: Number(item.debtUSD), net_worth_usd: Number(item.netWorthUSD) };
   });
-  data.checkups.forEach(item => {
+  addRestoreBatches(operations, 'net_worth_snapshots', snapshotRows, 'household_id,snapshot_date');
+  const checkupRows = data.checkups.map(item => {
     const existing = state.checkups.find(checkup => checkup.month === item.month);
-    operations.push({ action: 'checkup', row: { id: existing?.id || item.id, household_id: householdId, month: item.month, completed_by: currentUser.id, account_count: Number(item.accountCount || 0), adjustment_total_usd: Number(item.adjustmentUSD || 0), note: item.note || null, focus: item.focus || null, closed_at: item.closedAt || null, balances_checked_at: item.balancesCheckedAt || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() } });
+    return { id: existing?.id || item.id, household_id: householdId, month: item.month, completed_by: currentUser.id, account_count: Number(item.accountCount || 0), adjustment_total_usd: Number(item.adjustmentUSD || 0), note: item.note || null, focus: item.focus || null, closed_at: item.closedAt || null, balances_checked_at: item.balancesCheckedAt || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() };
   });
-  data.sinkingFunds.forEach(item => operations.push({ action: 'upsert', table: 'sinking_funds', row: { id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, target_amount: Number(item.target), saved_amount: Number(item.saved || 0), currency: cleanCurrency(item.currency), due_date: item.due || null, last_reserved_month: item.lastReservedMonth || null, note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString() } }));
-  data.weeklyReviews.forEach(item => operations.push({ action: 'moneyDate', row: { id: item.id, household_id: householdId, week_start: item.weekStart, reviewed_by: currentUser.id, win: item.win || null, next_action: item.nextAction || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() } }));
+  addRestoreBatches(operations, 'monthly_checkups', checkupRows, 'household_id,month');
+  addRestoreBatches(operations, 'sinking_funds', data.sinkingFunds.map(item => ({ id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, target_amount: Number(item.target), saved_amount: Number(item.saved || 0), currency: cleanCurrency(item.currency), due_date: item.due || null, last_reserved_month: item.lastReservedMonth || null, note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString() })));
+  addRestoreBatches(operations, 'weekly_money_dates', data.weeklyReviews.map(item => ({ id: item.id, household_id: householdId, week_start: item.weekStart, reviewed_by: currentUser.id, win: item.win || null, next_action: item.nextAction || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() })), 'household_id,week_start');
   try {
-    for (const operation of operations) {
+    for (let index = 0; index < operations.length; index += 1) {
+      const operation = operations[index];
+      if (button) button.textContent = `Restoring ${Math.round(index / Math.max(1, operations.length) * 100)}%…`;
       const { error } = await runOperation(operation);
       if (error) throw error;
     }

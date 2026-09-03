@@ -21,14 +21,30 @@ A private shared household money app for a couple. It runs on GitHub Pages with 
 - Sinking funds with monthly set-asides for annual bills, travel, gifts, repairs and other predictable costs
 - A five-minute weekly money date, combined money calendar, emergency runway scenarios and monthly close
 - Assets and free market-price refresh for metals and crypto
-- Household-scoped Row Level Security, Realtime updates, local cache and an offline change queue
-- Complete JSON backup, validated merge restore with an automatic safety copy, and transaction CSV export
+- Household-scoped Row Level Security, Realtime updates, a compressed IndexedDB cache and a second durable offline-change queue
+- Keyset-paginated history loading so records beyond a service's first 1,000 rows remain available
+- Private compressed `.odhan` backups, readable integrity-checked JSON, validated batched restore, transaction CSV export and a dependency-free recovery page
+- Salary-triggered delivery of the completed previous month's statement, with one delivery record per month and no financial contents stored in its database log
 
 ## Data model and migration
 
-Apply SQL files in `supabase/migrations/` in timestamp order. The v9 migration adds household sinking funds, weekly money dates and richer month closes with RLS, explicit authenticated grants, actor validation, indexes and Realtime publication. Earlier migrations retain linked accounts, transfers, recurring items, contributions, net-worth snapshots, decision tools and automatic debt/goal balance triggers.
+Apply SQL files in `supabase/migrations/` in timestamp order. The latest durability migration adds private statement-delivery metadata, backup-integrity metadata and long-history cursor indexes. The v9 migrations add household sinking funds, weekly money dates and richer month closes with RLS, explicit authenticated grants, actor validation, indexes and Realtime publication. Earlier migrations retain linked accounts, transfers, recurring items, contributions, net-worth snapshots, decision tools and automatic debt/goal balance triggers.
 
 The repository uses only the public Supabase publishable/anon key. Never put a secret or service-role key in `config.js`.
+
+## Monthly statement email
+
+The database and browser queue are ready, but external email is intentionally **not connected**. The deployed `email-monthly-statement` function is an authenticated non-sending placeholder: it accepts no destination, reads no financial rows and reports `setup_required`. Finance data, manual statement generation, CSV downloads and private backups continue normally.
+
+`supabase/functions/email-monthly-statement/resend-provider.example.ts` preserves the reviewed delivery implementation without activating it. It verifies the user, household, Salary record, period and owner recipient; prepares the completed previous calendar month; excludes transfers and balance corrections; and prevents a second delivery for the same month. Do not deploy it until the owner explicitly approves the disclosure tradeoff described in the adjacent function README.
+
+If approved later, the email API key belongs only in a Supabase Function secret—never browser code or Git. Email is not zero-disclosure: the relay and recipient mailbox process the message; Resend currently retains email content for 30 days. The current privacy-first placeholder avoids that disclosure entirely.
+
+## Long-term recovery
+
+Use **Money → Backup data** to make a private encrypted backup at least monthly and keep two copies in different places you control. Keep the passphrase in a password manager; it cannot be recovered by the app. A readable JSON backup is also available for maximum portability but is not private unless stored in an encrypted location.
+
+`recovery.html` has no external dependency, login or network call. Save it with the backups. It can authenticate/decrypt `.odhan`, verify readable JSON and produce a standard JSON copy even if the main app or its hosting changes. The exact format is documented in `BACKUP_FORMAT.md`.
 
 ## Balance rules
 
@@ -71,3 +87,6 @@ Serve `main` through GitHub Pages. The app uses the existing GitHub Pages site, 
 12. Go offline, save an expense, reconnect and confirm the waiting-sync message clears.
 13. Add a sinking fund, record its monthly set-aside and confirm safe-to-spend remains protected before and after.
 14. Complete a weekly money date and month close, then confirm both appear on the other phone and in Timeline.
+15. Add a Salary entry and confirm the previous month's statement is sent once—or clearly remains queued with **setup needed** when no relay secret is configured.
+16. Create a private `.odhan` backup, unlock it in `recovery.html`, download the recovered JSON and verify that the app accepts it for restore.
+17. Test with more than 1,000 generated records and confirm the oldest and newest entries both load and export.

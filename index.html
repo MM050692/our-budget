@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173f35">
   <meta name="description" content="A private shared household money planner for safer spending, debt freedom and goals.">
+  <meta name="referrer" content="no-referrer">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -147,7 +148,7 @@
           <div class="moneyToolsHead"><div><span>YOUR DATA</span><h3>Statements &amp; backup</h3><p>View, download or protect your complete household records.</p></div></div>
           <div class="moneyToolsGrid">
             <button type="button" onclick="openStatementGenerator()"><i aria-hidden="true">▤</i><span><b>Generate statement</b><small>Choose a period</small></span></button>
-            <button type="button" onclick="exportBackup()"><i aria-hidden="true">↓</i><span><b>Backup data</b><small>Complete JSON copy</small></span></button>
+            <button type="button" onclick="openBackupCenter()"><i aria-hidden="true">↓</i><span><b>Backup data</b><small id="moneyBackupStatus">Private backup due</small></span></button>
             <button type="button" onclick="chooseBackupFile()"><i aria-hidden="true">↥</i><span><b>Restore backup</b><small>Merge a saved copy</small></span></button>
             <button type="button" onclick="exportTransactionsCsv()"><i aria-hidden="true">↧</i><span><b>Download records</b><small>All transactions · CSV</small></span></button>
           </div>
@@ -328,7 +329,14 @@
           <button class="primary" type="submit">Save settings</button>
         </form>
 
-        <div class="settingsCard top">
+        <div class="settingsCard top emailStatementCard">
+          <div class="settingsIcon">✉</div>
+          <div id="emailStatementCopy"><h3>Monthly email statement</h3><p>Checking secure delivery…</p></div>
+          <button id="emailStatementAction" class="secondary compact" onclick="toggleStatementEmails()">Turn on</button>
+        </div>
+        <button class="privacyNote" type="button" onclick="openStatementEmailInfo()"><span>Privacy &amp; delivery details</span><b>›</b></button>
+
+        <div class="settingsCard">
           <div class="settingsIcon">⚡</div>
           <div><h3>Fast expense shortcut</h3><p>Open Add Spend with iPhone Back Tap or an Android home-screen shortcut.</p></div>
           <button class="secondary compact" onclick="openShortcutHelp()">Set up</button>
@@ -336,14 +344,13 @@
 
         <div class="settingsCard">
           <div class="settingsIcon">↧</div>
-          <div><h3>Own your data</h3><p>Download a backup, safely restore one, or export transactions.</p></div>
+          <div id="dataSafetyCopy"><h3>Own your data</h3><p>Private backup, restore and portable records.</p></div>
           <div class="buttonRow">
-            <button class="secondary compact" onclick="exportBackup()">Backup</button>
-            <button class="secondary compact" onclick="chooseBackupFile()">Restore</button>
+            <button class="secondary compact" onclick="openBackupCenter()">Open</button>
             <button class="secondary compact" onclick="exportTransactionsCsv()">CSV</button>
           </div>
         </div>
-        <input id="backupFile" class="hidden" type="file" accept="application/json,.json" onchange="handleBackupFile(event)">
+        <input id="backupFile" class="hidden" type="file" accept=".odhan,application/vnd.our-dhan.backup+json,application/json,.json" onchange="handleBackupFile(event)">
 
         <div class="settingsCard">
           <div class="settingsIcon">◌</div>

@@ -1140,6 +1140,36 @@ h3 { font-weight: 680; }
 .statementGenerator .buttonRow { justify-content: stretch; }
 .statementGenerator .buttonRow button { flex: 1; }
 
+.privacyNote { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 11px; padding: 7px 12px; border-radius: 12px; background: transparent; color: var(--muted); font-size: 9px; text-align: left; }
+.privacyNote:hover { background: rgba(255,255,255,.72); color: var(--purple); }
+.privacyNote b { font-size: 16px; font-weight: 500; }
+.emailStatementCard { margin-top: 15px; }
+.backupCenter, .emailInfo { display: grid; gap: 11px; }
+.backupHealth { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.backupHealth > div { min-width: 0; padding: 13px; border-radius: 17px; background: #f5f5f7; }
+.backupHealth span, .backupHealth small { display: block; color: var(--muted); font-size: 8px; }
+.backupHealth b { display: block; margin: 5px 0 3px; font-size: 12px; overflow-wrap: anywhere; }
+.backupChoice { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 11px; padding: 11px; border: 1px solid var(--line); border-radius: 17px; background: #f8f8f9; }
+.backupChoice.recommended { border-color: rgba(101,71,131,.18); background: #f2ecf8; }
+.backupChoice > div { min-width: 0; display: grid; grid-template-columns: 36px minmax(0,1fr); align-items: center; gap: 10px; }
+.backupChoice i { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 12px; background: white; color: var(--purple); font-size: 15px; font-style: normal; }
+.backupChoice b, .backupChoice small { display: block; }
+.backupChoice b { font-size: 10px; }
+.backupChoice small { margin-top: 3px; color: var(--muted); font-size: 8px; line-height: 1.35; }
+.recoveryLink { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 14px; background: var(--blue-soft); color: var(--blue); font-size: 9px; font-weight: 700; text-decoration: none; }
+.recoveryLink span { font-size: 16px; font-weight: 500; }
+.emailInfoHero { padding: 16px; border-radius: 19px; background: linear-gradient(145deg, #173c32, #2d755f); color: white; }
+.emailInfoHero span, .emailInfoHero small { display: block; color: rgba(255,255,255,.7); font-size: 8px; }
+.emailInfoHero b { display: block; margin: 5px 0 4px; font-size: 17px; }
+.emailInfoSteps { display: grid; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.emailInfoSteps > div { min-width: 0; display: grid; grid-template-columns: 27px minmax(0,1fr); align-items: center; gap: 10px; padding: 11px 12px; border-bottom: 1px solid var(--line); background: white; }
+.emailInfoSteps > div:last-child { border-bottom: 0; }
+.emailInfoSteps i { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 9px; background: var(--mint); color: var(--green); font-size: 9px; font-style: normal; font-weight: 800; }
+.emailInfoSteps b, .emailInfoSteps small { display: block; }
+.emailInfoSteps b { font-size: 10px; }
+.emailInfoSteps small { margin-top: 2px; color: var(--muted); font-size: 8px; line-height: 1.4; }
+.emailInfo code { padding: 1px 4px; border-radius: 5px; background: rgba(0,0,0,.06); font-size: .9em; }
+
 /* Optional Sakhi practice — separate from the real money screens */
 .sakhiTourLauncher {
   width: 100%;
@@ -1315,6 +1345,9 @@ h3 { font-weight: 680; }
   .rolloverPlanAmount { grid-template-columns: 1fr; }
   .rolloverPlanAmount b { grid-row: auto; grid-column: auto; text-align: left; }
   .statementEntryCopy span { white-space: normal; }
+  .backupHealth { grid-template-columns: 1fr; }
+  .backupChoice { grid-template-columns: 1fr; }
+  .backupChoice > button { justify-self: start; }
   .flowStep { min-height: calc(100svh - 112px); }
   .sakhiTourLauncher { grid-template-columns: 40px minmax(0, 1fr) auto; padding: 10px 11px; }
   .sakhiTourPlay { width: 40px; height: 40px; border-radius: 14px; }

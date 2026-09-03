@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#173f35">
+  <meta name="referrer" content="no-referrer">
+  <title>Our DHAN · Independent recovery</title>
+  <style>
+    :root { color-scheme: light; --ink:#1d1d1f; --muted:#6e6e73; --paper:#fff; --green:#166b50; --mint:#e8f4ef; --purple:#654783; --line:#e8e8ed; }
+    * { box-sizing:border-box; }
+    body { min-height:100vh; margin:0; padding:24px 16px 50px; background:radial-gradient(circle at 50% -12rem,rgba(36,130,103,.12),transparent 32rem),#f5f5f7; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(590px,100%); margin:0 auto; }
+    .mark { width:48px; height:48px; display:grid; place-items:center; border-radius:16px; background:var(--green); color:white; font-size:22px; }
+    .eyebrow { margin-top:24px; color:var(--muted); font-size:11px; font-weight:750; letter-spacing:.1em; }
+    h1 { margin:7px 0 8px; font-size:clamp(32px,9vw,48px); letter-spacing:-.05em; line-height:1; }
+    .lead { margin:0 0 22px; color:var(--muted); font-size:14px; line-height:1.55; }
+    .card { padding:18px; border:1px solid rgba(0,0,0,.04); border-radius:24px; background:rgba(255,255,255,.94); box-shadow:0 12px 38px rgba(0,0,0,.06); }
+    .drop { min-height:150px; display:grid; place-items:center; padding:20px; border:1.5px dashed #b9c8c0; border-radius:19px; background:#fafafa; text-align:center; cursor:pointer; }
+    .drop:hover { border-color:var(--green); background:var(--mint); }
+    .drop b,.drop span { display:block; }
+    .drop b { font-size:15px; }
+    .drop span { margin-top:6px; color:var(--muted); font-size:12px; }
+    input[type=file] { display:none; }
+    label.field { display:grid; gap:7px; margin-top:14px; color:#43574f; font-size:12px; font-weight:700; }
+    input[type=password] { width:100%; padding:13px 14px; border:1px solid #cedbd4; border-radius:14px; background:white; font:inherit; }
+    button { width:100%; min-height:46px; margin-top:12px; padding:12px 16px; border:0; border-radius:999px; background:var(--green); color:white; font:inherit; font-size:13px; font-weight:750; cursor:pointer; }
+    button:disabled { opacity:.45; cursor:default; }
+    .secondary { background:#ededf0; color:var(--ink); }
+    .status { margin-top:14px; padding:12px 14px; border-radius:15px; background:var(--mint); color:#285d4d; font-size:12px; line-height:1.5; }
+    .status.error { background:#fff0ee; color:#8d392f; }
+    .summary { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
+    .summary div { min-width:0; padding:12px; border-radius:15px; background:#f5f5f7; }
+    .summary span,.summary b { display:block; }
+    .summary span { color:var(--muted); font-size:10px; }
+    .summary b { margin-top:4px; font-size:13px; overflow-wrap:anywhere; }
+    .privacy { margin:16px 3px 0; color:var(--muted); font-size:11px; line-height:1.55; }
+    .hidden { display:none !important; }
+    @media(max-width:400px){ .summary{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">⌘</div>
+    <div class="eyebrow">OUR DHAN · OFFLINE-CAPABLE</div>
+    <h1>Independent recovery</h1>
+    <p class="lead">Unlock or verify an Our DHAN backup and turn it into readable JSON. This page uses only your browser—no account, server or third-party library.</p>
+    <section class="card">
+      <label class="drop" for="file"><span><b>Choose a backup</b><span>.odhan private backup or .json readable backup</span></span></label>
+      <input id="file" type="file" accept=".odhan,application/vnd.our-dhan.backup+json,.json,application/json">
+      <div id="unlock" class="hidden">
+        <label class="field">Backup passphrase<input id="passphrase" type="password" minlength="10" maxlength="128" autocomplete="current-password"></label>
+        <button id="unlockButton" type="button">Unlock on this device</button>
+      </div>
+      <div id="status" class="status hidden" role="status" aria-live="polite"></div>
+      <div id="summary" class="summary hidden"></div>
+      <button id="download" class="hidden" type="button">Download recovered JSON</button>
+      <button id="reset" class="secondary hidden" type="button">Choose another file</button>
+    </section>
+    <p class="privacy"><b>Private by design:</b> the selected file and passphrase stay inside this browser tab. For strongest independence, save this page with your backups or keep a copy of the Our DHAN repository.</p>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    let selected = null;
+    let recovered = null;
+
+    function safeParse(value) { try { return JSON.parse(value); } catch (_error) { return null; } }
+    function showStatus(message, error = false) {
+      $('status').textContent = message;
+      $('status').className = `status${error ? ' error' : ''}`;
+    }
+    function b64(value) {
+      const binary = atob(value);
+      return Uint8Array.from(binary, character => character.charCodeAt(0));
+    }
+    function canonicalJson(value) {
+      if (value === null || typeof value !== 'object') return JSON.stringify(value);
+      if (Array.isArray(value)) return `[${value.map(item => item === undefined ? 'null' : canonicalJson(item)).join(',')}]`;
+      return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+    }
+    async function sha256(value) {
+      const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+    async function keyFor(passphrase, encryption) {
+      const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        { name:'PBKDF2', salt:b64(encryption.salt), iterations:Number(encryption.iterations), hash:'SHA-256' },
+        material, { name:'AES-GCM', length:256 }, false, ['decrypt']
+      );
+    }
+    async function streamBytesWithLimit(stream, limit = 100 * 1024 * 1024) {
+      const reader = stream.getReader();
+      const chunks = [];
+      let total = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > limit) { await reader.cancel(); throw new Error('The expanded backup is unexpectedly large.'); }
+        chunks.push(value);
+      }
+      const output = new Uint8Array(total);
+      let offset = 0;
+      chunks.forEach(chunk => { output.set(chunk, offset); offset += chunk.byteLength; });
+      return output;
+    }
+    async function decompress(bytes, compression) {
+      if (compression === 'none') {
+        if (bytes.byteLength > 100 * 1024 * 1024) throw new Error('The backup is unexpectedly large.');
+        return bytes;
+      }
+      if (compression !== 'gzip' || !('DecompressionStream' in window)) throw new Error('This browser cannot open gzip backups. Try a current browser.');
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+      return streamBytesWithLimit(stream);
+    }
+    async function verifyReadable(payload) {
+      if (payload?.format !== 'our-dhan-portable-backup' || !payload.data) throw new Error('This is not a supported Our DHAN backup.');
+      if (payload.integrity) {
+        const { integrity, ...body } = payload;
+        if (integrity.algorithm !== 'SHA-256' || await sha256(canonicalJson(body)) !== integrity.value) throw new Error('The backup changed or is damaged.');
+      }
+      return payload;
+    }
+    function present(payload, message) {
+      recovered = payload;
+      const counts = payload.recordCounts || {};
+      const data = payload.data || {};
+      const total = Object.values(counts).reduce((sum, value) => sum + (Number(value) || 0), 0);
+      $('summary').innerHTML = '';
+      [['Created', (payload.exportedAt || '').slice(0,10) || 'Unknown'], ['App version', payload.appVersion || data.version || 'Unknown'], ['Transactions', counts.transactions ?? data.transactions?.length ?? 0], ['All records', total || 'See JSON']].forEach(([label,value]) => {
+        const box = document.createElement('div');
+        const caption = document.createElement('span');
+        const result = document.createElement('b');
+        caption.textContent = label;
+        result.textContent = String(value);
+        box.append(caption,result);
+        $('summary').append(box);
+      });
+      $('summary').classList.remove('hidden');
+      $('download').classList.remove('hidden');
+      $('reset').classList.remove('hidden');
+      showStatus(message);
+    }
+    async function loadFile(file) {
+      if (!file) return;
+      if (file.size > 50 * 1024 * 1024) { showStatus('Backup files must be under 50 MB.', true); return; }
+      const payload = safeParse(await file.text());
+      if (!payload) { showStatus('This file is not valid JSON.', true); return; }
+      selected = payload;
+      recovered = null;
+      $('summary').classList.add('hidden');
+      $('download').classList.add('hidden');
+      $('reset').classList.remove('hidden');
+      if (payload.format === 'our-dhan-private-backup') {
+        $('unlock').classList.remove('hidden');
+        $('passphrase').value = '';
+        showStatus('Private backup recognised. Enter its passphrase to continue.');
+        $('passphrase').focus();
+      } else {
+        $('unlock').classList.add('hidden');
+        try { present(await verifyReadable(payload), payload.integrity ? 'Integrity verified. The backup is readable.' : 'Older readable backup opened. No checksum was available.'); }
+        catch (error) { showStatus(error.message || 'This backup could not be verified.', true); }
+      }
+    }
+    $('file').addEventListener('change', event => loadFile(event.target.files?.[0]));
+    $('unlockButton').addEventListener('click', async () => {
+      const button = $('unlockButton');
+      const passphrase = $('passphrase').value;
+      if (passphrase.length < 10) { showStatus('Enter the backup passphrase.', true); return; }
+      button.disabled = true;
+      button.textContent = 'Unlocking…';
+      try {
+        const encryption = selected?.encryption || {};
+        const iterations = Number(encryption.iterations);
+        if (encryption.cipher !== 'AES-256-GCM' || encryption.kdf !== 'PBKDF2-HMAC-SHA-256' || iterations < 100000 || iterations > 2000000) throw new Error('Unsupported encryption settings.');
+        const key = await keyFor(passphrase, encryption);
+        const decrypted = new Uint8Array(await crypto.subtle.decrypt({ name:'AES-GCM', iv:b64(encryption.iv) }, key, b64(selected.ciphertext)));
+        const plain = await decompress(decrypted, selected.compression || 'none');
+        const body = safeParse(new TextDecoder().decode(plain));
+        if (body?.format !== 'our-dhan-portable-backup' || !body.data) throw new Error('Invalid private backup payload.');
+        const checksum = await sha256(canonicalJson(body));
+        present({ ...body, integrity:{ algorithm:'SHA-256', value:checksum } }, 'Private backup unlocked and authenticated.');
+        $('unlock').classList.add('hidden');
+      } catch (_error) { showStatus('Wrong passphrase or damaged backup.', true); }
+      finally { button.disabled = false; button.textContent = 'Unlock on this device'; }
+    });
+    $('download').addEventListener('click', () => {
+      if (!recovered) return;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(recovered,null,2)], { type:'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `our-dhan-recovered-${new Date().toISOString().slice(0,10)}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    $('reset').addEventListener('click', () => {
+      selected = null; recovered = null; $('file').value = ''; $('unlock').classList.add('hidden'); $('status').classList.add('hidden'); $('summary').classList.add('hidden'); $('download').classList.add('hidden'); $('reset').classList.add('hidden'); $('file').click();
+    });
+  </script>
+</body>
+</html>
