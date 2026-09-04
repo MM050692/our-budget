@@ -147,7 +147,7 @@
         <div class="moneyToolsCard">
           <div class="moneyToolsHead"><div><span>YOUR DATA</span><h3>Statements &amp; backup</h3><p>View, download or protect your complete household records.</p></div></div>
           <div class="moneyToolsGrid">
-            <button type="button" onclick="openStatementGenerator()"><i aria-hidden="true">▤</i><span><b>Generate statement</b><small>Choose a period</small></span></button>
+            <button type="button" onclick="openStatementGenerator()"><i aria-hidden="true">▤</i><span><b>Generate statement</b><small id="moneyStatementStatus">Choose a period</small></span></button>
             <button type="button" onclick="openBackupCenter()"><i aria-hidden="true">↓</i><span><b>Backup data</b><small id="moneyBackupStatus">Private backup due</small></span></button>
             <button type="button" onclick="chooseBackupFile()"><i aria-hidden="true">↥</i><span><b>Restore backup</b><small>Merge a saved copy</small></span></button>
             <button type="button" onclick="exportTransactionsCsv()"><i aria-hidden="true">↧</i><span><b>Download records</b><small>All transactions · CSV</small></span></button>
@@ -331,10 +331,10 @@
 
         <div class="settingsCard top emailStatementCard">
           <div class="settingsIcon">✉</div>
-          <div id="emailStatementCopy"><h3>Monthly email statement</h3><p>Checking secure delivery…</p></div>
-          <button id="emailStatementAction" class="secondary compact" onclick="toggleStatementEmails()">Turn on</button>
+          <div id="emailStatementCopy"><h3>Monthly statement</h3><p>Prepared automatically after Salary is recorded.</p></div>
+          <button id="emailStatementAction" class="secondary compact" onclick="openPreparedMonthlyStatement()">Preview</button>
         </div>
-        <button class="privacyNote" type="button" onclick="openStatementEmailInfo()"><span>Privacy &amp; delivery details</span><b>›</b></button>
+        <button class="privacyNote" type="button" onclick="openStatementEmailInfo()"><span>How private sharing works</span><b>›</b></button>
 
         <div class="settingsCard">
           <div class="settingsIcon">⚡</div>

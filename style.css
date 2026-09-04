@@ -1139,6 +1139,13 @@ h3 { font-weight: 680; }
 .statementGenerator .friendlyNote { background: #f2ecf8; color: #654783; }
 .statementGenerator .buttonRow { justify-content: stretch; }
 .statementGenerator .buttonRow button { flex: 1; }
+.preparedStatement { gap: 12px; }
+.preparedAllocation { display: grid; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.preparedAllocation > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border-bottom: 1px solid var(--line); background: white; font-size: 10px; }
+.preparedAllocation > div:last-child { border-bottom: 0; }
+.preparedAllocation span { color: var(--muted); }
+.preparedAllocation span b { color: var(--ink); }
+.preparedAllocation strong { color: var(--purple); white-space: nowrap; }
 
 .privacyNote { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 11px; padding: 7px 12px; border-radius: 12px; background: transparent; color: var(--muted); font-size: 9px; text-align: left; }
 .privacyNote:hover { background: rgba(255,255,255,.72); color: var(--purple); }

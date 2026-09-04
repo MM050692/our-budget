@@ -34,7 +34,9 @@ The repository uses only the public Supabase publishable/anon key. Never put a s
 
 ## Monthly statement email
 
-The database and browser queue are ready, but external email is intentionally **not connected**. The deployed `email-monthly-statement` function is an authenticated non-sending placeholder: it accepts no destination, reads no financial rows and reports `setup_required`. Finance data, manual statement generation, CSV downloads and private backups continue normally.
+Saving an Income → Salary entry now prepares the completed previous month's statement locally. On supported phones, **Share or email** opens the system share sheet with the CSV attached; the fallback downloads the CSV and opens an email draft addressed to the signed-in login email. This needs no paid service and does not keep a statement file online.
+
+Fully unattended external email is intentionally **not connected**. The deployed `email-monthly-statement` function is an authenticated non-sending placeholder: it accepts no destination, reads no financial rows and reports `setup_required`. Finance data, manual statement generation, CSV downloads and private backups continue normally.
 
 `supabase/functions/email-monthly-statement/resend-provider.example.ts` preserves the reviewed delivery implementation without activating it. It verifies the user, household, Salary record, period and owner recipient; prepares the completed previous calendar month; excludes transfers and balance corrections; and prevents a second delivery for the same month. Do not deploy it until the owner explicitly approves the disclosure tradeoff described in the adjacent function README.
 
@@ -87,6 +89,6 @@ Serve `main` through GitHub Pages. The app uses the existing GitHub Pages site, 
 12. Go offline, save an expense, reconnect and confirm the waiting-sync message clears.
 13. Add a sinking fund, record its monthly set-aside and confirm safe-to-spend remains protected before and after.
 14. Complete a weekly money date and month close, then confirm both appear on the other phone and in Timeline.
-15. Add a Salary entry and confirm the previous month's statement is sent once—or clearly remains queued with **setup needed** when no relay secret is configured.
+15. Add a Salary entry and confirm the previous month's statement opens once, shows the correct totals and shares or downloads a safe CSV.
 16. Create a private `.odhan` backup, unlock it in `recovery.html`, download the recovered JSON and verify that the app accepts it for restore.
 17. Test with more than 1,000 generated records and confirm the oldest and newest entries both load and export.

@@ -45,6 +45,8 @@ This file is the durable brief for future work. It records the decisions Dhani a
 
 ## Monthly statement delivery
 
+- Without an approved external relay, saving Salary must still prepare the completed previous month locally and offer one-tap phone sharing with a CSV attachment. It must not claim the message was sent automatically.
+- Local statement preparation stores only a small month/trigger marker. The statement is regenerated from source records and is never retained as a file in the browser or database.
 - External delivery is off by default. The signed-in household owner must explicitly turn it on after accepting the relay/mailbox privacy tradeoff.
 - When an authenticated household member saves an **Income → Salary** record, request the completed previous calendar month’s statement.
 - Deliver at most once per household and statement month, even after retries or repeated taps.

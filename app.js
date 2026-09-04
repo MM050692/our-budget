@@ -335,14 +335,49 @@ async function flushStatementEmailQueue(silent = false) {
   return true;
 }
 
+function previousMonthRangeForDate(value = today()) {
+  const currentStart = `${String(value || today()).slice(0, 7)}-01`;
+  return { from: addMonths(currentStart, -1), to: addDays(currentStart, -1) };
+}
+
+function statementItemRange(item) {
+  if (item?.periodStart && item?.periodEnd) return { from: item.periodStart, to: item.periodEnd };
+  const salary = state.transactions.find(transaction => transaction.id === item?.transactionId);
+  return previousMonthRangeForDate(salary?.date || item?.salaryDate || today());
+}
+
+function latestPreparedStatement(includeHandled = true) {
+  return pendingStatementEmails()
+    .map(item => Object.assign({}, item, statementItemRange(item)))
+    .filter(item => includeHandled || !item.handledAt)
+    .sort((left, right) => `${right.periodStart || right.from}${right.queuedAt || ''}`.localeCompare(`${left.periodStart || left.from}${left.queuedAt || ''}`))[0] || null;
+}
+
 function queueSalaryStatement(transaction) {
-  if (!state.settings.emailStatements || transaction.type !== 'income' || transaction.category !== 'Salary') return;
+  if (transaction.type !== 'income' || transaction.category !== 'Salary') return;
+  const range = previousMonthRangeForDate(transaction.date);
   const items = pendingStatementEmails();
-  if (!items.some(item => item.transactionId === transaction.id)) {
-    items.push({ transactionId: transaction.id, queuedAt: new Date().toISOString() });
-    savePendingStatementEmails(items);
+  let item = items.find(entry => entry.periodStart === range.from || entry.transactionId === transaction.id);
+  const shouldPrompt = !item;
+  if (!item) {
+    item = {
+      transactionId: transaction.id,
+      salaryDate: transaction.date,
+      periodStart: range.from,
+      periodEnd: range.to,
+      queuedAt: new Date().toISOString(),
+      promptedAt: '',
+      handledAt: ''
+    };
+    items.push(item);
+  } else {
+    Object.assign(item, { transactionId: item.transactionId || transaction.id, salaryDate: transaction.date, periodStart: range.from, periodEnd: range.to });
   }
-  flushStatementEmailQueue(false);
+  if (shouldPrompt) item.promptedAt = new Date().toISOString();
+  savePendingStatementEmails(items);
+  renderStatementEmailSettings();
+  if (state.settings.emailStatements) flushStatementEmailQueue(false);
+  if (shouldPrompt) setTimeout(() => openPreparedMonthlyStatement(range.from), 180);
 }
 function enqueue(operation) {
   const items = pending();
@@ -1005,7 +1040,7 @@ async function saveOperations(operations, options = {}) {
 
 window.addEventListener('online', async () => {
   if (await flushPending()) await loadRemote();
-  await flushStatementEmailQueue(true);
+  if (state.settings.emailStatements) await flushStatementEmailQueue(true);
 });
 
 function showPage(name) {
@@ -1080,8 +1115,10 @@ async function signedIn(user) {
   cache();
   await flushPending();
   await loadRemote();
-  await refreshStatementEmailStatus();
-  await flushStatementEmailQueue(true);
+  if (state.settings.emailStatements) {
+    await refreshStatementEmailStatus();
+    await flushStatementEmailQueue(true);
+  }
   subscribeRealtime();
   showPage(currentPage);
   await refreshPrices(false);
@@ -2254,6 +2291,32 @@ function statementReportTotals(range = reportRange()) {
   return { transactions, incomeUSD, spentUSD, differenceUSD: incomeUSD - spentUSD };
 }
 
+function statementCsvPackage(range = statementRange()) {
+  const totals = statementReportTotals(range);
+  const dashboardCurrency = state.settings.base;
+  const rows = [
+    ['Our DHAN statement'],
+    ['From', range.from],
+    ['To', range.to],
+    ['Dashboard currency', dashboardCurrency],
+    ['Income total', Number(fromUSD(totals.incomeUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
+    ['Spending total', Number(fromUSD(totals.spentUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
+    ['Difference', Number(fromUSD(totals.differenceUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
+    [],
+    ['Date', 'Type', 'Category', 'Amount', 'Currency', `Amount in ${dashboardCurrency}`, 'Paid by', 'Account', 'Note'],
+    ...totals.transactions.map(transaction => [
+      transaction.date, transaction.type, transaction.category, transaction.amount, transaction.currency,
+      Number((fromUSD(usd(transaction.amount, transaction.currency), dashboardCurrency) * (transaction.type === 'expense' ? -1 : 1)).toFixed(2)),
+      transaction.paidBy || 'Shared', accountName(transaction.accountId) || transaction.account || 'Not linked', transaction.note || ''
+    ])
+  ];
+  return {
+    totals,
+    filename: `our-dhan-statement-${range.from}-to-${range.to}.csv`,
+    text: rows.map(row => row.map(csvCell).join(',')).join('\n')
+  };
+}
+
 function renderStatementGenerator() {
   const root = $('statementGeneratorBody');
   if (!root) return;
@@ -2312,30 +2375,92 @@ function viewGeneratedStatement() {
 }
 
 function downloadStatementCsv(range = statementRange()) {
-  const totals = statementReportTotals(range);
-  const dashboardCurrency = state.settings.base;
-  const rows = [
-    ['Our DHAN statement'],
-    ['From', range.from],
-    ['To', range.to],
-    ['Dashboard currency', dashboardCurrency],
-    ['Income total', Number(fromUSD(totals.incomeUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
-    ['Spending total', Number(fromUSD(totals.spentUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
-    ['Difference', Number(fromUSD(totals.differenceUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
-    [],
-    ['Date', 'Type', 'Category', 'Amount', 'Currency', `Amount in ${dashboardCurrency}`, 'Paid by', 'Account', 'Note'],
-    ...totals.transactions.map(transaction => [
-      transaction.date, transaction.type, transaction.category, transaction.amount, transaction.currency,
-      Number((fromUSD(usd(transaction.amount, transaction.currency), dashboardCurrency) * (transaction.type === 'expense' ? -1 : 1)).toFixed(2)),
-      transaction.paidBy || 'Shared', accountName(transaction.accountId) || transaction.account || 'Not linked', transaction.note || ''
-    ])
-  ];
-  downloadFile(`our-dhan-statement-${range.from}-to-${range.to}.csv`, rows.map(row => row.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
-  toast(`Statement downloaded · ${totals.transactions.length} ${totals.transactions.length === 1 ? 'entry' : 'entries'}`);
+  const statement = statementCsvPackage(range);
+  downloadFile(statement.filename, statement.text, 'text/csv;charset=utf-8');
+  toast(`Statement downloaded · ${statement.totals.transactions.length} ${statement.totals.transactions.length === 1 ? 'entry' : 'entries'}`);
 }
 
 function downloadGeneratedStatement() { downloadStatementCsv(reportRange()); }
 function downloadCurrentStatement() { downloadStatementCsv(statementRange()); }
+
+function preparedStatementFor(periodStart = '') {
+  const item = pendingStatementEmails().find(entry => entry.periodStart === periodStart)
+    || (!periodStart ? latestPreparedStatement() : null);
+  const range = item ? statementItemRange(item) : previousMonthRangeForDate(today());
+  return { item, range, statement: statementCsvPackage(range) };
+}
+
+function markPreparedStatementHandled(periodStart, action) {
+  const items = pendingStatementEmails();
+  const item = items.find(entry => entry.periodStart === periodStart);
+  if (!item) return;
+  item.handledAt = new Date().toISOString();
+  item.lastAction = action;
+  savePendingStatementEmails(items);
+  renderStatementEmailSettings();
+}
+
+function preparedStatementEmailText(range, totals) {
+  const label = formatDate(range.from, { month: 'long', year: 'numeric' });
+  return `Our DHAN · ${label}\n\nIncome: ${baseMoney(totals.incomeUSD)}\nSpending: ${baseMoney(totals.spentUSD)}\nBalance: ${signedBaseMoney(totals.differenceUSD)}\n\n40–30–20–10 guide\n40% Essentials: ${baseMoney(totals.incomeUSD * .4)}\n30% Debt: ${baseMoney(totals.incomeUSD * .3)}\n20% Future: ${baseMoney(totals.incomeUSD * .2)}\n10% Wants: ${baseMoney(totals.incomeUSD * .1)}\n\nTransfers and balance corrections are excluded.`;
+}
+
+function openPreparedMonthlyStatement(periodStart = '') {
+  const prepared = preparedStatementFor(periodStart);
+  const { range, statement } = prepared;
+  const label = formatDate(range.from, { month: 'long', year: 'numeric' });
+  const allocation = [
+    ['40%', 'Essentials', .4], ['30%', 'Debt', .3], ['20%', 'Future', .2], ['10%', 'Wants', .1]
+  ];
+  openModal(`${label} statement`, `<div class="statementGenerator preparedStatement">
+    <p>Prepared automatically from your saved records. Nothing is uploaded or stored as a statement file.</p>
+    <div class="statementTotals">
+      <div class="income"><span>Income</span><b>${baseMoney(statement.totals.incomeUSD)}</b></div>
+      <div class="expense"><span>Spends</span><b>${baseMoney(statement.totals.spentUSD)}</b></div>
+      <div class="${statement.totals.differenceUSD < 0 ? 'expense' : 'net'}"><span>Balance</span><b>${signedBaseMoney(statement.totals.differenceUSD)}</b></div>
+    </div>
+    <div class="preparedAllocation">${allocation.map(([percent, name, ratio]) => `<div><span><b>${percent}</b> ${name}</span><strong>${baseMoney(statement.totals.incomeUSD * ratio)}</strong></div>`).join('')}</div>
+    <div class="friendlyNote">Share uses your phone's own share sheet. Choose Mail or Gmail to send the attached CSV to yourself.</div>
+    <div class="buttonRow"><button type="button" class="secondary" onclick="downloadPreparedMonthlyStatement('${range.from}')">Download CSV</button><button type="button" class="primary" onclick="sharePreparedMonthlyStatement('${range.from}')">Share or email</button></div>
+  </div>`);
+}
+
+function downloadPreparedMonthlyStatement(periodStart) {
+  const prepared = preparedStatementFor(periodStart);
+  downloadStatementCsv(prepared.range);
+  markPreparedStatementHandled(prepared.range.from, 'downloaded');
+}
+
+async function sharePreparedMonthlyStatement(periodStart) {
+  const prepared = preparedStatementFor(periodStart);
+  const { range, statement } = prepared;
+  const label = formatDate(range.from, { month: 'long', year: 'numeric' });
+  const summary = preparedStatementEmailText(range, statement.totals);
+  let file = null;
+  try { file = new File([statement.text], statement.filename, { type: 'text/csv' }); }
+  catch (_error) { file = null; }
+  const shareData = file ? { title: `Our DHAN · ${label}`, text: summary, files: [file] } : null;
+  let canShareFile = false;
+  try { canShareFile = Boolean(shareData && navigator.share && navigator.canShare?.(shareData)); }
+  catch (_error) { canShareFile = false; }
+  if (canShareFile) {
+    try {
+      await navigator.share(shareData);
+      markPreparedStatementHandled(range.from, 'shared');
+      closeModal();
+      toast('Statement shared ✓');
+    } catch (error) {
+      if (error?.name !== 'AbortError') toast('Could not open sharing. Download the CSV instead.');
+    }
+    return;
+  }
+  downloadFile(statement.filename, statement.text, 'text/csv;charset=utf-8');
+  markPreparedStatementHandled(range.from, 'email_opened');
+  const recipient = state.member.role === 'owner' ? currentUser?.email || '' : '';
+  const draftBody = 'Your Our DHAN statement was downloaded on this phone. Attach the CSV to this draft, then send it to yourself.';
+  location.href = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(`Our DHAN · ${label} statement`)}&body=${encodeURIComponent(draftBody)}`;
+  toast('CSV downloaded · email draft opened');
+}
 
 function timelineEvents() {
   const events = [];
@@ -3520,20 +3645,17 @@ function renderStatementEmailSettings() {
   const root = $('emailStatementCopy');
   const button = $('emailStatementAction');
   if (!root || !button) return;
-  const owner = state.member.role === 'owner';
-  if (!state.settings.emailStatements) {
-    root.innerHTML = statementEmailProviderReady
-      ? '<h3>Monthly email statement</h3><p>Off · turn it on to send the previous month after salary is recorded.</p>'
-      : '<h3>Monthly email statement</h3><p>Off · external email is not connected. Local statements remain available.</p>';
-    button.textContent = statementEmailProviderReady ? 'Turn on' : 'Not connected';
-  } else {
-    const destination = statementEmailRecipient ? ` to ${esc(statementEmailRecipient)}` : ' to the verified owner email';
-    const status = statementEmailProviderReady === true && statementEmailRecipientReady ? `On${destination}` : statementEmailLastStatus || 'On · checking secure delivery';
-    root.innerHTML = `<h3>Monthly email statement</h3><p>${esc(status)}. It sends once per month after Salary is saved.</p>`;
-    button.textContent = 'Pause';
-  }
-  button.disabled = !owner || (!state.settings.emailStatements && statementEmailProviderReady !== true);
-  if (!owner) button.textContent = 'Owner only';
+  const ready = latestPreparedStatement(false);
+  const latest = ready || latestPreparedStatement(true);
+  const label = latest ? formatDate(statementItemRange(latest).from, { month: 'long', year: 'numeric' }) : '';
+  root.innerHTML = ready
+    ? `<h3>Monthly statement ready</h3><p>${esc(label)} · share to Mail or Gmail with the CSV attached.</p>`
+    : latest
+      ? `<h3>Monthly statement</h3><p>${esc(label)} prepared ✓ · open or regenerate it anytime.</p>`
+      : '<h3>Monthly statement</h3><p>Prepared automatically after Salary is recorded.</p>';
+  button.textContent = ready ? 'Open' : 'Preview';
+  button.disabled = false;
+  if ($('moneyStatementStatus')) $('moneyStatementStatus').textContent = ready ? `${label} ready` : 'Choose a period';
 }
 
 function renderDataSafetyStatus() {
@@ -3566,20 +3688,15 @@ async function toggleStatementEmails() {
 }
 
 function openStatementEmailInfo() {
-  const destination = statementEmailRecipient || 'the verified owner login email';
-  const delivery = !state.settings.emailStatements ? 'Paused'
-    : statementEmailProviderReady && statementEmailRecipientReady ? 'Ready ✓' : 'Waiting for the one-time email connection';
-  openModal('Monthly email statement', `<div class="emailInfo">
-    <div class="emailInfoHero"><span>DELIVERY STATUS</span><b>${esc(delivery)}</b><small>${esc(destination)}</small></div>
+  openModal('Monthly statement sharing', `<div class="emailInfo">
+    <div class="emailInfoHero"><span>FREE &amp; PRIVATE</span><b>Prepared on this phone</b><small>No separate statement file is kept online</small></div>
     <div class="emailInfoSteps">
       <div><i>1</i><span><b>Record Salary</b><small>Saving an income entry with the Salary category is the trigger.</small></span></div>
       <div><i>2</i><span><b>Previous month closes</b><small>Income, spending and the 40–30–20–10 guide are calculated without transfers or balance corrections.</small></span></div>
-      <div><i>3</i><span><b>One email, once</b><small>A readable CSV is attached. Repeated taps cannot send the same month twice.</small></span></div>
+      <div><i>3</i><span><b>Share or email</b><small>Your phone opens Mail, Gmail or another app with the CSV attached when supported.</small></span></div>
     </div>
-    <div class="warningNote"><b>Privacy truth:</b> delivery uses the free Resend relay, so the statement passes through Resend and the owner’s mailbox. Resend’s free service can retain message content for 30 days. Our DHAN stores only delivery status—not the statement or its totals—in its delivery log.</div>
-    ${statementEmailProviderReady ? '' : '<div class="friendlyNote"><b>Intentionally not connected:</b> automatic email can be activated later only after the owner accepts that the statement will pass through an external relay. Any future API key must stay only in a Supabase Function secret—never this website or <code>config.js</code>.</div>'}
-    <div class="friendlyNote">This runs from Our DHAN and Supabase. ChatGPT Plus is not used and can expire without affecting it.</div>
-    <div class="buttonRow">${state.settings.emailStatements || statementEmailProviderReady ? `<button class="primary" onclick="closeModal();toggleStatementEmails()">${state.settings.emailStatements ? 'Pause emails' : 'Turn on emails'}</button>` : ''}<button class="secondary" onclick="closeModal()">Done</button></div>
+    <div class="friendlyNote">The statement is built only when needed from the records already in Our DHAN. Sharing is never sent silently—you choose the app and recipient.</div>
+    <div class="buttonRow"><button class="primary" onclick="closeModal();openPreparedMonthlyStatement()">Preview statement</button><button class="secondary" onclick="closeModal()">Done</button></div>
   </div>`);
 }
 
@@ -4008,7 +4125,11 @@ async function confirmBackupRestore() {
   }
 }
 
-function csvCell(value) { return `"${String(value ?? '').replace(/"/g, '""')}"`; }
+function csvCell(value) {
+  const text = String(value ?? '');
+  const safe = /^\s*[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
 function exportTransactionsCsv() {
   const headers = ['Date', 'Type', 'Category', 'Amount', 'Currency', 'Paid by', 'From account', 'To account', 'Amount received', 'Debt principal', 'Note'];
   const lines = [headers, ...[...state.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [t.date, t.type, t.category, t.amount, t.currency, t.paidBy, accountName(t.accountId) || t.account, accountName(t.toAccountId), t.toAmount ?? '', t.debtPrincipal ?? '', t.note])];
