@@ -1352,6 +1352,8 @@ h3 { font-weight: 680; }
   .rolloverPlanAmount { grid-template-columns: 1fr; }
   .rolloverPlanAmount b { grid-row: auto; grid-column: auto; text-align: left; }
   .statementEntryCopy span { white-space: normal; }
+  .preparedAllocation > div { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .preparedAllocation strong { white-space: normal; overflow-wrap: anywhere; }
   .backupHealth { grid-template-columns: 1fr; }
   .backupChoice { grid-template-columns: 1fr; }
   .backupChoice > button { justify-self: start; }
