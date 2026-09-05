@@ -1050,7 +1050,7 @@ h3 { font-weight: 680; }
 .statementEntry.income > strong { color: var(--green-2); }
 .statementEmpty, .statementLimitNote { padding: 18px 8px 10px; color: var(--muted); font-size: 10px; line-height: 1.45; text-align: center; }
 .statementLimitNote { padding-top: 12px; }
-.statementActions { display: flex; justify-content: flex-end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.statementActions { display: flex; justify-content: flex-end; gap: 7px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .statementActions button { padding: 10px 13px; font-size: 9px; }
 
 .moneyToolsCard { margin-top: 12px; padding: 15px; border: 1px solid rgba(0,0,0,.025); border-radius: 22px; background: rgba(255,255,255,.9); box-shadow: 0 1px 2px rgba(0,0,0,.025); }
@@ -1140,13 +1140,97 @@ h3 { font-weight: 680; }
 .statementGenerator .buttonRow { justify-content: stretch; }
 .statementGenerator .buttonRow button { flex: 1; }
 .preparedStatement { gap: 12px; }
-.preparedAllocation { display: grid; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
-.preparedAllocation > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border-bottom: 1px solid var(--line); background: white; font-size: 10px; }
-.preparedAllocation > div:last-child { border-bottom: 0; }
-.preparedAllocation span { color: var(--muted); }
-.preparedAllocation span b { color: var(--ink); }
-.preparedAllocation strong { color: var(--purple); white-space: nowrap; }
-
+.statementSimple { display: grid; gap: 11px; }
+.statementStoryHero { padding: 18px; overflow: hidden; position: relative; border-radius: 22px; background: linear-gradient(145deg, #49365f, #765b91); color: white; }
+.statementStoryHero:after { content: ""; width: 105px; height: 105px; position: absolute; right: -54px; bottom: -58px; border: 18px solid rgba(255,255,255,.09); border-radius: 50%; }
+.statementStoryHero.good { background: linear-gradient(145deg, #17483b, #25775f); }
+.statementStoryHero.short, .statementStoryHero.missing { background: linear-gradient(145deg, #664039, #9a5b4f); }
+.statementStoryHero.empty { background: linear-gradient(145deg, #4b4b50, #77777d); }
+.statementStoryHero > span { color: rgba(255,255,255,.68); font-size: 8px; font-weight: 850; letter-spacing: .12em; }
+.statementStoryHero h3 { margin-top: 5px; font-size: 22px; font-weight: 780; letter-spacing: -.035em; }
+.statementStoryHero p { max-width: 520px; margin: 7px 0 0; color: rgba(255,255,255,.88); font-size: 11px; line-height: 1.45; }
+.statementEasyTotals { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px; }
+.statementEasyTotals > div { min-width: 0; display: grid; gap: 8px; padding: 12px; border-radius: 17px; background: #f5f5f7; }
+.statementEasyTotals > div.income { background: var(--mint); color: var(--green); }
+.statementEasyTotals > div.expense { background: var(--coral-soft); color: var(--coral); }
+.statementEasyTotals > div.change { background: #f2ecf8; color: var(--purple); }
+.statementEasyTotals span, .statementEasyTotals b, .statementEasyTotals small { display: block; }
+.statementEasyTotals b { color: currentColor; font-size: 9px; }
+.statementEasyTotals small { margin-top: 2px; color: var(--muted); font-size: 7px; }
+.statementEasyTotals strong { min-width: 0; font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.statementPlainAnswer { padding: 13px 14px; border-left: 4px solid var(--purple); border-radius: 5px 16px 16px 5px; background: #f5f2f8; }
+.statementPlainAnswer > b { color: var(--purple); font-size: 9px; }
+.statementPlainAnswer p { margin: 4px 0 0; font-size: 11px; font-weight: 650; line-height: 1.45; }
+.statementPlainAnswer small { display: block; margin-top: 5px; color: var(--muted); font-size: 8px; line-height: 1.4; }
+.statementSimpleSection { padding: 14px; border: 1px solid var(--line); border-radius: 19px; background: white; }
+.statementSimpleHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.statementSimpleHead > div { min-width: 0; }
+.statementSimpleHead b, .statementSimpleHead span { display: block; }
+.statementSimpleHead b { font-size: 11px; }
+.statementSimpleHead span { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.statementSimpleHead > strong { flex: none; color: var(--purple); font-size: 10px; }
+.statementCategoryList { display: grid; }
+.statementCategoryRow { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.statementCategoryRow > div { min-width: 0; }
+.statementCategoryRow b, .statementCategoryRow span { display: block; }
+.statementCategoryRow b { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.statementCategoryRow span { margin-top: 2px; color: var(--muted); font-size: 7px; }
+.statementCategoryRow strong { font-size: 10px; text-align: right; white-space: nowrap; }
+.statementCategoryRow > i { grid-column: 1 / -1; height: 5px; overflow: hidden; position: relative; border-radius: 99px; background: #e8e7eb; }
+.statementCategoryRow > i:after { content: ""; width: var(--statement-bar); height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #654783, #9b7ab9); animation: statementBarIn .55s cubic-bezier(.2,.8,.2,1); }
+.statementSimpleEmpty { padding: 13px 4px 4px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; text-align: center; }
+.statementPlanGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.statementPlanGrid > div { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 3px 8px; padding: 10px; border-left: 4px solid var(--plan-color); border-radius: 5px 14px 14px 5px; background: #f6f6f7; }
+.statementPlanGrid span { min-width: 0; font-size: 9px; }
+.statementPlanGrid span b { color: var(--plan-color); }
+.statementPlanGrid strong { font-size: 10px; text-align: right; white-space: nowrap; }
+.statementPlanGrid small { grid-column: 1 / -1; color: var(--muted); font-size: 7px; line-height: 1.35; }
+.statementNextAction { padding: 14px; border-radius: 17px; background: #eee7f5; }
+.statementNextAction span { display: block; color: var(--purple); font-size: 7px; font-weight: 850; letter-spacing: .1em; }
+.statementNextAction b { display: block; margin-top: 5px; font-size: 11px; line-height: 1.45; }
+.statementSakhiHelp, .statementGraphHelp { border-radius: 14px; background: #f5f5f7; }
+.statementSakhiHelp summary, .statementGraphHelp summary { padding: 10px 12px; color: var(--purple); font-size: 9px; font-weight: 750; cursor: pointer; }
+.statementSakhiHelp p, .statementGraphHelp p { margin: -2px 12px 11px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.statementSakhiHelp p b, .statementGraphHelp p b { color: var(--ink); }
+.statementMonthGraph { overflow: hidden; }
+.statementGraphPlot { min-width: 0; overflow: hidden; position: relative; border-radius: 14px; background: linear-gradient(#faf9fb, #f5f3f7); touch-action: pan-y; }
+.statementGraphPlot svg { width: 100%; height: auto; display: block; overflow: visible; cursor: crosshair; user-select: none; }
+.statementGraphZero { stroke: #c9c6cf; stroke-width: 1; stroke-dasharray: 7 7; }
+.statementGraphArea { fill: rgba(101,71,131,.1); }
+.statementGraphLine { fill: none; stroke: var(--purple); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.statementGraphActivity { fill: white; stroke: var(--purple); stroke-width: 3; transition: r .15s ease; }
+.statementGraphActivity.selected { r: 7; }
+.statementGraphGuide { stroke: rgba(101,71,131,.28); stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; }
+.statementGraphMarker { fill: white; stroke: var(--purple); stroke-width: 4; filter: drop-shadow(0 3px 5px rgba(101,71,131,.22)); pointer-events: none; transition: cx .14s ease, cy .14s ease; }
+.statementGraphValue, .statementGraphDate { fill: var(--muted); font-size: 15px; font-weight: 650; pointer-events: none; }
+.statementGraphValue.low { text-anchor: start; }
+.statementGraphDate.middle { text-anchor: middle; }
+.statementGraphDate.last { text-anchor: end; }
+.statementGraphSlider { width: calc(100% - 18px); height: 18px; display: block; margin: -9px 9px 7px; position: relative; accent-color: var(--purple); }
+.statementGraphDetail { margin-top: 9px; padding: 11px; border-radius: 15px; background: #f5f5f7; }
+.statementGraphDayHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.statementGraphDayHead span, .statementGraphDayHead b { display: block; }
+.statementGraphDayHead span { color: var(--purple); font-size: 7px; font-weight: 850; letter-spacing: .08em; }
+.statementGraphDayHead b { margin-top: 3px; font-size: 10px; }
+.statementGraphDayHead > strong { color: var(--green); font-size: 11px; white-space: nowrap; }
+.statementGraphDayHead > strong.negative { color: var(--coral); }
+.statementGraphDayTotals { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; scrollbar-width: none; }
+.statementGraphDayTotals::-webkit-scrollbar { display: none; }
+.statementGraphDayTotals > span { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 7px; border-radius: 999px; background: white; color: var(--muted); font-size: 7px; }
+.statementGraphDayTotals b { color: var(--ink); font-size: 8px; }
+.statementGraphDayTotals i { width: 6px; height: 6px; border-radius: 50%; background: var(--purple); }
+.statementGraphDayTotals i.income { background: var(--green-2); }
+.statementGraphDayTotals i.expense { background: var(--coral); }
+.statementGraphItems { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 8px; }
+.statementGraphItems > span { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 7px 8px; border-radius: 10px; background: white; }
+.statementGraphItems b { min-width: 0; overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.statementGraphItems small { flex: none; color: var(--coral); font-size: 7px; }
+.statementGraphItems .income small { color: var(--green); }
+.statementGraphItems em { grid-column: 1 / -1; color: var(--muted); font-size: 7px; font-style: normal; }
+.statementGraphQuiet { margin-top: 8px; padding: 9px; border-radius: 10px; background: white; color: var(--muted); font-size: 8px; text-align: center; }
+.statementGraphHelp { margin-top: 9px; background: #f3eff7; }
+.statementShareActions { align-items: stretch; }
+@keyframes statementBarIn { from { width: 0; } }
 .privacyNote { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 11px; padding: 7px 12px; border-radius: 12px; background: transparent; color: var(--muted); font-size: 9px; text-align: left; }
 .privacyNote:hover { background: rgba(255,255,255,.72); color: var(--purple); }
 .privacyNote b { font-size: 16px; font-weight: 500; }
@@ -1352,8 +1436,13 @@ h3 { font-weight: 680; }
   .rolloverPlanAmount { grid-template-columns: 1fr; }
   .rolloverPlanAmount b { grid-row: auto; grid-column: auto; text-align: left; }
   .statementEntryCopy span { white-space: normal; }
-  .preparedAllocation > div { align-items: flex-start; flex-direction: column; gap: 4px; }
-  .preparedAllocation strong { white-space: normal; overflow-wrap: anywhere; }
+  .statementEasyTotals { grid-template-columns: 1fr 1fr; }
+  .statementEasyTotals > div:last-child { grid-column: 1 / -1; }
+  .statementPlanGrid { grid-template-columns: 1fr; }
+  .statementGraphItems { grid-template-columns: 1fr; }
+  .statementGraphItems em { grid-column: auto; }
+  .statementShareActions button { flex: 1 1 calc(50% - 5px) !important; }
+  .statementShareActions .primary { flex-basis: 100% !important; order: -1; }
   .backupHealth { grid-template-columns: 1fr; }
   .backupChoice { grid-template-columns: 1fr; }
   .backupChoice > button { justify-self: start; }

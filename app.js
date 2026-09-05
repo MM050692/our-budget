@@ -1,4161 +1,2562 @@
-const VERSION = 9;
-const CURRENCIES = ['AED', 'MVR', 'INR', 'USD'];
-const EXPENSE_CATEGORIES = [
-  ['Housing', 'üè†'], ['Food', 'üç≤'], ['Transport', 'üöï'], ['Bills', 'üí°'],
-  ['Health', '‚ù§Ô∏è'], ['Debt', 'üßæ'], ['Savings', 'üå±'], ['Shopping', 'üõçÔ∏è'],
-  ['Entertainment', 'üé¨'], ['Travel', '‚úàÔ∏è'], ['Other', '‚Ä¢‚Ä¢‚Ä¢']
-];
-const INCOME_CATEGORIES = ['Salary', 'Bonus', 'Side income', 'Gift', 'Refund', 'Other income'];
-const INCOME_CATEGORY_ICONS = { Salary: 'üíº', Bonus: '‚ú®', 'Side income': 'üõ†Ô∏è', Gift: 'üéÅ', Refund: '‚Ü©Ô∏è', 'Other income': 'Ôºã' };
-const QUICK_NOTE_SUGGESTIONS = {
-  Housing: 'Rent or home cost', Food: 'Groceries or meal', Transport: 'Taxi, bus or fuel', Bills: 'Monthly bill',
-  Health: 'Medicine or care', Debt: 'Debt payment', Savings: 'Money set aside', Shopping: 'Household shopping',
-  Entertainment: 'Movie or outing', Travel: 'Trip expense', Other: 'Other expense',
-  Salary: 'Monthly salary', Bonus: 'Work bonus', 'Side income': 'Extra income', Gift: 'Gift received',
-  Refund: 'Refund received', 'Other income': 'Other income'
-};
-const ESSENTIAL_CATEGORIES = ['Housing', 'Food', 'Transport', 'Bills', 'Health'];
-const WANT_CATEGORIES = ['Shopping', 'Entertainment', 'Travel', 'Other'];
-const METALS = [['XAU', 'Gold'], ['XAG', 'Silver'], ['XPT', 'Platinum'], ['XPD', 'Palladium']];
-const CRYPTO = [['BTC', 'Bitcoin'], ['ETH', 'Ethereum'], ['LTC', 'Litecoin'], ['XRP', 'XRP'], ['DOT', 'Polkadot'], ['ADA', 'Cardano']];
-const DEFAULT = {
-  version: VERSION,
-  settings: {
-    base: 'MVR', lastCurrency: 'MVR', rates: { USD: 1, AED: 3.6725, MVR: 15.42, INR: 88 },
-    paydayDay: null, funMode: true, debtStrategy: 'avalanche', lastExpenseCategory: 'Food', lastExpenseAccountId: '', lastIncomeAccountId: '',
-    emailStatements: false, statementRecipientUserId: '', lastBackupAt: '', lastBackupHash: ''
-  },
-  member: { displayName: '', role: '' }, people: [],
-  transactions: [],
-  budgets: {
-    Housing: { amount: 11500, currency: 'MVR' }, Food: { amount: 3000, currency: 'MVR' },
-    Bills: { amount: 1500, currency: 'MVR' }, Transport: { amount: 1000, currency: 'MVR' },
-    Shopping: { amount: 2000, currency: 'MVR' }, Other: { amount: 2000, currency: 'MVR' }
-  },
-  goals: [], debts: [], assets: [], accounts: [], recurring: [], contributions: [], snapshots: [], checkups: [],
-  sinkingFunds: [], weeklyReviews: [], prices: {}
-};
-
-let state = structuredClone(DEFAULT);
-let db = null;
-let currentUser = null;
-let householdId = null;
-let stateKey = '';
-let pendingKey = '';
-let statementEmailKey = '';
-let realtimeChannel = null;
-let realtimeTimer = null;
-let priceRefresh = null;
-let durableCacheTimer = null;
-let pendingEncryptedBackup = null;
-let pendingOperationsMemory = [];
-let statementEmailQueueMemory = [];
-let statementEmailProviderReady = null;
-let statementEmailRecipientReady = false;
-let statementEmailRecipient = '';
-let statementEmailLastStatus = '';
-let currentPage = 'today';
-let wealthChartMode = 'actual';
-let timelineFilter = 'all';
-let cashflowDays = 30;
-let statementPeriod = 'month';
-let statementKind = 'all';
-let statementFrom = '';
-let statementTo = '';
-let reportPeriod = 'month';
-let reportFrom = '';
-let reportTo = '';
-let calendarMonth = '';
-let toastTimer = null;
-let pendingQuickAction = new URLSearchParams(location.search).get('quick') || '';
-let pendingRestoreData = null;
-let sakhiTourStep = 0;
-let sakhiTourReturnFocus = null;
-let sakhiTourCelebrated = false;
-let sakhiPractice = null;
-
-const $ = id => document.getElementById(id);
-const clone = value => structuredClone(value);
-const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[char]);
-const safeParse = value => { try { return JSON.parse(value); } catch (_error) { return null; } };
-const storageGet = key => { try { return localStorage.getItem(key); } catch (_error) { return null; } };
-const localDate = date => {
-  const d = date || new Date();
-  const offset = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - offset).toISOString().slice(0, 10);
-};
-const today = () => localDate();
-const monthKey = (date = today()) => date.slice(0, 7);
-const monthStart = (date = today()) => `${monthKey(date)}-01`;
-const cleanCurrency = value => String(value || '').trim();
-const currencyOptions = selected => CURRENCIES.map(c => `<option${c === selected ? ' selected' : ''}>${c}</option>`).join('');
-
-function normalizeState(raw) {
-  const input = raw || {};
-  const next = Object.assign(clone(DEFAULT), input);
-  next.version = VERSION;
-  next.settings = Object.assign({}, DEFAULT.settings, input.settings || {});
-  next.settings.rates = Object.assign({}, DEFAULT.settings.rates, input.settings?.rates || {});
-  next.settings.base = CURRENCIES.includes(next.settings.base) ? next.settings.base : 'MVR';
-  next.settings.lastCurrency = CURRENCIES.includes(next.settings.lastCurrency) ? next.settings.lastCurrency : next.settings.base;
-  next.member = Object.assign({}, DEFAULT.member, input.member || {});
-  next.settings.debtStrategy = ['avalanche', 'snowball'].includes(next.settings.debtStrategy) ? next.settings.debtStrategy : 'avalanche';
-  for (const key of ['people', 'transactions', 'goals', 'debts', 'assets', 'accounts', 'recurring', 'contributions', 'snapshots', 'checkups', 'sinkingFunds', 'weeklyReviews']) {
-    next[key] = Array.isArray(next[key]) ? next[key] : [];
-  }
-  next.prices = next.prices && typeof next.prices === 'object' ? next.prices : {};
-  const sourceBudgets = input.budgets && typeof input.budgets === 'object' ? input.budgets : DEFAULT.budgets;
-  next.budgets = Object.fromEntries(Object.entries(sourceBudgets).map(([category, value]) => [
-    category,
-    typeof value === 'object'
-      ? { amount: Number(value.amount) || 0, currency: cleanCurrency(value.currency) || next.settings.base }
-      : { amount: Number(value) || 0, currency: next.settings.base }
-  ]));
-  return next;
-}
-
-const DURABLE_CACHE_DB = 'our_dhan_durable_cache_v1';
-const DURABLE_CACHE_STORE = 'household_states';
-const LOCAL_CACHE_LIMIT = 1_500_000;
-
-function openDurableCache() {
-  if (!('indexedDB' in window)) return Promise.resolve(null);
-  return new Promise(resolve => {
-    try {
-      const request = indexedDB.open(DURABLE_CACHE_DB, 1);
-      request.onupgradeneeded = () => {
-        if (!request.result.objectStoreNames.contains(DURABLE_CACHE_STORE)) request.result.createObjectStore(DURABLE_CACHE_STORE);
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
-    } catch (_error) { resolve(null); }
-  });
-}
-
-async function durableCacheGet(key) {
-  const database = await openDurableCache();
-  if (!database) return '';
-  const stored = await new Promise(resolve => {
-    try {
-      const request = database.transaction(DURABLE_CACHE_STORE, 'readonly').objectStore(DURABLE_CACHE_STORE).get(key);
-      request.onsuccess = () => { database.close(); resolve(request.result || ''); };
-      request.onerror = () => { database.close(); resolve(''); };
-    } catch (_error) { database.close(); resolve(''); }
-  });
-  if (typeof stored === 'string') return stored;
-  if (stored?.format !== 'gzip-json' || !(stored.bytes instanceof ArrayBuffer) || !('DecompressionStream' in window)) return '';
-  try {
-    const stream = new Blob([stored.bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-    return await new Response(stream).text();
-  } catch (_error) { return ''; }
-}
-
-async function durableCacheSet(key, value) {
-  const database = await openDurableCache();
-  if (!database) return;
-  let stored = value;
-  if (typeof value === 'string' && value.length > 4096 && 'CompressionStream' in window) {
-    try {
-      const stream = new Blob([value]).stream().pipeThrough(new CompressionStream('gzip'));
-      stored = { format: 'gzip-json', bytes: await new Response(stream).arrayBuffer() };
-    } catch (_error) { stored = value; }
-  }
-  await new Promise(resolve => {
-    try {
-      const transaction = database.transaction(DURABLE_CACHE_STORE, 'readwrite');
-      transaction.objectStore(DURABLE_CACHE_STORE).put(stored, key);
-      transaction.oncomplete = resolve;
-      transaction.onerror = resolve;
-      transaction.onabort = resolve;
-    } catch (_error) { resolve(); }
-  });
-  database.close();
-}
-
-function cache() {
-  if (!stateKey) return;
-  const key = stateKey;
-  const serialized = JSON.stringify(state);
-  try {
-    if (serialized.length <= LOCAL_CACHE_LIMIT) localStorage.setItem(key, serialized);
-    else localStorage.removeItem(key);
-  } catch (_error) {
-    try { localStorage.removeItem(key); } catch (_ignored) { /* Supabase remains the source of truth. */ }
-  }
-  clearTimeout(durableCacheTimer);
-  durableCacheTimer = setTimeout(() => durableCacheSet(key, serialized), 180);
-}
-
-async function loadScopedState() {
-  stateKey = `our_dhan_v9:${householdId}:${currentUser.id}`;
-  pendingKey = `our_dhan_pending_v9:${householdId}:${currentUser.id}`;
-  statementEmailKey = `our_dhan_statement_email_v1:${householdId}:${currentUser.id}`;
-  const legacyStateKeys = [
-    `our_budget_v8:${householdId}:${currentUser.id}`,
-    `our_budget_v7:${householdId}:${currentUser.id}`,
-    `our_budget_v6:${householdId}:${currentUser.id}`,
-    `our_budget_v5:${householdId}:${currentUser.id}`,
-    'our_budget_v4', 'our_budget_v3', 'our_budget_v2'
-  ];
-  const legacyPendingKeys = [
-    `our_budget_pending_v8:${householdId}:${currentUser.id}`,
-    `our_budget_pending_v7:${householdId}:${currentUser.id}`,
-    `our_budget_pending_v6:${householdId}:${currentUser.id}`,
-    `our_budget_pending_v5:${householdId}:${currentUser.id}`
-  ];
-  let raw = safeParse(storageGet(stateKey));
-  if (!raw) raw = safeParse(await durableCacheGet(stateKey));
-  if (!raw) {
-    for (const key of legacyStateKeys) {
-      raw = safeParse(storageGet(key));
-      if (raw) break;
-    }
-  }
-  let queued = safeParse(storageGet(pendingKey));
-  if (!Array.isArray(queued)) queued = safeParse(await durableCacheGet(`${pendingKey}:queue`));
-  if (!Array.isArray(queued)) {
-    for (const key of legacyPendingKeys) {
-      const legacyQueued = safeParse(storageGet(key));
-      if (Array.isArray(legacyQueued) && legacyQueued.length) { queued = legacyQueued; break; }
-    }
-  }
-  pendingOperationsMemory = Array.isArray(queued) ? queued : [];
-  savePending(pendingOperationsMemory);
-  const emailQueue = safeParse(storageGet(statementEmailKey)) || safeParse(await durableCacheGet(`${statementEmailKey}:queue`));
-  statementEmailQueueMemory = Array.isArray(emailQueue) ? emailQueue.slice(-24) : [];
-  savePendingStatementEmails(statementEmailQueueMemory);
-  state = normalizeState(raw);
-  cache();
-}
-
-function pending() {
-  if (!pendingKey) return [];
-  try {
-    const stored = safeParse(localStorage.getItem(pendingKey));
-    if (Array.isArray(stored)) pendingOperationsMemory = stored;
-  } catch (_error) { /* Keep the durable in-memory copy. */ }
-  return pendingOperationsMemory;
-}
-function savePending(items) {
-  if (!pendingKey) return;
-  pendingOperationsMemory = [...items];
-  const serialized = JSON.stringify(pendingOperationsMemory);
-  durableCacheSet(`${pendingKey}:queue`, serialized);
-  try {
-    if (items.length) localStorage.setItem(pendingKey, serialized);
-    else localStorage.removeItem(pendingKey);
-  } catch (_error) {
-    try {
-      localStorage.removeItem(stateKey);
-      if (items.length) localStorage.setItem(pendingKey, serialized);
-      else localStorage.removeItem(pendingKey);
-    } catch (_ignored) { /* IndexedDB still holds the offline queue. */ }
-  }
-  updateSyncStatus();
-}
-
-function pendingStatementEmails() {
-  if (!statementEmailKey) return [];
-  try {
-    const stored = safeParse(localStorage.getItem(statementEmailKey));
-    if (Array.isArray(stored)) statementEmailQueueMemory = stored;
-  } catch (_error) { /* Keep the durable in-memory copy. */ }
-  return statementEmailQueueMemory;
-}
-
-function savePendingStatementEmails(items) {
-  if (!statementEmailKey) return;
-  statementEmailQueueMemory = items.slice(-24);
-  const serialized = JSON.stringify(statementEmailQueueMemory);
-  durableCacheSet(`${statementEmailKey}:queue`, serialized);
-  try {
-    if (statementEmailQueueMemory.length) localStorage.setItem(statementEmailKey, serialized);
-    else localStorage.removeItem(statementEmailKey);
-  } catch (_error) { /* Finance sync remains independent of email delivery. */ }
-}
-
-async function refreshStatementEmailStatus() {
-  if (!db || !currentUser || !householdId || !navigator.onLine) return;
-  const { data, error } = await db.functions.invoke('email-monthly-statement', { body: { action: 'status' } });
-  if (error || data?.error) {
-    statementEmailProviderReady = false;
-    statementEmailRecipientReady = false;
-    statementEmailLastStatus = 'Email service is not ready yet.';
-  } else {
-    statementEmailProviderReady = data.providerReady === true;
-    statementEmailRecipientReady = data.recipientReady === true;
-    statementEmailRecipient = data.recipient || '';
-    statementEmailLastStatus = statementEmailProviderReady && statementEmailRecipientReady ? 'Secure delivery is ready.'
-      : data.reason === 'external_email_not_authorized' ? 'External email relay is not authorised.' : 'One-time email connection still needed.';
-  }
-  renderStatementEmailSettings();
-}
-
-async function flushStatementEmailQueue(silent = false) {
-  if (!db || !householdId || !navigator.onLine || !state.settings.emailStatements) return false;
-  const items = pendingStatementEmails();
-  while (items.length) {
-    const item = items[0];
-    const { data, error } = await db.functions.invoke('email-monthly-statement', {
-      body: { action: 'deliver', transactionId: item.transactionId }
-    });
-    if (error || data?.error) {
-      statementEmailLastStatus = 'Statement is waiting; your money records are safe.';
-      if (!silent) toast('Statement email is waiting. Your records are already saved.');
-      renderStatementEmailSettings();
-      return false;
-    }
-    if (data?.status === 'setup_required') {
-      statementEmailProviderReady = false;
-      statementEmailLastStatus = 'One-time email connection still needed.';
-      if (!silent) toast('Statement saved. Finish email setup once to send it automatically.');
-      renderStatementEmailSettings();
-      return false;
-    }
-    if (['disabled', 'ignored'].includes(data?.status)) {
-      items.shift();
-      savePendingStatementEmails(items);
-      continue;
-    }
-    if (['sent', 'already_sent'].includes(data?.status)) {
-      statementEmailProviderReady = true;
-      statementEmailRecipientReady = true;
-      statementEmailRecipient = data.recipient || statementEmailRecipient;
-      statementEmailLastStatus = data.status === 'sent' ? 'Last monthly statement sent ‚úì' : 'This month‚Äôs statement was already sent ‚úì';
-      items.shift();
-      savePendingStatementEmails(items);
-      if (!silent && data.status === 'sent') toast('Previous month‚Äôs statement emailed ‚úì');
-      continue;
-    }
-    statementEmailLastStatus = 'Statement delivery is processing.';
-    renderStatementEmailSettings();
-    return false;
-  }
-  renderStatementEmailSettings();
-  return true;
-}
-
-function previousMonthRangeForDate(value = today()) {
-  const currentStart = `${String(value || today()).slice(0, 7)}-01`;
-  return { from: addMonths(currentStart, -1), to: addDays(currentStart, -1) };
-}
-
-function statementItemRange(item) {
-  if (item?.periodStart && item?.periodEnd) return { from: item.periodStart, to: item.periodEnd };
-  const salary = state.transactions.find(transaction => transaction.id === item?.transactionId);
-  return previousMonthRangeForDate(salary?.date || item?.salaryDate || today());
-}
-
-function latestPreparedStatement(includeHandled = true) {
-  return pendingStatementEmails()
-    .map(item => Object.assign({}, item, statementItemRange(item)))
-    .filter(item => includeHandled || !item.handledAt)
-    .sort((left, right) => `${right.periodStart || right.from}${right.queuedAt || ''}`.localeCompare(`${left.periodStart || left.from}${left.queuedAt || ''}`))[0] || null;
-}
-
-function queueSalaryStatement(transaction) {
-  if (transaction.type !== 'income' || transaction.category !== 'Salary') return;
-  const range = previousMonthRangeForDate(transaction.date);
-  const items = pendingStatementEmails();
-  let item = items.find(entry => entry.periodStart === range.from || entry.transactionId === transaction.id);
-  const shouldPrompt = !item;
-  if (!item) {
-    item = {
-      transactionId: transaction.id,
-      salaryDate: transaction.date,
-      periodStart: range.from,
-      periodEnd: range.to,
-      queuedAt: new Date().toISOString(),
-      promptedAt: '',
-      handledAt: ''
-    };
-    items.push(item);
-  } else {
-    Object.assign(item, { transactionId: item.transactionId || transaction.id, salaryDate: transaction.date, periodStart: range.from, periodEnd: range.to });
-  }
-  if (shouldPrompt) item.promptedAt = new Date().toISOString();
-  savePendingStatementEmails(items);
-  renderStatementEmailSettings();
-  if (state.settings.emailStatements) flushStatementEmailQueue(false);
-  if (shouldPrompt) setTimeout(() => openPreparedMonthlyStatement(range.from), 180);
-}
-function enqueue(operation) {
-  const items = pending();
-  items.push(Object.assign({ queueId: crypto.randomUUID(), createdAt: new Date().toISOString() }, operation));
-  savePending(items);
-}
-
-function updateSyncStatus(message = '') {
-  if (!$('syncStatus')) return;
-  const count = pendingKey ? pending().length : 0;
-  $('syncStatus').textContent = message || (count
-    ? `${count} change${count === 1 ? '' : 's'} waiting to sync`
-    : currentUser ? 'Synced between both phones' : 'Offline');
-}
-
-function usd(value, currency) {
-  const rate = Number(state.settings.rates[cleanCurrency(currency)]) || 1;
-  return Number(value || 0) / rate;
-}
-function fromUSD(value, currency) {
-  const rate = Number(state.settings.rates[cleanCurrency(currency)]) || 1;
-  return Number(value || 0) * rate;
-}
-function money(value, currency = state.settings.base) {
-  try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(value) || 0);
-  } catch (_error) {
-    return `${currency} ${(Number(value) || 0).toFixed(2)}`;
-  }
-}
-function baseMoney(usdValue) { return money(fromUSD(usdValue, state.settings.base), state.settings.base); }
-function formatDate(value, options = { day: 'numeric', month: 'short', year: 'numeric' }) {
-  if (!value) return '';
-  return new Intl.DateTimeFormat('en', options).format(new Date(`${value.slice(0, 10)}T12:00:00`));
-}
-function rememberCurrency(currency) {
-  if (!CURRENCIES.includes(currency)) return;
-  state.settings.lastCurrency = currency;
-  cache();
-}
-function accountName(id) { return state.accounts.find(a => a.id === id)?.name || ''; }
-function activeAccounts() { return state.accounts.filter(a => a.active !== false); }
-function activeGoals() { return state.goals.filter(g => g.active !== false); }
-function activeDebts() { return state.debts.filter(d => d.active !== false || d.remaining > 0); }
-function activeSinkingFunds() { return state.sinkingFunds.filter(fund => fund.active !== false && fund.saved + .005 < fund.target); }
-function householdPeople() { return [...new Set([...state.people, state.member.displayName].map(name => String(name || '').trim()).filter(Boolean))]; }
-function defaultPerson() { return state.member.displayName || 'Shared'; }
-function peopleOptions(selected = defaultPerson()) {
-  return [...new Set([...householdPeople(), 'Shared', selected].filter(Boolean))]
-    .map(name => `<option${name === selected ? ' selected' : ''}>${esc(name)}</option>`).join('');
-}
-
-function toast(message) {
-  const element = $('toast');
-  if (!element) return;
-  clearTimeout(toastTimer);
-  element.textContent = message;
-  element.classList.remove('hidden');
-  toastTimer = setTimeout(() => element.classList.add('hidden'), 2600);
-}
-function celebrate() {
-  if (!state.settings.funMode || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const root = $('confetti');
-  const colors = ['#31846c', '#f1b94b', '#e96d5b', '#557fa3'];
-  root.innerHTML = Array.from({ length: 24 }, (_, i) => `<i style="left:${5 + Math.random() * 90}%;background:${colors[i % colors.length]};animation-delay:${Math.random() * .25}s;--drift:${-80 + Math.random() * 160}px"></i>`).join('');
-  setTimeout(() => { root.innerHTML = ''; }, 1700);
-}
-function haptic() { if (navigator.vibrate) navigator.vibrate(18); }
-
-function openModal(title, html) {
-  $('modalTitle').textContent = title;
-  $('modalContent').innerHTML = html;
-  $('modal').classList.remove('hidden');
-  const form = $('modalContent').querySelector('form');
-  $('modal').classList.toggle('flowModal', !!form);
-  prepareInlineControls($('modalContent'));
-  if (form) setupFormFlow(form);
-  document.body.style.overflow = 'hidden';
-  setTimeout(() => $('modalContent').querySelector('.flowStep.active input:not([type="hidden"]), .flowStep.active textarea, input:not([type="hidden"]), textarea, button')?.focus(), 80);
-}
-function closeModal() {
-  $('modal').classList.add('hidden');
-  $('modal').classList.remove('flowModal');
-  $('modalContent').innerHTML = '';
-  document.body.style.overflow = '';
-}
-
-function sakhiTourStorageKey() {
-  return `our_dhan_sakhi_practice_v1:${currentUser?.id || 'this-phone'}`;
-}
-
-function sakhiTourCompleted() {
-  try { return !!safeParse(localStorage.getItem(sakhiTourStorageKey()))?.completedAt; }
-  catch (_error) { return false; }
-}
-
-function updateSakhiTourLauncher() {
-  const launcher = $('sakhiTourLauncher');
-  if (!launcher) return;
-  const completed = sakhiTourCompleted();
-  launcher.classList.toggle('completed', completed);
-  $('sakhiTourLauncherTitle').textContent = completed ? 'Replay Sakhi practice' : 'Sakhi practice';
-  $('sakhiTourLauncherText').textContent = completed
-    ? 'Practise again anytime ¬∑ sample data only'
-    : 'Learn Our DHAN in 5 playful minutes ¬∑ sample data only';
-  $('sakhiTourLauncherAction').textContent = completed ? 'Replay' : 'Start';
-  launcher.querySelector('.sakhiTourPlay').textContent = completed ? '‚Üª' : '‚ñ∂';
-}
-
-function freshSakhiPractice() {
-  return { action: '', actionCorrect: false, recordStage: 0, netWorthAnswer: 0, netWorthCorrect: false, buckets: [], routine: [] };
-}
-
-function openSakhiTour() {
-  sakhiTourReturnFocus = document.activeElement;
-  sakhiTourStep = 0;
-  sakhiTourCelebrated = false;
-  sakhiPractice = freshSakhiPractice();
-  $('sakhiTourModal').classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
-  renderSakhiTour();
-}
-
-function closeSakhiTour() {
-  $('sakhiTourModal').classList.add('hidden');
-  $('sakhiTourContent').innerHTML = '';
-  document.body.style.overflow = $('modal').classList.contains('hidden') ? '' : 'hidden';
-  const returnFocus = sakhiTourReturnFocus;
-  sakhiTourReturnFocus = null;
-  if (returnFocus?.isConnected) setTimeout(() => returnFocus.focus(), 0);
-}
-
-function sakhiTourFooter(enabled = true, label = 'Continue') {
-  return `<footer class="sakhiTourFooter">
-    ${sakhiTourStep > 0 ? '<button class="sakhiTourBack" type="button" onclick="sakhiTourBack()">Back</button>' : ''}
-    <button class="sakhiTourContinue" type="button" onclick="sakhiTourNext()"${enabled ? '' : ' disabled'}>${label}</button>
-  </footer>`;
-}
-
-function sakhiTourWelcomeHtml() {
-  return `<section class="sakhiTourStep">
-    <span class="sakhiTourEyebrow">LEARN BY TAPPING</span>
-    <h2>Money practice, without the worry.</h2>
-    <p class="sakhiTourLead">A short guided game for Sakhi. It uses pretend money and teaches the few actions that matter most.</p>
-    <p class="sakhiTourMarathi" lang="mr">‡§π‡§æ ‡§´‡§ï‡•ç‡§§ ‡§∏‡§∞‡§æ‡§µ ‡§Ü‡§π‡•á. ‡§§‡•Å‡§Æ‡§ö‡•á ‡§ñ‡§∞‡•á ‡§™‡•à‡§∏‡•á ‡§ï‡§ø‡§Ç‡§µ‡§æ ‡§®‡•ã‡§Ç‡§¶‡•Ä ‡§¨‡§¶‡§≤‡§£‡§æ‡§∞ ‡§®‡§æ‡§π‡•Ä‡§§.</p>
-    <div class="sakhiTourHeroArt" aria-hidden="true"><i class="sakhiTourSpark one"></i><div class="sakhiTourCoin">‚Çπ</div><i class="sakhiTourSpark two"></i></div>
-    <span class="sakhiTourSafety">Practice only ¬∑ nothing is saved</span>
-    ${sakhiTourFooter(true, 'Start practice')}
-  </section>`;
-}
-
-function sakhiTourActionHtml() {
-  const options = [
-    ['spend', '‚àí', 'Add spend', 'Money left an account'],
-    ['income', 'Ôºã', 'Add income', 'Money arrived'],
-    ['transfer', '‚áÑ', 'Transfer', 'Money moved between our accounts']
-  ];
-  const feedback = !sakhiPractice.action ? '' : sakhiPractice.actionCorrect
-    ? '<div class="sakhiTourFeedback correct"><b>Exactly.</b> Groceries reduce the balance of the account that paid.</div>'
-    : '<div class="sakhiTourFeedback"><b>Almost.</b> The money left an account, so try Add spend.</div>';
-  return `<section class="sakhiTourStep">
-    <span class="sakhiTourEyebrow">LESSON 1 ¬∑ PICK THE ACTION</span>
-    <h2>We paid MVR 250 for groceries.</h2>
-    <p class="sakhiTourLead">Which button should Sakhi use?</p>
-    <p class="sakhiTourMarathi" lang="mr">‡§ï‡§ø‡§∞‡§æ‡§£‡§æ ‡§ñ‡§∞‡•á‡§¶‡•Ä‡§∏‡§æ‡§†‡•Ä ‡§Ø‡•ã‡§ó‡•ç‡§Ø ‡§™‡§∞‡•ç‡§Ø‡§æ‡§Ø ‡§®‡§ø‡§µ‡§°‡§æ.</p>
-    <div class="sakhiTourOptions">${options.map(([value, icon, title, note]) => {
-      const selected = sakhiPractice.action === value;
-      const className = selected ? (value === 'spend' ? ' correct' : ' selected') : '';
-      return `<button class="sakhiTourOption${className}" type="button" aria-pressed="${selected}" onclick="chooseSakhiTourAction('${value}')"><span>${icon}</span><span><b>${title}</b><small>${note}</small></span><i>${value === 'spend' && selected ? '‚úì' : ''}</i></button>`;
-    }).join('')}</div>
-    ${feedback}
-    ${sakhiTourFooter(sakhiPractice.actionCorrect)}
-  </section>`;
-}
-
-function sakhiTourRecordHtml() {
-  const rows = [
-    ['Date, amount and currency', 'Today ¬∑ MVR 250', 'Looks right'],
-    ['Paid from', 'Main account', 'Choose'],
-    ['What was it for?', 'Food', 'Choose'],
-    ['Who paid?', 'Sakhi', 'Choose'],
-    ['Note', 'Groceries', 'Use note']
-  ];
-  const rowHtml = rows.map(([label, value, action], index) => {
-    if (index < sakhiPractice.recordStage) return `<div class="sakhiPracticeRow done"><span>${label}</span><b>‚úì ${value}</b></div>`;
-    if (index === sakhiPractice.recordStage) return `<div class="sakhiPracticeRow active"><span>${label}</span><button type="button" onclick="advanceSakhiPractice()">${action}: ${value}</button></div>`;
-    return `<div class="sakhiPracticeRow"><span>${label}</span><b>‚Äî</b></div>`;
-  }).join('');
-  return `<section class="sakhiTourStep">
-    <span class="sakhiTourEyebrow">LESSON 2 ¬∑ REHEARSE A SPEND</span>
-    <h2>One small step at a time.</h2>
-    <p class="sakhiTourLead">Tap the highlighted row. This follows the same order as the real Add spend screen.</p>
-    <p class="sakhiTourMarathi" lang="mr">‡§è‡§ï‡§æ‡§µ‡•á‡§≥‡•Ä ‡§è‡§ï ‡§™‡§æ‡§Ø‡§∞‡•Ä ‡§™‡•Ç‡§∞‡•ç‡§£ ‡§ï‡§∞‡§æ. ‡§π‡§æ ‡§∏‡§∞‡§æ‡§µ ‡§ñ‡§±‡•ç‡§Ø‡§æ ‡§ñ‡§æ‡§§‡•ç‡§Ø‡§æ‡§§ ‡§ú‡§§‡§® ‡§π‡•ã‡§£‡§æ‡§∞ ‡§®‡§æ‡§π‡•Ä.</p>
-    <div class="sakhiPracticeCard">
-      <div class="sakhiPracticeAmount"><div><span>Practice amount</span><b>MVR 250</b></div><i>Sample</i></div>
-      <div class="sakhiPracticeRows">${rowHtml}</div>
-    </div>
-    ${sakhiPractice.recordStage >= rows.length ? '<div class="sakhiPracticeResult"><span>Main account changes by</span><b>‚àí MVR 250</b></div>' : ''}
-    ${sakhiTourFooter(sakhiPractice.recordStage >= rows.length)}
-  </section>`;
-}
-
-function sakhiTourWorthHtml() {
-  const answers = [6500, 11500, 18500];
-  const feedback = !sakhiPractice.netWorthAnswer ? '' : sakhiPractice.netWorthCorrect
-    ? '<div class="sakhiTourFeedback correct"><b>That is it.</b> MVR 10,000 + MVR 5,000 ‚àí MVR 3,500 = MVR 11,500.</div>'
-    : '<div class="sakhiTourFeedback"><b>Try once more.</b> Debt is subtracted, not added.</div>';
-  return `<section class="sakhiTourStep">
-    <span class="sakhiTourEyebrow">LESSON 3 ¬∑ READ THE MONEY PAGE</span>
-    <h2>What is our net worth?</h2>
-    <p class="sakhiTourLead">Accounts and assets help it grow. Debt pulls it down.</p>
-    <p class="sakhiTourMarathi" lang="mr">‡§ñ‡§æ‡§§‡•Ä + ‡§Æ‡§æ‡§≤‡§Æ‡§§‡•ç‡§§‡§æ ‚àí ‡§ï‡§∞‡•ç‡§ú = ‡§®‡§ø‡§µ‡•ç‡§µ‡§≥ ‡§∏‡§Ç‡§™‡§§‡•ç‡§§‡•Ä.</p>
-    <div class="sakhiWorthEquation">
-      <div class="sakhiWorthTerm"><span>Accounts</span><b>MVR 10,000</b></div><i class="sakhiWorthSymbol">+</i>
-      <div class="sakhiWorthTerm asset"><span>Assets</span><b>MVR 5,000</b></div><i class="sakhiWorthSymbol">‚àí</i>
-      <div class="sakhiWorthTerm debt"><span>Debt</span><b>MVR 3,500</b></div>
-    </div>
-    <div class="sakhiWorthAnswerGrid">${answers.map(value => {
-      const selected = sakhiPractice.netWorthAnswer === value;
-      const className = selected ? (value === 11500 ? ' correct' : ' selected') : '';
-      return `<button class="sakhiWorthAnswer${className}" type="button" onclick="chooseSakhiNetWorth(${value})">MVR ${value.toLocaleString('en-US')}</button>`;
-    }).join('')}</div>
-    ${feedback}
-    ${sakhiTourFooter(sakhiPractice.netWorthCorrect)}
-  </section>`;
-}
-
-function sakhiTourBucketsHtml() {
-  const buckets = [
-    ['needs', '40%', 'Needs', 'Home, food, bills and transport'],
-    ['debt', '30%', 'Debt', 'Clear expensive debt faster'],
-    ['future', '20%', 'Future', 'Emergency fund, goals and investing'],
-    ['wants', '10%', 'Wants', 'Enjoyment after the important jobs']
-  ];
-  const allSeen = sakhiPractice.buckets.length === buckets.length;
-  return `<section class="sakhiTourStep">
-    <span class="sakhiTourEyebrow">LESSON 4 ¬∑ GIVE MONEY A JOB</span>
-    <h2>Tap all four colours.</h2>
-    <p class="sakhiTourLead">The percentages are guides. Unused money can always go to debt or the future.</p>
-    <p class="sakhiTourMarathi" lang="mr">‡•™‡•¶% ‡§ó‡§∞‡§ú‡§æ, ‡•©‡•¶% ‡§ï‡§∞‡•ç‡§ú, ‡•®‡•¶% ‡§≠‡§µ‡§ø‡§∑‡•ç‡§Ø, ‡•ß‡•¶% ‡§á‡§ö‡•ç‡§õ‡§æ.</p>
-    <div class="sakhiBucketGrid">${buckets.map(([key, pct, title, note]) => `<button class="sakhiBucket${sakhiPractice.buckets.includes(key) ? ' revealed' : ''}" type="button" aria-pressed="${sakhiPractice.buckets.includes(key)}" onclick="revealSakhiBucket('${key}')"><strong>${pct}</strong><b>${title}</b><small>${note}</small></button>`).join('')}</div>
-    ${allSeen ? '<div class="sakhiTourFeedback correct"><b>Four jobs, one plan.</b> The app turns salary into these targets automatically.</div>' : ''}
-    ${sakhiTourFooter(allSeen)}
-  </section>`;
-}
-
-function sakhiTourRoutineHtml() {
-  const items = [
-    ['daily', '‚úçÔ∏è', 'Daily', 'Record money when it moves'],
-    ['weekly', '‚óâ', 'Weekly', 'Check balances, rates and one next move'],
-    ['monthly', '‚úì', 'Monthly', 'Use the plan and close the month together']
-  ];
-  const complete = sakhiPractice.routine.length === items.length;
-  return `<section class="sakhiTourStep">
-    <span class="sakhiTourEyebrow">LESSON 5 ¬∑ KEEP IT EASY</span>
-    <h2>Three tiny money habits.</h2>
-    <p class="sakhiTourLead">Tap each one to make a routine that both of you can remember.</p>
-    <p class="sakhiTourMarathi" lang="mr">‡§∞‡•ã‡§ú ‡§®‡•ã‡§Ç‡§¶, ‡§Ü‡§†‡§µ‡§°‡•ç‡§Ø‡§æ‡§§‡•Ç‡§® ‡§§‡§™‡§æ‡§∏‡§£‡•Ä, ‡§Æ‡§π‡§ø‡§®‡•ç‡§Ø‡§æ‡§§‡•Ç‡§® ‡§Ø‡•ã‡§ú‡§®‡§æ.</p>
-    <div class="sakhiRoutine">${items.map(([key, icon, title, note]) => {
-      const done = sakhiPractice.routine.includes(key);
-      return `<button class="sakhiRoutineItem${done ? ' done' : ''}" type="button" aria-pressed="${done}" onclick="completeSakhiRoutine('${key}')"><span>${icon}</span><span><b>${title}</b><small>${note}</small></span><i class="sakhiRoutineCheck">‚úì</i></button>`;
-    }).join('')}</div>
-    ${complete ? '<div class="sakhiTourFeedback correct"><b>Perfect.</b> Honest small updates beat complicated finance systems.</div>' : ''}
-    ${sakhiTourFooter(complete, 'Finish practice')}
-  </section>`;
-}
-
-function sakhiTourDoneHtml() {
-  return `<section class="sakhiTourStep sakhiTourDone">
-    <div class="sakhiTourDoneMark">‚úì</div>
-    <span class="sakhiTourEyebrow">PRACTICE COMPLETE</span>
-    <h2>Sakhi is ready.</h2>
-    <p class="sakhiTourLead">You practised the full rhythm: record what moved, understand the big picture, and follow the plan together.</p>
-    <p class="sakhiTourMarathi" lang="mr">‡§õ‡§æ‡§®! ‡§Ü‡§§‡§æ Our DHAN ‡§µ‡§æ‡§™‡§∞‡§£‡•á ‡§∏‡•ã‡§™‡•á ‡§π‡•ã‡§à‡§≤. ‡§∏‡§∞‡§æ‡§µ‡§æ‡§§‡•Ä‡§≤ ‡§ï‡•ã‡§£‡§§‡•Ä‡§π‡•Ä ‡§Æ‡§æ‡§π‡§ø‡§§‡•Ä ‡§ú‡§§‡§® ‡§ù‡§æ‡§≤‡•á‡§≤‡•Ä ‡§®‡§æ‡§π‡•Ä.</p>
-    <div class="sakhiTourDoneActions"><button class="primary" type="button" onclick="openRealSpendFromTour()">Try a real spend</button><button class="secondary" type="button" onclick="closeSakhiTour()">Done for now</button></div>
-  </section>`;
-}
-
-function renderSakhiTour() {
-  if (!sakhiPractice) sakhiPractice = freshSakhiPractice();
-  const screens = [sakhiTourWelcomeHtml, sakhiTourActionHtml, sakhiTourRecordHtml, sakhiTourWorthHtml, sakhiTourBucketsHtml, sakhiTourRoutineHtml, sakhiTourDoneHtml];
-  const progress = Math.min(100, Math.max(0, sakhiTourStep * 20));
-  $('sakhiTourCounter').textContent = sakhiTourStep === 0 ? 'Sakhi practice' : sakhiTourStep === 6 ? 'Practice complete' : `Lesson ${sakhiTourStep} of 5`;
-  $('sakhiTourProgressBar').style.width = `${progress}%`;
-  $('sakhiTourProgressBar').parentElement.setAttribute('aria-valuenow', String(progress));
-  $('sakhiTourContent').innerHTML = screens[sakhiTourStep]();
-  $('sakhiTourContent').scrollTop = 0;
-  requestAnimationFrame(() => $('sakhiTourContent').querySelector('button')?.focus({ preventScroll: true }));
-}
-
-function sakhiTourNext() {
-  if (sakhiTourStep === 1 && !sakhiPractice.actionCorrect) return;
-  if (sakhiTourStep === 2 && sakhiPractice.recordStage < 5) return;
-  if (sakhiTourStep === 3 && !sakhiPractice.netWorthCorrect) return;
-  if (sakhiTourStep === 4 && sakhiPractice.buckets.length < 4) return;
-  if (sakhiTourStep === 5 && sakhiPractice.routine.length < 3) return;
-  if (sakhiTourStep === 5) { finishSakhiTour(); return; }
-  sakhiTourStep = Math.min(6, sakhiTourStep + 1);
-  haptic();
-  renderSakhiTour();
-}
-
-function sakhiTourBack() {
-  sakhiTourStep = Math.max(0, sakhiTourStep - 1);
-  haptic();
-  renderSakhiTour();
-}
-
-function chooseSakhiTourAction(value) {
-  sakhiPractice.action = value;
-  sakhiPractice.actionCorrect = value === 'spend';
-  if (sakhiPractice.actionCorrect) haptic();
-  renderSakhiTour();
-}
-
-function advanceSakhiPractice() {
-  sakhiPractice.recordStage = Math.min(5, sakhiPractice.recordStage + 1);
-  haptic();
-  renderSakhiTour();
-}
-
-function chooseSakhiNetWorth(value) {
-  sakhiPractice.netWorthAnswer = value;
-  sakhiPractice.netWorthCorrect = value === 11500;
-  if (sakhiPractice.netWorthCorrect) haptic();
-  renderSakhiTour();
-}
-
-function revealSakhiBucket(key) {
-  if (!sakhiPractice.buckets.includes(key)) sakhiPractice.buckets.push(key);
-  haptic();
-  renderSakhiTour();
-}
-
-function completeSakhiRoutine(key) {
-  if (!sakhiPractice.routine.includes(key)) sakhiPractice.routine.push(key);
-  haptic();
-  renderSakhiTour();
-}
-
-function finishSakhiTour() {
-  try { localStorage.setItem(sakhiTourStorageKey(), JSON.stringify({ completedAt: new Date().toISOString() })); }
-  catch (_error) { /* The tour still works if private storage is unavailable. */ }
-  sakhiTourStep = 6;
-  updateSakhiTourLauncher();
-  renderSakhiTour();
-  if (!sakhiTourCelebrated) { sakhiTourCelebrated = true; celebrate(); haptic(); }
-}
-
-function openRealSpendFromTour() {
-  closeSakhiTour();
-  openQuickExpense();
-}
-
-function numberPrecision(input) {
-  const step = input.getAttribute('step');
-  if (!step || step === 'any') return 0;
-  const match = String(step).match(/\.(\d+)/);
-  return Math.min(8, match ? match[1].length : 0);
-}
-
-function formatWheelNumber(input, value) {
-  if (!Number.isFinite(value)) return '‚Äî';
-  const precision = numberPrecision(input);
-  return new Intl.NumberFormat('en-US', { minimumFractionDigits: precision, maximumFractionDigits: precision }).format(value);
-}
-
-function nudgeInlineNumber(input, direction, units = 1) {
-  if (input.disabled) return;
-  const step = input.step && input.step !== 'any' ? Number(input.step) : 1;
-  const min = input.hasAttribute('min') ? Number(input.min) : -Infinity;
-  const max = input.hasAttribute('max') ? Number(input.max) : Infinity;
-  let value = input.value === '' ? (Number.isFinite(min) ? min : 0) : Number(input.value);
-  value += direction * step * units;
-  value = Math.max(min, Math.min(max, value));
-  input.value = numberPrecision(input) ? value.toFixed(numberPrecision(input)) : String(Math.round(value));
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-  updateInlineNumber(input);
-  haptic();
-}
-
-function updateInlineNumber(input) {
-  const shell = input.closest('.inlineNumberWheel');
-  if (!shell) return;
-  const step = input.step && input.step !== 'any' ? Number(input.step) : 1;
-  const min = input.hasAttribute('min') ? Number(input.min) : -Infinity;
-  const max = input.hasAttribute('max') ? Number(input.max) : Infinity;
-  const value = input.value === '' ? (Number.isFinite(min) ? min : 0) : Number(input.value);
-  const before = value - step;
-  const after = value + step;
-  shell.querySelector('.numberBefore').textContent = before < min ? '‚Äî' : formatWheelNumber(input, before);
-  shell.querySelector('.numberAfter').textContent = after > max ? '‚Äî' : formatWheelNumber(input, after);
-}
-
-function enhanceNumberInput(input) {
-  if (input.dataset.inlineWheelReady) return;
-  input.dataset.inlineWheelReady = 'true';
-  input.classList.add('inlineNumberInput');
-  input.inputMode = numberPrecision(input) ? 'decimal' : 'numeric';
-  const shell = document.createElement('div');
-  shell.className = 'inlineNumberWheel';
-  input.parentNode.insertBefore(shell, input);
-  shell.innerHTML = '<div class="numberNudge numberAfter" role="button" tabindex="0" aria-label="Increase"></div>';
-  shell.appendChild(input);
-  shell.insertAdjacentHTML('beforeend', '<div class="numberNudge numberBefore" role="button" tabindex="0" aria-label="Decrease"></div><small>Swipe vertically or tap the centre number to type the exact value.</small>');
-  shell.querySelector('.numberAfter').onclick = () => nudgeInlineNumber(input, 1);
-  shell.querySelector('.numberBefore').onclick = () => nudgeInlineNumber(input, -1);
-  shell.querySelectorAll('.numberNudge').forEach(control => control.onkeydown = event => {
-    if (!['Enter', ' '].includes(event.key)) return;
-    event.preventDefault();
-    control.click();
-  });
-  let startY = null;
-  shell.addEventListener('pointerdown', event => { if (event.target === input) return; startY = event.clientY; });
-  shell.addEventListener('pointerup', event => {
-    if (startY == null || event.target === input) { startY = null; return; }
-    const distance = startY - event.clientY;
-    if (Math.abs(distance) > 18) nudgeInlineNumber(input, distance > 0 ? 1 : -1, Math.max(1, Math.round(Math.abs(distance) / 35)));
-    startY = null;
-  });
-  shell.addEventListener('wheel', event => {
-    event.preventDefault();
-    nudgeInlineNumber(input, event.deltaY < 0 ? 1 : -1);
-  }, { passive: false });
-  input.addEventListener('input', () => updateInlineNumber(input));
-  updateInlineNumber(input);
-}
-
-function syncInlineOptionWheel(select, scroll = true) {
-  const rail = select.parentElement?.querySelector(':scope > .inlineOptionRail');
-  if (!rail) return;
-  rail.classList.toggle('disabled', select.disabled);
-  const index = Math.max(0, select.selectedIndex);
-  rail.querySelectorAll('.inlineOptionItem').forEach((item, itemIndex) => {
-    item.classList.toggle('active', itemIndex === index);
-    item.setAttribute('aria-selected', itemIndex === index ? 'true' : 'false');
-  });
-  if (scroll) requestAnimationFrame(() => rail.scrollTo({ top: index * 48, behavior: 'smooth' }));
-}
-
-function buildInlineOptionWheel(select) {
-  select.parentElement?.querySelector(':scope > .inlineOptionRail')?.remove();
-  const rail = document.createElement('div');
-  rail.className = 'inlineOptionRail';
-  rail.tabIndex = 0;
-  rail.setAttribute('role', 'listbox');
-  rail.setAttribute('aria-label', select.getAttribute('aria-label') || 'Choose an option');
-  rail.innerHTML = [...select.options].map((option, index) => `<button type="button" class="inlineOptionItem${index === select.selectedIndex ? ' active' : ''}" data-option-index="${index}" role="option" aria-selected="${index === select.selectedIndex}">${esc(option.textContent)}</button>`).join('');
-  select.insertAdjacentElement('afterend', rail);
-  const choose = (index, userInitiated = true) => {
-    if (select.disabled) return;
-    const bounded = Math.max(0, Math.min(select.options.length - 1, index));
-    if (select.selectedIndex !== bounded) {
-      select.selectedIndex = bounded;
-      if (userInitiated) {
-        select.dispatchEvent(new Event('input', { bubbles: true }));
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        haptic();
-      }
-    }
-    syncInlineOptionWheel(select, false);
-    queueMicrotask(() => syncAllInlineControls());
-  };
-  rail.onclick = event => {
-    const item = event.target.closest('.inlineOptionItem');
-    if (!item) return;
-    const index = Number(item.dataset.optionIndex);
-    choose(index);
-    rail.scrollTo({ top: index * 48, behavior: 'smooth' });
-  };
-  let settleTimer;
-  rail.addEventListener('scroll', () => {
-    clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => choose(Math.round(rail.scrollTop / 48)), 90);
-  }, { passive: true });
-  rail.onkeydown = event => {
-    if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
-    event.preventDefault();
-    choose(select.selectedIndex + (event.key === 'ArrowDown' ? 1 : -1));
-    syncInlineOptionWheel(select);
-  };
-  requestAnimationFrame(() => {
-    rail.scrollTop = Math.max(0, select.selectedIndex) * 48;
-    syncInlineOptionWheel(select, false);
-  });
-}
-
-function enhanceSelect(select) {
-  if (select.dataset.inlineWheelReady) return;
-  select.dataset.inlineWheelReady = 'true';
-  select.classList.add('inlineSelectSource');
-  buildInlineOptionWheel(select);
-  select.addEventListener('change', () => syncInlineOptionWheel(select));
-  new MutationObserver(() => buildInlineOptionWheel(select)).observe(select, { childList: true, subtree: true });
-  setTimeout(() => syncInlineOptionWheel(select), 0);
-}
-
-function prepareInlineControls(root = document) {
-  const numbers = [...(root.matches?.('input[type="number"]') ? [root] : []), ...(root.querySelectorAll?.('input[type="number"]') || [])];
-  const selects = [...(root.matches?.('select') ? [root] : []), ...(root.querySelectorAll?.('select') || [])];
-  numbers.forEach(enhanceNumberInput);
-  selects.forEach(enhanceSelect);
-}
-
-function syncAllInlineControls(root = document) {
-  root.querySelectorAll?.('input[type="number"]').forEach(updateInlineNumber);
-  root.querySelectorAll?.('select').forEach(select => syncInlineOptionWheel(select, !!select.closest('.flowStep.active')));
-}
-
-function flowStepIsAvailable(step) {
-  return [...step.children].some(child => !child.matches('.flowStepHead, .flowActions') && !child.classList.contains('hidden'));
-}
-
-function showFormStep(form, requestedIndex) {
-  const available = [...form.querySelectorAll(':scope > .flowStep')].filter(flowStepIsAvailable);
-  if (!available.length) return;
-  const index = Math.max(0, Math.min(available.length - 1, requestedIndex));
-  form.dataset.flowIndex = String(index);
-  form.querySelectorAll(':scope > .flowStep').forEach(step => step.classList.toggle('active', step === available[index]));
-  available.forEach((step, stepIndex) => {
-    const head = step.querySelector(':scope > .flowStepHead');
-    const title = step.dataset.flowTitle || step.querySelector('label')?.childNodes[0]?.textContent?.trim() || 'Next detail';
-    if (head) head.innerHTML = `<span>Step ${stepIndex + 1} of ${available.length}</span><b>${esc(title)}</b><i style="--flow-progress:${(stepIndex + 1) / available.length * 100}%"></i>`;
-  });
-  requestAnimationFrame(() => {
-    syncAllInlineControls(available[index]);
-    available[index].querySelector('input:not([type="hidden"]), textarea, .inlineOptionRail')?.focus({ preventScroll: true });
-  });
-}
-
-function validateFlowStep(step) {
-  const controls = [...step.querySelectorAll('input, select, textarea')].filter(control => !control.disabled && !control.closest('.hidden'));
-  for (const control of controls) {
-    if (control.checkValidity()) continue;
-    control.reportValidity();
-    return false;
-  }
-  return true;
-}
-
-function setupFormFlow(form) {
-  if (form.dataset.flowReady) return;
-  form.dataset.flowReady = 'true';
-  let steps = [...form.querySelectorAll(':scope > .flowStep')];
-  const submit = [...form.children].find(child => child.matches?.('button[type="submit"]'));
-  if (!steps.length) {
-    const children = [...form.children].filter(child => child !== submit);
-    let pendingNotes = [];
-    children.forEach(child => {
-      if (child.matches('.friendlyNote, .warningNote') && !child.querySelector('input,select,textarea')) { pendingNotes.push(child); return; }
-      const step = document.createElement('section');
-      step.className = 'flowStep';
-      pendingNotes.forEach(note => step.appendChild(note));
-      pendingNotes = [];
-      step.appendChild(child);
-      form.appendChild(step);
-      steps.push(step);
-    });
-    if (pendingNotes.length && steps.length) pendingNotes.forEach(note => steps[0].prepend(note));
-    if (submit && steps.length) steps.at(-1).appendChild(submit);
-  }
-  if (steps.length < 2) { steps[0]?.classList.add('active'); return; }
-  steps.forEach((step, index) => {
-    step.insertAdjacentHTML('afterbegin', '<div class="flowStepHead"></div>');
-    const actions = document.createElement('div');
-    actions.className = 'flowActions';
-    if (index > 0) actions.innerHTML += '<button type="button" class="flowBack">Back</button>';
-    if (index < steps.length - 1) actions.innerHTML += '<button type="button" class="primary flowNext">Continue</button>';
-    step.appendChild(actions);
-    actions.querySelector('.flowBack')?.addEventListener('click', () => showFormStep(form, Number(form.dataset.flowIndex || 0) - 1));
-    actions.querySelector('.flowNext')?.addEventListener('click', () => {
-      if (validateFlowStep(step)) showFormStep(form, Number(form.dataset.flowIndex || 0) + 1);
-    });
-  });
-  form.addEventListener('submit', event => {
-    const available = [...form.querySelectorAll(':scope > .flowStep')].filter(flowStepIsAvailable);
-    const index = Number(form.dataset.flowIndex || 0);
-    if (index >= available.length - 1) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    if (validateFlowStep(available[index])) showFormStep(form, index + 1);
-  }, true);
-  showFormStep(form, 0);
-}
-
-async function runOperation(operation) {
-  if (operation.action === 'delete') {
-    return db.from(operation.table).delete().eq('id', operation.id).eq('household_id', householdId);
-  }
-  if (operation.action === 'budget') {
-    return db.from('budgets').upsert(operation.rows, { onConflict: 'household_id,category' });
-  }
-  if (operation.action === 'snapshot') {
-    return db.from('net_worth_snapshots').upsert(operation.row, { onConflict: 'household_id,snapshot_date' });
-  }
-  if (operation.action === 'settings') {
-    return db.from('household_settings').upsert(operation.row, { onConflict: 'household_id' });
-  }
-  if (operation.action === 'checkup') {
-    return db.from('monthly_checkups').upsert(operation.row, { onConflict: 'household_id,month' });
-  }
-  if (operation.action === 'moneyDate') {
-    return db.from('weekly_money_dates').upsert(operation.row, { onConflict: 'household_id,week_start' });
-  }
-  if (operation.action === 'bulkUpsert') {
-    return db.from(operation.table).upsert(operation.rows, operation.onConflict ? { onConflict: operation.onConflict } : undefined);
-  }
-  return db.from(operation.table).upsert(operation.row);
-}
-
-async function flushPending() {
-  if (!db || !householdId || !navigator.onLine) return false;
-  let items = pending();
-  if (!items.length) { updateSyncStatus(); return true; }
-  updateSyncStatus('Syncing saved changes‚Ä¶');
-  while (items.length) {
-    const operation = items[0];
-    try {
-      const { error } = await runOperation(operation);
-      if (error) throw error;
-      items.shift();
-      savePending(items);
-    } catch (error) {
-      if (error?.code === '23505' && operation.row?.recurring_item_id) {
-        items.shift();
-        savePending(items);
-        toast('This recurring item was already confirmed this month.');
-        continue;
-      }
-      updateSyncStatus(`${items.length} change${items.length === 1 ? '' : 's'} waiting ¬∑ ${error?.message || 'offline'}`);
-      return false;
-    }
-  }
-  updateSyncStatus();
-  return true;
-}
-
-async function saveOperation(operation, options = {}) {
-  enqueue(operation);
-  cache();
-  render();
-  if (options.close !== false) closeModal();
-  if (options.message) toast(options.message);
-  if (options.celebrate) celebrate();
-  haptic();
-  if (await flushPending()) await loadRemote();
-}
-
-async function saveOperations(operations, options = {}) {
-  operations.forEach(enqueue);
-  cache();
-  render();
-  if (options.close !== false) closeModal();
-  if (options.message) toast(options.message);
-  if (options.celebrate) celebrate();
-  haptic();
-  if (await flushPending()) await loadRemote();
-}
-
-window.addEventListener('online', async () => {
-  if (await flushPending()) await loadRemote();
-  if (state.settings.emailStatements) await flushStatementEmailQueue(true);
-});
-
-function showPage(name) {
-  currentPage = name;
-  document.querySelectorAll('.page').forEach(page => page.classList.add('hidden'));
-  $(`page-${name}`)?.classList.remove('hidden');
-  document.querySelectorAll('.bottomNav button').forEach(button => button.classList.toggle('active', button.dataset.page === name));
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-  render();
-  if (name === 'money') refreshPrices(false);
-}
-
-async function boot() {
-  const config = window.SUPABASE_CONFIG || {};
-  if (!config.url || !config.anonKey) {
-    $('authMessage').textContent = 'Supabase configuration is missing.';
-    return;
-  }
-  db = window.supabase.createClient(config.url, config.anonKey);
-  const { data: { session } } = await db.auth.getSession();
-  if (session) await signedIn(session.user);
-  else showAuth();
-  db.auth.onAuthStateChange((_event, nextSession) => {
-    setTimeout(() => {
-      if (nextSession) signedIn(nextSession.user);
-      else showAuth();
-    }, 0);
-  });
-}
-
-function showAuth() {
-  if (realtimeChannel && db) db.removeChannel(realtimeChannel);
-  currentUser = null;
-  householdId = null;
-  stateKey = '';
-  pendingKey = '';
-  statementEmailKey = '';
-  pendingOperationsMemory = [];
-  statementEmailQueueMemory = [];
-  statementEmailProviderReady = null;
-  statementEmailRecipientReady = false;
-  statementEmailRecipient = '';
-  statementEmailLastStatus = '';
-  state = clone(DEFAULT);
-  $('authScreen').classList.remove('hidden');
-  $('app').classList.add('hidden');
-}
-
-$('authForm').onsubmit = async event => {
-  event.preventDefault();
-  $('authMessage').textContent = 'Signing in‚Ä¶';
-  const { error } = await db.auth.signInWithPassword({ email: $('authEmail').value, password: $('authPassword').value });
-  $('authMessage').textContent = error ? error.message : '';
-};
-
-async function signedIn(user) {
-  if (currentUser?.id === user.id && householdId) return;
-  currentUser = user;
-  $('authScreen').classList.add('hidden');
-  $('app').classList.remove('hidden');
-  updateSyncStatus('Finding your household‚Ä¶');
-  const { data: member, error } = await db.from('household_members')
-    .select('household_id,display_name,role').eq('user_id', user.id).limit(1).maybeSingle();
-  if (error || !member) {
-    updateSyncStatus('Household not found');
-    toast('This login is not attached to a household.');
-    return;
-  }
-  householdId = member.household_id;
-  await loadScopedState();
-  state.member = { displayName: member.display_name || 'Friend', role: member.role || 'member' };
-  cache();
-  await flushPending();
-  await loadRemote();
-  if (state.settings.emailStatements) {
-    await refreshStatementEmailStatus();
-    await flushStatementEmailQueue(true);
-  }
-  subscribeRealtime();
-  showPage(currentPage);
-  await refreshPrices(false);
-  await ensureTodaySnapshot();
-  handleQuickAction();
-}
-
-async function fetchAllHouseholdRows(table, columns = '*') {
-  const rows = [];
-  const pageSize = 500;
-  let cursor = '';
-  while (true) {
-    let query = db.from(table).select(columns).eq('household_id', householdId)
-      .order('id', { ascending: true }).limit(pageSize);
-    if (cursor) query = query.gt('id', cursor);
-    const { data, error } = await query;
-    if (error) return { data: null, error };
-    const batch = data || [];
-    rows.push(...batch);
-    if (batch.length < pageSize) return { data: rows, error: null };
-    cursor = batch.at(-1)?.id || '';
-    if (!cursor) return { data: rows, error: null };
-  }
-}
-
-async function loadRemote() {
-  if (!db || !householdId) return;
-  const results = await Promise.all([
-    fetchAllHouseholdRows('transactions'),
-    db.from('budgets').select('*').eq('household_id', householdId),
-    db.from('goals').select('*').eq('household_id', householdId),
-    db.from('debts').select('*').eq('household_id', householdId),
-    db.from('assets').select('*').eq('household_id', householdId),
-    db.from('accounts').select('*').eq('household_id', householdId),
-    db.from('recurring_items').select('*').eq('household_id', householdId),
-    fetchAllHouseholdRows('goal_contributions'),
-    fetchAllHouseholdRows('net_worth_snapshots'),
-    fetchAllHouseholdRows('monthly_checkups'),
-    db.from('sinking_funds').select('*').eq('household_id', householdId).order('due_date'),
-    fetchAllHouseholdRows('weekly_money_dates'),
-    db.from('household_settings').select('*').eq('household_id', householdId).maybeSingle(),
-    db.from('household_members').select('display_name').eq('household_id', householdId)
-  ]);
-  if (results.some(result => result.error)) {
-    updateSyncStatus('Could not refresh ¬∑ saved data kept');
-    return;
-  }
-  if (pending().length) { updateSyncStatus(); return; }
-  const [transactions, budgets, goals, debts, assets, accounts, recurring, contributions, snapshots, checkups, sinkingFunds, weeklyReviews, settings, members] = results.map(r => r.data);
-  state.people = members.map(member => member.display_name).filter(Boolean);
-  state.transactions = transactions.map(row => ({
-    id: row.id, type: row.type, amount: +row.amount, currency: cleanCurrency(row.currency), category: row.category,
-    paidBy: row.paid_by, accountId: row.account_id || '', account: row.account || '', toAccountId: row.to_account_id || '',
-    toAmount: row.to_amount == null ? null : +row.to_amount, debtId: row.debt_id || '',
-    debtPrincipal: row.debt_principal == null ? null : +row.debt_principal,
-    debtInterest: row.debt_interest == null ? 0 : +row.debt_interest,
-    recurringItemId: row.recurring_item_id || '', recurringMonth: row.recurring_month || '',
-    date: row.date, note: row.note || '', createdAt: row.created_at || '', updatedAt: row.updated_at || ''
-  }));
-  state.budgets = Object.fromEntries(budgets.map(row => [row.category, { amount: +row.amount, currency: cleanCurrency(row.currency) }]));
-  state.goals = goals.map(row => ({ id: row.id, name: row.name, target: +row.target, saved: +row.saved, currency: cleanCurrency(row.currency), due: row.due_date || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.debts = debts.map(row => ({ id: row.id, name: row.name, original: +row.original_amount, remaining: +row.remaining_amount, currency: cleanCurrency(row.currency), due: row.due_date || '', apr: +(row.annual_interest_rate || 0), minimum: +(row.minimum_payment || 0), paymentDay: row.payment_day || null, active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.assets = assets.map(row => ({ id: row.id, name: row.name, type: row.asset_type, symbol: row.symbol || '', quantity: +row.quantity, currency: cleanCurrency(row.currency), manualValue: row.manual_value == null ? null : +row.manual_value, notes: row.notes || '', createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.accounts = accounts.map(row => ({ id: row.id, name: row.name, type: row.account_type, currency: cleanCurrency(row.currency), openingBalance: +row.opening_balance, openingDate: row.opening_date, notes: row.notes || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.recurring = recurring.map(row => ({ id: row.id, name: row.name, kind: row.kind, amount: +row.amount, currency: cleanCurrency(row.currency), category: row.category, paidBy: row.paid_by, accountId: row.account_id || '', day: row.day_of_month, note: row.note || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.contributions = contributions.map(row => ({ id: row.id, goalId: row.goal_id, accountId: row.account_id || '', amount: +row.amount, currency: cleanCurrency(row.currency), date: row.date, note: row.note || '', createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.snapshots = snapshots.map(row => ({ id: row.id, date: row.snapshot_date, cashUSD: +row.cash_usd, assetsUSD: +row.assets_usd, debtUSD: +row.debt_usd, netWorthUSD: +row.net_worth_usd })).sort((a, b) => a.date.localeCompare(b.date));
-  state.checkups = checkups.map(row => ({ id: row.id, month: row.month, accountCount: +row.account_count, adjustmentUSD: +row.adjustment_total_usd, note: row.note || '', focus: row.focus || '', closedAt: row.closed_at || '', balancesCheckedAt: row.balances_checked_at || '', completedBy: row.completed_by || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' })).sort((a, b) => a.month.localeCompare(b.month));
-  state.sinkingFunds = sinkingFunds.map(row => ({ id: row.id, name: row.name, target: +row.target_amount, saved: +row.saved_amount, currency: cleanCurrency(row.currency), due: row.due_date || '', lastReservedMonth: row.last_reserved_month || '', note: row.note || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
-  state.weeklyReviews = weeklyReviews.map(row => ({ id: row.id, weekStart: row.week_start, reviewedBy: row.reviewed_by || '', win: row.win || '', nextAction: row.next_action || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' })).sort((a, b) => a.weekStart.localeCompare(b.weekStart));
-  if (settings) {
-    state.settings.base = cleanCurrency(settings.base_currency) || state.settings.base;
-    state.settings.paydayDay = settings.payday_day || null;
-    state.settings.funMode = settings.fun_mode !== false;
-    state.settings.debtStrategy = ['avalanche', 'snowball'].includes(settings.debt_strategy) ? settings.debt_strategy : 'avalanche';
-    state.settings.emailStatements = settings.email_statements_enabled === true;
-    state.settings.statementRecipientUserId = settings.statement_recipient_user_id || '';
-    state.settings.lastBackupAt = settings.last_portable_backup_at || '';
-    state.settings.lastBackupHash = settings.last_portable_backup_sha256 || '';
-    state.settings.rates = {
-      USD: 1,
-      AED: +(settings.usd_to_aed || state.settings.rates.AED),
-      MVR: +(settings.usd_to_mvr || state.settings.rates.MVR),
-      INR: +(settings.usd_to_inr || state.settings.rates.INR)
-    };
-  }
-  cache();
-  render();
-  updateSyncStatus();
-}
-
-function scheduleRemoteReload() {
-  if (pending().length) return;
-  clearTimeout(realtimeTimer);
-  realtimeTimer = setTimeout(() => loadRemote(), 350);
-}
-
-function subscribeRealtime() {
-  if (realtimeChannel) db.removeChannel(realtimeChannel);
-  realtimeChannel = db.channel(`household-v9-${householdId}`);
-  for (const table of ['transactions', 'budgets', 'goals', 'debts', 'assets', 'accounts', 'recurring_items', 'goal_contributions', 'net_worth_snapshots', 'monthly_checkups', 'sinking_funds', 'weekly_money_dates', 'household_settings']) {
-    realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table, filter: `household_id=eq.${householdId}` }, scheduleRemoteReload);
-  }
-  realtimeChannel.subscribe(status => {
-    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') updateSyncStatus('Realtime reconnecting‚Ä¶');
-  });
-}
-
-function handleQuickAction() {
-  if (!pendingQuickAction) return;
-  const action = pendingQuickAction;
-  pendingQuickAction = '';
-  history.replaceState({}, '', `${location.pathname}${location.hash || ''}`);
-  if (action === 'expense') openQuickExpense();
-  else if (action === 'income') openQuickIncome({ category: 'Salary' });
-  else if (action === 'transfer') openTransfer();
-}
-
-function accountDeltaNative(account, transaction) {
-  if (transaction.type === 'transfer') {
-    if (transaction.accountId === account.id) return -Number(transaction.amount || 0);
-    if (transaction.toAccountId === account.id) return Number(transaction.toAmount || 0);
-    return 0;
-  }
-  if (transaction.accountId !== account.id) return 0;
-  return (transaction.type === 'income' ? 1 : -1) * Number(transaction.amount || 0);
-}
-
-function accountBalanceNative(account) {
-  return Number(account.openingBalance || 0) + state.transactions
-    .filter(transaction => transaction.date >= (account.openingDate || '0000-00-00'))
-    .reduce((sum, transaction) => sum + accountDeltaNative(account, transaction), 0);
-}
-function accountBalanceUSD(account) { return usd(accountBalanceNative(account), account.currency); }
-function accountTypeLabel(type) { return type === 'bank' ? 'Bank account' : type === 'cash' ? 'Cash' : 'Mobile wallet'; }
-
-function assetUSD(asset) {
-  if (asset.type === 'cash') return usd(asset.quantity, asset.currency);
-  if (asset.type === 'manual') return usd(asset.manualValue || 0, asset.currency);
-  const price = state.prices[asset.symbol]?.usd;
-  if (!price) return 0;
-  if (asset.type === 'metal') return (Number(asset.quantity) / 31.1034768) * price;
-  if (asset.type === 'crypto') return Number(asset.quantity) * price;
-  return 0;
-}
-
-function marketLabel(asset) {
-  if (asset.type === 'metal') return `${Number(asset.quantity).toLocaleString()} g ¬∑ ${asset.symbol}`;
-  if (asset.type === 'crypto') return `${Number(asset.quantity).toLocaleString(undefined, { maximumFractionDigits: 8 })} ${asset.symbol}`;
-  if (asset.type === 'cash') return money(asset.quantity, asset.currency);
-  return money(asset.manualValue || 0, asset.currency);
-}
-
-function monthTransactions() {
-  const currentMonth = monthKey();
-  return state.transactions.filter(transaction =>
-    transaction.date.startsWith(currentMonth) &&
-    transaction.type !== 'transfer' &&
-    transaction.category !== 'Balance adjustment'
-  );
-}
-
-function monthMoneySummary(month = monthKey()) {
-  const transactions = state.transactions.filter(transaction =>
-    transaction.date?.startsWith(month) &&
-    ['income', 'expense'].includes(transaction.type) &&
-    transaction.category !== 'Balance adjustment'
-  );
-  const incomeUSD = transactions.filter(transaction => transaction.type === 'income')
-    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const spentUSD = transactions.filter(transaction => transaction.type === 'expense')
-    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  return { month, transactions, incomeUSD, spentUSD, balanceUSD: incomeUSD - spentUSD };
-}
-
-function previousMonthSummary() {
-  return monthMoneySummary(monthKey(addMonths(monthStart(), -1)));
-}
-
-function previousMonthAllocation() {
-  const summary = previousMonthSummary();
-  const surplusUSD = Math.max(0, summary.balanceUSD);
-  const hasDebt = activeDebts().some(debt => debt.remaining > .005);
-  return {
-    ...summary,
-    label: formatDate(`${summary.month}-01`, { month: 'long', year: 'numeric' }),
-    hasDebt,
-    debtUSD: hasDebt ? surplusUSD * .6 : 0,
-    futureUSD: hasDebt ? surplusUSD * .4 : surplusUSD
-  };
-}
-
-function moneyMetrics() {
-  const monthTx = monthTransactions();
-  const incomeUSD = monthTx.filter(t => t.type === 'income').reduce((sum, t) => sum + usd(t.amount, t.currency), 0);
-  const spentUSD = monthTx.filter(t => t.type === 'expense').reduce((sum, t) => sum + usd(t.amount, t.currency), 0);
-  const accountTotalUSD = activeAccounts().reduce((sum, account) => sum + accountBalanceUSD(account), 0);
-  const unassignedCashUSD = state.transactions
-    .filter(t => !t.accountId && t.type !== 'transfer')
-    .reduce((sum, t) => sum + (t.type === 'income' ? 1 : -1) * usd(t.amount, t.currency), 0);
-  const cashUSD = accountTotalUSD + unassignedCashUSD;
-  const assetsUSD = state.assets.reduce((sum, asset) => sum + assetUSD(asset), 0);
-  const debtUSD = state.debts.reduce((sum, debt) => sum + usd(debt.remaining, debt.currency), 0);
-  const goalSavedUSD = activeGoals().reduce((sum, goal) => sum + usd(goal.saved, goal.currency), 0);
-  const goalTargetUSD = activeGoals().reduce((sum, goal) => sum + usd(goal.target, goal.currency), 0);
-  const sinkingSavedUSD = state.sinkingFunds.filter(fund => fund.active !== false).reduce((sum, fund) => sum + usd(fund.saved, fund.currency), 0);
-  const sinkingTargetUSD = state.sinkingFunds.filter(fund => fund.active !== false).reduce((sum, fund) => sum + usd(fund.target, fund.currency), 0);
-  const budgetUSD = Object.values(state.budgets).reduce((sum, budget) => sum + usd(budget.amount, budget.currency), 0);
-  return {
-    monthTx, incomeUSD, spentUSD, accountTotalUSD, unassignedCashUSD, cashUSD, assetsUSD, debtUSD,
-    goalSavedUSD, goalTargetUSD, sinkingSavedUSD, sinkingTargetUSD, budgetUSD, surplusUSD: incomeUSD - spentUSD,
-    spendableUSD: cashUSD - goalSavedUSD - sinkingSavedUSD, netWorthUSD: cashUSD + assetsUSD - debtUSD
-  };
-}
-
-function allocationBuckets(metrics = moneyMetrics()) {
-  const expenseFor = categories => metrics.monthTx
-    .filter(t => t.type === 'expense' && categories.includes(t.category))
-    .reduce((sum, t) => sum + usd(t.amount, t.currency), 0);
-  const futureContributionsUSD = state.contributions
-    .filter(c => c.date.startsWith(monthKey()))
-    .reduce((sum, c) => sum + usd(c.amount, c.currency), 0);
-  const sinkingContributionsUSD = state.sinkingFunds
-    .filter(fund => fund.lastReservedMonth === monthStart())
-    .reduce((sum, fund) => sum + Math.min(sinkingMonthlyNeedUSD(fund), usd(fund.saved, fund.currency)), 0);
-  return [
-    { key: 'essential', label: 'Essentials', pct: 40, target: metrics.incomeUSD * .4, actual: expenseFor(ESSENTIAL_CATEGORIES) },
-    { key: 'debt', label: 'Debt freedom', pct: 30, target: metrics.incomeUSD * .3, actual: expenseFor(['Debt']) },
-    { key: 'future', label: 'Future', pct: 20, target: metrics.incomeUSD * .2, actual: expenseFor(['Savings']) + futureContributionsUSD + sinkingContributionsUSD },
-    { key: 'wants', label: 'Fun & wants', pct: 10, target: metrics.incomeUSD * .1, actual: expenseFor(WANT_CATEGORIES) }
-  ];
-}
-
-function nextPaydayInfo() {
-  const day = Number(state.settings.paydayDay);
-  if (!(day >= 1 && day <= 31)) return null;
-  const now = new Date(`${today()}T12:00:00`);
-  const makePayday = (year, month) => {
-    const last = new Date(year, month + 1, 0).getDate();
-    return new Date(year, month, Math.min(day, last), 12);
-  };
-  let date = makePayday(now.getFullYear(), now.getMonth());
-  if (date < now) date = makePayday(now.getFullYear(), now.getMonth() + 1);
-  const days = Math.max(1, Math.round((date - now) / 86400000) + 1);
-  return { date: localDate(date), days };
-}
-
-function dateObject(value) { return new Date(`${value}T12:00:00`); }
-function addDays(value, days) {
-  const date = dateObject(value);
-  date.setDate(date.getDate() + days);
-  return localDate(date);
-}
-function weekStart(value = today()) {
-  const date = dateObject(value);
-  const day = date.getDay();
-  date.setDate(date.getDate() - (day === 0 ? 6 : day - 1));
-  return localDate(date);
-}
-function addMonths(value, months) {
-  const date = dateObject(value.length === 7 ? `${value}-01` : value);
-  date.setMonth(date.getMonth() + months);
-  return localDate(date);
-}
-function monthsUntil(value) {
-  if (!value || value <= today()) return 1;
-  const now = dateObject(monthStart());
-  const due = dateObject(`${monthKey(value)}-01`);
-  return Math.max(1, (due.getFullYear() - now.getFullYear()) * 12 + due.getMonth() - now.getMonth() + 1);
-}
-function sinkingMonthlyNeedUSD(fund) {
-  return usd(Math.max(0, fund.target - fund.saved), fund.currency) / monthsUntil(fund.due);
-}
-function dateDistance(start, end) { return Math.max(0, Math.round((dateObject(end) - dateObject(start)) / 86400000)); }
-function monthDatesBetween(start, end) {
-  const values = [];
-  const cursor = dateObject(`${monthKey(start)}-01`);
-  const last = dateObject(`${monthKey(end)}-01`);
-  while (cursor <= last) {
-    values.push(localDate(cursor));
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-  return values;
-}
-function monthlyDate(month, day) {
-  const base = dateObject(month);
-  const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
-  return `${monthKey(month)}-${String(Math.min(Number(day) || 1, lastDay)).padStart(2, '0')}`;
-}
-function recurringConfirmed(itemId, occurrenceDate) {
-  return state.transactions.some(transaction =>
-    transaction.recurringItemId === itemId && transaction.recurringMonth === monthStart(occurrenceDate)
-  );
-}
-function recurringOccurrences(start, end, predicate = () => true) {
-  const occurrences = [];
-  for (const month of monthDatesBetween(start, end)) {
-    state.recurring.filter(item => item.active !== false && predicate(item)).forEach(item => {
-      const date = monthlyDate(month, item.day);
-      if (date >= start && date <= end && !recurringConfirmed(item.id, date)) occurrences.push({ item, date });
-    });
-  }
-  return occurrences;
-}
-function debtPaidInMonthUSD(debt, month) {
-  return state.transactions.filter(transaction => transaction.debtId === debt.id && transaction.date.startsWith(monthKey(month)))
-    .reduce((sum, transaction) => sum + usd(Number(transaction.debtPrincipal || 0) + Number(transaction.debtInterest || 0), debt.currency), 0);
-}
-function upcomingObligations(start, end) {
-  const expenseOccurrences = recurringOccurrences(start, end, item => item.kind === 'expense');
-  const billsUSD = expenseOccurrences.filter(({ item }) => item.category !== 'Debt')
-    .reduce((sum, { item }) => sum + usd(item.amount, item.currency), 0);
-  let debtUSD = 0;
-  for (const month of monthDatesBetween(start, end)) {
-    const monthEnd = monthlyDate(month, 31);
-    const rangeStart = monthKey(month) === monthKey(start) ? start : month;
-    const rangeEnd = monthKey(month) === monthKey(end) ? end : monthEnd;
-    const recurringDebtUSD = expenseOccurrences
-      .filter(({ item, date }) => item.category === 'Debt' && date >= rangeStart && date <= rangeEnd)
-      .reduce((sum, { item }) => sum + usd(item.amount, item.currency), 0);
-    const minimumDebtUSD = activeDebts().reduce((sum, debt) => {
-      if (!(debt.minimum > 0)) return sum;
-      const dueDate = debt.paymentDay ? monthlyDate(month, debt.paymentDay) : rangeEnd;
-      if (dueDate < rangeStart || dueDate > rangeEnd) return sum;
-      return sum + Math.max(0, usd(debt.minimum, debt.currency) - debtPaidInMonthUSD(debt, month));
-    }, 0);
-    debtUSD += Math.max(recurringDebtUSD, minimumDebtUSD);
-  }
-  return { billsUSD, debtUSD, totalUSD: billsUSD + debtUSD, occurrences: expenseOccurrences };
-}
-
-function safeSpendPlan(metrics = moneyMetrics(), buckets = allocationBuckets(metrics)) {
-  const payday = nextPaydayInfo();
-  if (!(metrics.incomeUSD > 0) || !payday) return { ready: false, dailyUSD: 0, weeklyUSD: 0, payday, protectedUSD: 0, bufferUSD: 0 };
-  const wants = buckets.find(bucket => bucket.key === 'wants');
-  const obligations = upcomingObligations(today(), payday.date);
-  const sinkingUSD = activeSinkingFunds()
-    .filter(fund => fund.lastReservedMonth !== monthStart())
-    .reduce((sum, fund) => sum + sinkingMonthlyNeedUSD(fund), 0);
-  const essentialsBudgetUSD = Object.entries(state.budgets)
-    .filter(([category]) => ESSENTIAL_CATEGORIES.includes(category))
-    .reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
-  const daysThisMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-  const bufferUSD = essentialsBudgetUSD > 0 ? essentialsBudgetUSD / daysThisMonth * 3 : 0;
-  const wantsRemainingUSD = Math.max(0, wants.target - wants.actual);
-  const cashAfterProtectionUSD = Math.max(0, metrics.spendableUSD - obligations.totalUSD - sinkingUSD - bufferUSD);
-  const remainingUSD = Math.min(wantsRemainingUSD, cashAfterProtectionUSD);
-  const dailyUSD = remainingUSD / payday.days;
-  return {
-    ready: true, dailyUSD, weeklyUSD: dailyUSD * Math.min(7, payday.days), payday, remainingUSD,
-    wantsRemainingUSD, protectedUSD: obligations.totalUSD + sinkingUSD, billsUSD: obligations.billsUSD,
-    debtUSD: obligations.debtUSD, sinkingUSD, bufferUSD, spendableCashUSD: metrics.spendableUSD,
-    shortfallUSD: Math.max(0, obligations.totalUSD + sinkingUSD + bufferUSD - metrics.spendableUSD)
-  };
-}
-
-function openSafeBreakdown() {
-  const metrics = moneyMetrics();
-  const safe = safeSpendPlan(metrics, allocationBuckets(metrics));
-  if (!safe.ready) {
-    openModal('Safe-to-spend guide', `<div class="form"><div class="friendlyNote">Add this month‚Äôs salary and set the salary day first. The app then protects real cash, goals, upcoming bills, debt minimums and a three-day essentials buffer.</div><button class="primary" onclick="closeModal();openQuickIncome({category:'Salary'})">Add salary</button></div>`);
-    return;
-  }
-  openModal('Safe-to-spend guide', `<div class="form">
-    <div class="friendlyNote">This is the lower of your remaining 10% wants allowance and the cash that is genuinely free after protection.</div>
-    <div class="statement">
-      <div class="statementRow"><time>1</time><div><b>Spendable cash</b><div class="meta">Accounts minus money reserved for goals and sinking funds</div></div><div class="statementValue"><strong>${baseMoney(safe.spendableCashUSD)}</strong></div></div>
-      <div class="statementRow"><time>2</time><div><b>Upcoming bills</b><div class="meta">Unconfirmed regular expenses before payday</div></div><div class="statementValue"><strong>‚àí ${baseMoney(safe.billsUSD)}</strong></div></div>
-      <div class="statementRow"><time>3</time><div><b>Debt minimums</b><div class="meta">Still due before payday</div></div><div class="statementValue"><strong>‚àí ${baseMoney(safe.debtUSD)}</strong></div></div>
-      <div class="statementRow"><time>4</time><div><b>Sinking funds</b><div class="meta">This month's set-asides not yet recorded</div></div><div class="statementValue"><strong>‚àí ${baseMoney(safe.sinkingUSD)}</strong></div></div>
-      <div class="statementRow"><time>5</time><div><b>Three-day buffer</b><div class="meta">Based on essential category limits</div></div><div class="statementValue"><strong>‚àí ${baseMoney(safe.bufferUSD)}</strong></div></div>
-      <div class="statementRow"><time>‚úì</time><div><b>Safe wants left</b><div class="meta">Never above the remaining 10% allowance</div></div><div class="statementValue"><strong>${baseMoney(safe.remainingUSD)}</strong></div></div>
-    </div>
-    ${safe.shortfallUSD > 0 ? `<div class="warningNote">Protected commitments exceed spendable cash by <b>${baseMoney(safe.shortfallUSD)}</b>. Pause non-essential spending and update any bill that has already been paid.</div>` : ''}
-    <button class="primary" onclick="closeModal()">Got it</button>
-  </div>`);
-}
-
-function setPriceRefreshUi(message, busy = false) {
-  ['priceStatus', 'moneyRateStatus'].forEach(id => {
-    const element = $(id);
-    if (element) element.textContent = message;
-  });
-  const button = $('moneyRefreshRates');
-  if (button) {
-    button.disabled = busy;
-    button.classList.toggle('isRefreshing', busy);
-  }
-  const label = $('moneyRefreshLabel');
-  if (label) label.textContent = busy ? 'Refreshing‚Ä¶' : 'Refresh rates';
-}
-
-async function refreshPrices(force = false) {
-  if (priceRefresh) return priceRefresh;
-  priceRefresh = (async () => {
-    const defaults = ['XAU', 'XAG', 'BTC', 'ETH'];
-    const owned = state.assets.filter(a => ['metal', 'crypto'].includes(a.type)).map(a => a.symbol).filter(Boolean);
-    const symbols = [...new Set([...defaults, ...owned])];
-    setPriceRefreshUi('Refreshing free market rates‚Ä¶', true);
-    await Promise.allSettled(symbols.map(async symbol => {
-      const cached = state.prices[symbol];
-      if (!force && cached && Date.now() - new Date(cached.updated).getTime() < 15 * 60 * 1000) return;
-      try {
-        const response = await fetch(`https://api.gold-api.com/price/${encodeURIComponent(symbol)}`, { cache: 'no-store' });
-        if (!response.ok) return;
-        const payload = await response.json();
-        const price = Number(payload.price);
-        if (Number.isFinite(price) && price > 0) {
-          state.prices[symbol] = { usd: price, updated: payload.updatedAt || new Date().toISOString(), source: 'Gold API' };
-        }
-      } catch (_error) { /* Cached values remain available offline. */ }
-    }));
-    cache();
-    render();
-    const newest = Object.values(state.prices).map(p => new Date(p.updated).getTime()).filter(Number.isFinite).sort((a, b) => b - a)[0];
-    const stale = newest && Date.now() - newest > 60 * 60 * 1000;
-    setPriceRefreshUi(newest
-      ? `${stale ? 'Last saved rates' : 'Live rates updated'} ¬∑ ${new Date(newest).toLocaleString()}`
-      : 'Live rates unavailable ¬∑ using saved values');
-  })();
-  try { return await priceRefresh; }
-  finally {
-    priceRefresh = null;
-    const button = $('moneyRefreshRates');
-    if (button) {
-      button.disabled = false;
-      button.classList.remove('isRefreshing');
-    }
-    const label = $('moneyRefreshLabel');
-    if (label) label.textContent = 'Refresh rates';
-  }
-}
-
-async function ensureTodaySnapshot() {
-  if (!db || !householdId || pending().length) return;
-  const missingMarketPrice = state.assets.some(a => ['metal', 'crypto'].includes(a.type) && !state.prices[a.symbol]?.usd);
-  if (missingMarketPrice) return;
-  const metrics = moneyMetrics();
-  const existing = state.snapshots.find(snapshot => snapshot.date === today());
-  if (existing && Math.abs(existing.netWorthUSD - metrics.netWorthUSD) < .005 &&
-      Math.abs(existing.cashUSD - metrics.cashUSD) < .005 && Math.abs(existing.debtUSD - metrics.debtUSD) < .005) return;
-  const row = {
-    household_id: householdId, snapshot_date: today(), cash_usd: metrics.cashUSD,
-    assets_usd: metrics.assetsUSD, debt_usd: metrics.debtUSD, net_worth_usd: metrics.netWorthUSD
-  };
-  const { error } = await runOperation({ action: 'snapshot', row });
-  if (!error) {
-    const local = { id: existing?.id || crypto.randomUUID(), date: today(), cashUSD: metrics.cashUSD, assetsUSD: metrics.assetsUSD, debtUSD: metrics.debtUSD, netWorthUSD: metrics.netWorthUSD };
-    const index = state.snapshots.findIndex(snapshot => snapshot.date === today());
-    if (index >= 0) state.snapshots[index] = local;
-    else state.snapshots.push(local);
-    cache();
-    render();
-  }
-}
-
-function txIcon(transaction) {
-  if (transaction.type === 'transfer') return '‚áÑ';
-  if (transaction.debtId) return 'üßæ';
-  return EXPENSE_CATEGORIES.find(([category]) => category === transaction.category)?.[1] || (transaction.type === 'income' ? '‚Üë' : '‚Ä¢');
-}
-
-function transactionHtml(transaction, actions = false) {
-  const source = accountName(transaction.accountId) || transaction.account;
-  const destination = accountName(transaction.toAccountId);
-  const accountLine = transaction.type === 'transfer'
-    ? `${source || 'Account'} ‚Üí ${destination || 'Account'}`
-    : source ? source : 'Not linked to an account';
-  const amount = transaction.type === 'transfer'
-    ? `${money(transaction.amount, transaction.currency)} ‚Üí ${money(transaction.toAmount, state.accounts.find(a => a.id === transaction.toAccountId)?.currency || transaction.currency)}`
-    : `${transaction.type === 'income' ? '+' : '‚àí'} ${money(transaction.amount, transaction.currency)}`;
-  return `<div class="tx ${transaction.type}">
-    <div class="txLeft"><div class="txIcon">${txIcon(transaction)}</div><div class="txMain">
-      <div class="txName">${esc(transaction.category)}</div>
-      <div class="meta">${esc(transaction.date)} ¬∑ ${esc(accountLine)}${transaction.note ? ` ¬∑ ${esc(transaction.note)}` : ''}</div>
-      ${actions ? `<div class="cardActions"><button class="linkBtn" onclick="editTransaction('${transaction.id}')">Edit</button><button class="dangerLink" onclick="deleteTransaction('${transaction.id}')">Delete</button></div>` : ''}
-    </div></div><div class="txAmount ${transaction.type}">${amount}</div>
-  </div>`;
-}
-
-function todayMoneyHighlightHtml(metrics = moneyMetrics()) {
-  const dayTransactions = state.transactions.filter(transaction =>
-    transaction.date === today() &&
-    transaction.type !== 'transfer' &&
-    transaction.category !== 'Balance adjustment'
-  );
-  const incomeUSD = dayTransactions.filter(transaction => transaction.type === 'income')
-    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const spentUSD = dayTransactions.filter(transaction => transaction.type === 'expense')
-    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const netUSD = incomeUSD - spentUSD;
-  const previous = previousMonthAllocation();
-  const previousHasRecords = previous.transactions.length > 0;
-  const previousPositive = previous.balanceUSD > .005;
-  const previousNegative = previous.balanceUSD < -.005;
-  const previousAmount = !previousHasRecords ? 'Not recorded yet'
-    : previousNegative ? `‚àí ${baseMoney(Math.abs(previous.balanceUSD))}`
-      : `${previousPositive ? '+ ' : ''}${baseMoney(Math.abs(previous.balanceUSD))}`;
-  const previousJob = !previousHasRecords ? `Tap to check ${previous.label}`
-    : previousPositive ? previous.hasDebt ? '60% debt ¬∑ 40% future' : '100% savings & investments'
-      : previousNegative ? 'Protect Future ¬∑ trim Wants first' : 'Aim to grow this next month';
-  const budgetEntries = Object.entries(state.budgets);
-  const budgets = budgetEntries.length ? budgetEntries.map(([category, budget]) => {
-    const limitUSD = usd(budget.amount, budget.currency);
-    const monthSpentUSD = metrics.monthTx
-      .filter(transaction => transaction.type === 'expense' && transaction.category === category)
-      .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-    const todaySpentUSD = dayTransactions
-      .filter(transaction => transaction.type === 'expense' && transaction.category === category)
-      .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-    const remainingUSD = limitUSD - monthSpentUSD;
-    const used = limitUSD > .005 ? Math.min(100, Math.max(0, monthSpentUSD / limitUSD * 100)) : 0;
-    return { category, limitUSD, monthSpentUSD, todaySpentUSD, remainingUSD, used };
-  }) : [];
-  return `<section class="todayMoneyCard">
-    <div class="todayMoneyTop"><div><span>TODAY'S MONEY</span><h2>Income and spending</h2><p>Updates automatically when either of you records money.</p></div><button type="button" onclick="openStatementFor('today')">Statement</button></div>
-    <div class="todayMoneyStats">
-      <div class="income"><span>Came in</span><b>${baseMoney(incomeUSD)}</b></div>
-      <div class="expense"><span>Went out</span><b>${baseMoney(spentUSD)}</b></div>
-      <div class="${netUSD < 0 ? 'expense' : 'net'}"><span>Today's difference</span><b>${netUSD < 0 ? '‚àí ' : '+ '}${baseMoney(Math.abs(netUSD))}</b></div>
-    </div>
-    <div class="todayBudgetTitle"><div><b>Category budget remaining</b><span>This month ¬∑ after all recorded spending</span></div><small>${dayTransactions.length} record${dayTransactions.length === 1 ? '' : 's'} today</small></div>
-    <div class="todayBudgetGrid">
-      <button type="button" class="todayBudgetItem previousBalance${previousNegative ? ' short' : ''}" onclick="openStatementFor('previous')">
-        <div><b>Balance from previous month</b><span>${esc(previous.label)}</span></div>
-        <strong>${previousAmount}</strong>
-        <small>${previousHasRecords ? `${baseMoney(previous.incomeUSD)} in ¬∑ ${baseMoney(previous.spentUSD)} out ¬∑ already counted in Money` : 'Add or review last month‚Äôs income and spending'}</small>
-        <div class="previousBalanceJob"><b>${esc(previousJob)}</b><span aria-hidden="true">‚Ä∫</span></div>
-      </button>
-      ${budgets.map(item => {
-      const over = item.remainingUSD < -.005;
-      const limitMissing = item.limitUSD <= .005;
-      return `<div class="todayBudgetItem${over ? ' over' : ''}">
-        <div><b>${esc(item.category)}</b><span>${item.todaySpentUSD > .005 ? `${baseMoney(item.todaySpentUSD)} today` : 'No spend today'}</span></div>
-        <strong>${limitMissing ? 'No budget' : over ? `${baseMoney(Math.abs(item.remainingUSD))} over` : `${baseMoney(item.remainingUSD)} left`}</strong>
-        <div class="todayBudgetBar"><i style="width:${item.used}%"></i></div>
-        <small>${limitMissing ? 'Set a limit in Plan' : `${baseMoney(item.monthSpentUSD)} of ${baseMoney(item.limitUSD)} used`}</small>
-      </div>`;
-    }).join('')}
-    </div>
-    ${budgets.length ? '' : '<div class="todayBudgetEmpty">Set category limits in Plan to see what remains here.</div>'}
-  </section>`;
-}
-
-const MONEY_BREAKDOWN_COLORS = ['#8566a8', '#248267', '#3478b8', '#f1b94b', '#d9584b', '#6e6e73', '#62a5a0', '#b78354'];
-
-function signedBaseMoney(value, showPlus = true) {
-  const amount = Number(value || 0);
-  if (Math.abs(amount) <= .005) return baseMoney(0);
-  return `${amount < 0 ? '‚àí ' : showPlus ? '+ ' : ''}${baseMoney(Math.abs(amount))}`;
-}
-
-function moneyBreakdownChartHtml(items, totalUSD, centerLabel = 'Total') {
-  const ordered = [...items].sort((a, b) => Math.abs(b.valueUSD) - Math.abs(a.valueUSD));
-  const colored = ordered.map((item, index) => ({ ...item, color: MONEY_BREAKDOWN_COLORS[index % MONEY_BREAKDOWN_COLORS.length] }));
-  const positive = colored.filter(item => item.valueUSD > .005);
-  const positiveTotal = positive.reduce((sum, item) => sum + item.valueUSD, 0);
-  let cursor = 0;
-  const stops = positive.map(item => {
-    const start = cursor;
-    cursor += item.valueUSD / positiveTotal * 100;
-    return `${item.color} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
-  });
-  const gradient = stops.length ? `conic-gradient(${stops.join(',')})` : 'conic-gradient(#e4e4e9 0 100%)';
-  const visible = colored.slice(0, 8);
-  return `<div class="moneyBreakdownVisual">
-    <div class="moneyBreakdownDonut" style="--money-breakdown-gradient:${gradient}" role="img" aria-label="${esc(centerLabel)} ${esc(baseMoney(totalUSD))}"><div><span>${esc(centerLabel)}</span><b>${baseMoney(totalUSD)}</b></div></div>
-    <div class="moneyBreakdownList">${visible.length ? visible.map(item => `<div><i style="background:${item.color}"></i><span><b>${esc(item.name)}</b><small>${esc(item.detail || '')}</small></span><strong class="${item.valueUSD < -.005 ? 'negative' : ''}">${item.valueUSD < -.005 ? '‚àí ' : ''}${baseMoney(Math.abs(item.valueUSD))}</strong></div>`).join('') : '<div class="moneyBreakdownEmpty">Nothing has been added here yet.</div>'}${colored.length > visible.length ? `<small class="moneyBreakdownMore">Plus ${colored.length - visible.length} more item${colored.length - visible.length === 1 ? '' : 's'}.</small>` : ''}</div>
-  </div>`;
-}
-
-function openMoneyBreakdown(kind) {
-  const metrics = moneyMetrics();
-  let title = 'Money breakdown';
-  let description = '';
-  let body = '';
-  if (kind === 'accounts') {
-    title = 'What Accounts includes';
-    description = 'Every active bank account, cash account and mobile wallet, plus any older entries not linked to an account. Transfers only move money between accounts and never increase this total.';
-    const items = activeAccounts().map(account => ({
-      name: account.name,
-      detail: `${accountTypeLabel(account.type)} ¬∑ ${money(accountBalanceNative(account), account.currency)}`,
-      valueUSD: accountBalanceUSD(account)
-    }));
-    if (Math.abs(metrics.unassignedCashUSD) > .005) items.push({ name: 'Older unlinked entries', detail: 'Income and spending not assigned to an account', valueUSD: metrics.unassignedCashUSD });
-    body = moneyBreakdownChartHtml(items, metrics.cashUSD, 'Accounts');
-  } else if (kind === 'assets') {
-    title = 'What Other assets includes';
-    description = 'Gold, crypto and other investments outside your accounts. Live-priced assets use the latest saved market rate; manual assets use the value you entered.';
-    const items = state.assets.map(asset => {
-      const waiting = ['metal', 'crypto'].includes(asset.type) && !state.prices[asset.symbol];
-      const type = asset.type === 'metal' ? 'Metal' : asset.type === 'crypto' ? 'Crypto' : asset.type === 'cash' ? 'Legacy cash asset' : 'Manual asset';
-      return { name: asset.name, detail: waiting ? `${type} ¬∑ waiting for a live price` : `${type} ¬∑ ${marketLabel(asset)}`, valueUSD: assetUSD(asset) };
-    });
-    body = moneyBreakdownChartHtml(items, metrics.assetsUSD, 'Assets');
-  } else if (kind === 'debt') {
-    title = 'What Debt includes';
-    description = 'The outstanding amount on every active debt. This total is subtracted once from accounts and assets to calculate household net worth.';
-    const items = activeDebts().filter(debt => debt.remaining > .005).map(debt => ({
-      name: debt.name,
-      detail: `${debt.apr ? `${debt.apr}% APR ¬∑ ` : ''}${debt.minimum ? `${money(debt.minimum, debt.currency)} minimum` : 'No minimum recorded'}`,
-      valueUSD: usd(debt.remaining, debt.currency)
-    }));
-    body = moneyBreakdownChartHtml(items, metrics.debtUSD, 'Owed');
-  } else {
-    title = 'How Spendable is calculated';
-    description = 'This is money in accounts after amounts reserved for goals and sinking funds. Other assets are excluded because they may not be ready to spend.';
-    body = `<div class="moneyEquation">
-      <div><i>+</i><span><b>Money in accounts</b><small>Bank, cash, wallets and unlinked entries</small></span><strong>${baseMoney(metrics.cashUSD)}</strong></div>
-      <div><i>‚àí</i><span><b>Reserved for goals</b><small>Already held inside your accounts</small></span><strong>${baseMoney(metrics.goalSavedUSD)}</strong></div>
-      <div><i>‚àí</i><span><b>Reserved sinking funds</b><small>Planned costs protected from spending</small></span><strong>${baseMoney(metrics.sinkingSavedUSD)}</strong></div>
-      <div class="total"><i>=</i><span><b>Spendable after goals</b><small>${metrics.spendableUSD < -.005 ? 'Reservations are above recorded cash' : 'Available before upcoming bills'}</small></span><strong>${signedBaseMoney(metrics.spendableUSD, false)}</strong></div>
-    </div>`;
-  }
-  openModal(title, `<div class="moneyBreakdown"><p class="moneyBreakdownIntro">${esc(description)}</p>${body}<button type="button" class="primary wide" onclick="closeModal()">Done</button></div>`);
-}
-
-function openWealthPoint(index) {
-  const points = [...state.snapshots].sort((a, b) => a.date.localeCompare(b.date));
-  const position = Math.max(0, Math.min(points.length - 1, Number(index) || 0));
-  const point = points[position];
-  if (!point) return;
-  const previous = points[position - 1] || null;
-  const insideWindow = date => date <= point.date && (previous ? date > previous.date : date === point.date);
-  const windowTransactions = state.transactions.filter(transaction => insideWindow(transaction.date));
-  const moneyTransactions = windowTransactions.filter(transaction => ['income', 'expense'].includes(transaction.type) && transaction.category !== 'Balance adjustment');
-  const incomeUSD = moneyTransactions.filter(transaction => transaction.type === 'income').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const spentUSD = moneyTransactions.filter(transaction => transaction.type === 'expense').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const debtPaidUSD = moneyTransactions.filter(transaction => transaction.debtPrincipal).reduce((sum, transaction) => sum + usd(transaction.debtPrincipal, state.debts.find(debt => debt.id === transaction.debtId)?.currency || transaction.currency), 0);
-  const correctionTransactions = windowTransactions.filter(transaction => transaction.category === 'Balance adjustment');
-  const correctionUSD = correctionTransactions.reduce((sum, transaction) => sum + (transaction.type === 'income' ? 1 : -1) * usd(transaction.amount, transaction.currency), 0);
-  const goalUSD = state.contributions.filter(contribution => insideWindow(contribution.date)).reduce((sum, contribution) => sum + usd(contribution.amount, contribution.currency), 0);
-  const netChangeUSD = previous ? point.netWorthUSD - previous.netWorthUSD : 0;
-  const cashChangeUSD = previous ? point.cashUSD - previous.cashUSD : 0;
-  const assetChangeUSD = previous ? point.assetsUSD - previous.assetsUSD : 0;
-  const debtChangeUSD = previous ? point.debtUSD - previous.debtUSD : 0;
-  const movement = !previous ? 'This is your first saved baseline.'
-    : netChangeUSD > .005 ? `Net worth grew by ${baseMoney(netChangeUSD)} since the previous point.`
-      : netChangeUSD < -.005 ? `Net worth fell by ${baseMoney(Math.abs(netChangeUSD))} since the previous point.`
-        : 'Net worth was unchanged from the previous point.';
-  const activity = [];
-  if (incomeUSD > .005) activity.push(['Income recorded', `${moneyTransactions.filter(transaction => transaction.type === 'income').length} entr${moneyTransactions.filter(transaction => transaction.type === 'income').length === 1 ? 'y' : 'ies'}`, `+ ${baseMoney(incomeUSD)}`, 'income']);
-  if (spentUSD > .005) activity.push(['Spending recorded', `${moneyTransactions.filter(transaction => transaction.type === 'expense').length} entr${moneyTransactions.filter(transaction => transaction.type === 'expense').length === 1 ? 'y' : 'ies'}`, `‚àí ${baseMoney(spentUSD)}`, 'expense']);
-  if (debtPaidUSD > .005) activity.push(['Debt principal paid', 'Included in spending above', `‚àí ${baseMoney(debtPaidUSD)} owed`, 'good']);
-  if (goalUSD > .005) activity.push(['Reserved for goals', 'Money already held in accounts', `+ ${baseMoney(goalUSD)}`, 'goal']);
-  if (correctionTransactions.length) activity.push(['Account balance corrected', `${correctionTransactions.length} manual reconciliation${correctionTransactions.length === 1 ? '' : 's'}`, signedBaseMoney(correctionUSD), correctionUSD >= 0 ? 'income' : 'expense']);
-  const moneyRecordCount = moneyTransactions.length + correctionTransactions.length;
-  const interval = previous ? `${formatDate(previous.date, { day: 'numeric', month: 'short' })} ‚Üí ${formatDate(point.date, { day: 'numeric', month: 'short' })}` : formatDate(point.date, { day: 'numeric', month: 'long', year: 'numeric' });
-  openModal(`Wealth point ¬∑ ${formatDate(point.date, { day: 'numeric', month: 'short' })}`, `<div class="wealthPointSummary">
-    <div class="wealthPointHero${previous && netChangeUSD < -.005 ? ' down' : ''}"><span>${esc(interval)}</span><small>Household net worth</small><b>${baseMoney(point.netWorthUSD)}</b><p>${esc(movement)}</p></div>
-    <div class="wealthPointStats">
-      <div><span>Accounts</span><b>${baseMoney(point.cashUSD)}</b><small>${previous ? `${signedBaseMoney(cashChangeUSD)} change` : 'Starting balance'}</small></div>
-      <div><span>Other assets</span><b>${baseMoney(point.assetsUSD)}</b><small>${previous ? `${signedBaseMoney(assetChangeUSD)} change` : 'Starting value'}</small></div>
-      <div><span>Debt owed</span><b>${baseMoney(point.debtUSD)}</b><small class="${debtChangeUSD < -.005 ? 'good' : debtChangeUSD > .005 ? 'bad' : ''}">${previous ? `${signedBaseMoney(debtChangeUSD)} change` : 'Starting balance'}</small></div>
-    </div>
-    <div class="wealthPointActivity"><div class="wealthPointActivityHead"><b>What happened</b><span>${moneyRecordCount} money record${moneyRecordCount === 1 ? '' : 's'}</span></div>${activity.length ? activity.map(([label, detail, amount, kind]) => `<div class="wealthPointActivityRow ${kind}"><span><b>${esc(label)}</b><small>${esc(detail)}</small></span><strong>${amount}</strong></div>`).join('') : `<div class="wealthPointEmpty">${previous ? 'No income, spending, goal saving or balance correction was recorded between these points. Any movement came from assets, debt edits or refreshed market values.' : 'No activity was recorded on this date; this point simply saved your starting position.'}</div>`}</div>
-    <div class="sourceNote">A snapshot explains the totals saved on that date. It does not invent missing transactions.</div>
-    <button type="button" class="primary wide" onclick="closeModal()">Done</button>
-  </div>`);
-}
-
-function actualChartHtml(metrics) {
-  const pointsData = [...state.snapshots].sort((a, b) => a.date.localeCompare(b.date));
-  if (!pointsData.length) return '<div class="emptyChart"><b>Your honest starting point begins today</b><span>The app will save one net-worth point per day automatically.</span></div>';
-  const values = pointsData.map(point => point.netWorthUSD);
-  const low = Math.min(0, ...values);
-  const high = Math.max(0, ...values);
-  const range = Math.max(1, high - low);
-  const count = Math.max(1, pointsData.length - 1);
-  const coords = pointsData.map((point, index) => ({ x: 42 + index * (556 / count), y: 164 - ((point.netWorthUSD - low) / range) * 118 }));
-  if (coords.length === 1) coords[0].x = 320;
-  const points = coords.map(point => `${point.x},${point.y}`).join(' ');
-  const areaPoints = coords.length === 1 ? `42,164 320,${coords[0].y} 598,164` : `42,164 ${points} 598,164`;
-  const zeroY = 164 - ((0 - low) / range) * 118;
-  return `<div class="chartLabels"><div><span>First point ¬∑ ${formatDate(pointsData[0].date, { day: 'numeric', month: 'short' })}</span><b>${baseMoney(pointsData[0].netWorthUSD)}</b></div><div><span>Today</span><b>${baseMoney(metrics.netWorthUSD)}</b></div></div>
-    <svg class="wealthSvg" viewBox="0 0 640 195" role="img" aria-label="Actual household net worth history">
-      <defs><linearGradient id="wealthFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#31846c" stop-opacity=".28"/><stop offset="1" stop-color="#31846c" stop-opacity=".02"/></linearGradient></defs>
-      <line x1="42" y1="${zeroY}" x2="598" y2="${zeroY}" class="chartZero"/>
-      <polygon points="${areaPoints}" class="chartArea"/>
-      ${coords.length > 1 ? `<polyline points="${points}" class="chartLine"/>` : ''}
-      ${coords.map((point, index) => `<g class="wealthPointButton" role="button" tabindex="0" aria-label="${esc(formatDate(pointsData[index].date))}, net worth ${esc(baseMoney(pointsData[index].netWorthUSD))}" onclick="openWealthPoint(${index})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openWealthPoint(${index})}"><title>${esc(formatDate(pointsData[index].date))} ¬∑ ${esc(baseMoney(pointsData[index].netWorthUSD))}</title><circle cx="${point.x}" cy="${point.y}" r="16" class="chartPointHit"/><circle cx="${point.x}" cy="${point.y}" r="5" class="chartPoint"/></g>`).join('')}
-      <text x="42" y="188">${esc(pointsData[0].date.slice(5))}</text><text x="598" y="188" text-anchor="end">${esc(pointsData.at(-1).date.slice(5))}</text>
-    </svg><div class="chartFoot">Tap any point for its saved balances, change and recorded activity. Actual values use accounts, assets, market prices and debt.</div>`;
-}
-
-function projectionModel(metrics = moneyMetrics()) {
-  const recurringIncomeUSD = state.recurring.filter(item => item.active !== false && item.kind === 'income')
-    .reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
-  const monthlyIncomeUSD = recurringIncomeUSD || metrics.incomeUSD;
-  const recurringLivingUSD = state.recurring.filter(item => item.active !== false && item.kind === 'expense' && !['Debt', 'Savings'].includes(item.category))
-    .reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
-  const monthlyInterestUSD = activeDebts().reduce((sum, debt) => sum + usd(debt.remaining, debt.currency) * Number(debt.apr || 0) / 1200, 0);
-  const scenarios = [
-    { key: 'cautious', label: 'Cautious', color: '#e96d5b', livingShare: .60 },
-    { key: 'current', label: 'Current plan', color: '#557fa3', livingShare: .50 },
-    { key: 'improved', label: 'Improved', color: '#31846c', livingShare: .45 }
-  ].map(scenario => {
-    const livingUSD = Math.max(recurringLivingUSD, monthlyIncomeUSD * scenario.livingShare);
-    const monthlyGrowthUSD = monthlyIncomeUSD - livingUSD - monthlyInterestUSD;
-    return { ...scenario, livingUSD, monthlyGrowthUSD, values: Array.from({ length: 13 }, (_, index) => metrics.netWorthUSD + monthlyGrowthUSD * index) };
-  });
-  return { monthlyIncomeUSD, recurringLivingUSD, monthlyInterestUSD, scenarios };
-}
-
-function openProjectionPoint(index) {
-  const metrics = moneyMetrics();
-  const model = projectionModel(metrics);
-  if (!(model.monthlyIncomeUSD > 0)) return;
-  const month = Math.max(0, Math.min(12, Number(index) || 0));
-  const current = model.scenarios.find(scenario => scenario.key === 'current');
-  const valueUSD = current.values[month];
-  const changeUSD = valueUSD - metrics.netWorthUSD;
-  const date = addMonths(monthStart(), month);
-  openModal(month ? `Plan point ¬∑ month ${month}` : 'Plan starting point', `<div class="wealthPointSummary projectionPointSummary">
-    <div class="wealthPointHero"><span>${month ? esc(formatDate(date, { month: 'long', year: 'numeric' })) : 'TODAY'}</span><small>Estimated net worth</small><b>${baseMoney(valueUSD)}</b><p>${month ? `${signedBaseMoney(changeUSD)} from today if the Current plan assumptions hold.` : 'This is the real net worth used as the projection starting point.'}</p></div>
-    <div class="projectionAssumptions">
-      <div><span>Monthly income</span><b>${baseMoney(model.monthlyIncomeUSD)}</b></div>
-      <div><span>Living estimate</span><b>‚àí ${baseMoney(current.livingUSD)}</b></div>
-      <div><span>Debt interest</span><b>‚àí ${baseMoney(model.monthlyInterestUSD)}</b></div>
-      <div class="total"><span>Estimated monthly growth</span><b>${signedBaseMoney(current.monthlyGrowthUSD)}</b></div>
-    </div>
-    <div class="friendlyNote">This point has not happened yet. It keeps market prices unchanged and assumes the same monthly income, living costs and debt interest.</div>
-    <button type="button" class="primary wide" onclick="closeModal()">Done</button>
-  </div>`);
-}
-
-function projectionChartHtml(metrics) {
-  const model = projectionModel(metrics);
-  if (!(model.monthlyIncomeUSD > 0)) return '<div class="emptyChart"><b>Add salary to see a one-year direction</b><span>The projection will use your regular income, bills, debt interest and current 40‚Äì30‚Äì20‚Äì10 plan.</span></div>';
-  const { scenarios } = model;
-  const allValues = scenarios.flatMap(scenario => scenario.values);
-  const low = Math.min(0, ...allValues);
-  const high = Math.max(0, ...allValues);
-  const range = Math.max(1, high - low);
-  const zeroY = 164 - ((0 - low) / range) * 118;
-  const current = scenarios.find(scenario => scenario.key === 'current');
-  const plotted = scenarios.map(scenario => {
-    const coords = scenario.values.map((value, index) => ({ x: 42 + index * (556 / 12), y: 164 - ((value - low) / range) * 118 }));
-    return { ...scenario, coords };
-  });
-  const lines = plotted.map(scenario => `<polyline points="${scenario.coords.map(point => `${point.x},${point.y}`).join(' ')}" fill="none" stroke="${scenario.color}" stroke-width="${scenario.key === 'current' ? 5 : 3}" stroke-linecap="round" stroke-linejoin="round" opacity="${scenario.key === 'current' ? 1 : .82}"/>`).join('');
-  const currentPlot = plotted.find(scenario => scenario.key === 'current');
-  return `<div class="chartLabels"><div><span>Now</span><b>${baseMoney(metrics.netWorthUSD)}</b></div><div><span>Current plan ¬∑ 12 months</span><b>${baseMoney(current.values.at(-1))}</b></div></div>
-    <svg class="wealthSvg" viewBox="0 0 640 195" role="img" aria-label="Projected household net worth for twelve months">
-      <line x1="42" y1="${zeroY}" x2="598" y2="${zeroY}" class="chartZero"/>
-      ${lines}
-      ${currentPlot.coords.map((point, index) => `<g class="wealthPointButton projection" role="button" tabindex="0" aria-label="Current plan month ${index}, ${esc(baseMoney(current.values[index]))}" onclick="openProjectionPoint(${index})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openProjectionPoint(${index})}"><title>Month ${index} ¬∑ ${esc(baseMoney(current.values[index]))}</title><circle cx="${point.x}" cy="${point.y}" r="13" class="chartPointHit"/><circle cx="${point.x}" cy="${point.y}" r="4" class="chartPoint"/></g>`).join('')}
-      <text x="42" y="188">NOW</text><text x="598" y="188" text-anchor="end">12 MONTHS</text>
-    </svg><div class="forecastLegend">${scenarios.map(scenario => `<span><i style="background:${scenario.color}"></i>${scenario.label}</span>`).join('')}</div><div class="chartFoot">Tap a Current plan point to see its assumptions. Market prices stay unchanged, so this is guidance‚Äînot a promise.</div>`;
-}
-
-function setWealthChart(mode) {
-  wealthChartMode = mode;
-  render();
-}
-
-function cashflowForecast(days = cashflowDays) {
-  const start = today();
-  const end = addDays(start, days);
-  const events = recurringOccurrences(start, end).map(({ item, date }) => ({
-    date, label: item.name, accountId: item.accountId,
-    deltaUSD: (item.kind === 'income' ? 1 : -1) * usd(item.amount, item.currency),
-    deltaNative: (item.kind === 'income' ? 1 : -1) * Number(item.amount), currency: item.currency,
-    category: item.category
-  }));
-  for (const month of monthDatesBetween(start, end)) {
-    const hasRecurringDebt = events.some(event => event.category === 'Debt' && event.date.startsWith(monthKey(month)));
-    if (hasRecurringDebt) continue;
-    activeDebts().filter(debt => debt.remaining > .005 && debt.minimum > 0).forEach(debt => {
-      const date = debt.paymentDay ? monthlyDate(month, debt.paymentDay) : monthlyDate(month, 31);
-      if (date < start || date > end) return;
-      const remainingUSD = Math.max(0, usd(debt.minimum, debt.currency) - debtPaidInMonthUSD(debt, month));
-      if (remainingUSD > .005) events.push({ date, label: `${debt.name} minimum`, accountId: '', deltaUSD: -remainingUSD, deltaNative: null, currency: debt.currency, category: 'Debt' });
-    });
-  }
-  events.sort((a, b) => a.date.localeCompare(b.date));
-  let balanceUSD = moneyMetrics().cashUSD;
-  let eventIndex = 0;
-  const points = [{ date: start, balanceUSD }];
-  for (let offset = 1; offset <= days; offset += 1) {
-    const date = addDays(start, offset);
-    while (eventIndex < events.length && events[eventIndex].date <= date) {
-      balanceUSD += events[eventIndex].deltaUSD;
-      eventIndex += 1;
-    }
-    points.push({ date, balanceUSD });
-  }
-  const accountEnd = activeAccounts().map(account => {
-    const delta = events.filter(event => event.accountId === account.id && event.currency === account.currency)
-      .reduce((sum, event) => sum + Number(event.deltaNative || 0), 0);
-    return { id: account.id, name: account.name, currency: account.currency, balance: accountBalanceNative(account) + delta };
-  });
-  const lowest = points.reduce((result, point) => point.balanceUSD < result.balanceUSD ? point : result, points[0]);
-  return { start, end, days, events, points, accountEnd, startUSD: points[0]?.balanceUSD || 0, endUSD: points.at(-1)?.balanceUSD || 0, lowest };
-}
-
-function cashflowChartHtml(forecast) {
-  if (!forecast.events.length) return '<div class="emptyChart"><b>Add regular salary and bills</b><span>Your 30‚Äì90 day outlook will then populate automatically.</span></div>';
-  const values = forecast.points.map(point => point.balanceUSD);
-  const low = Math.min(0, ...values);
-  const high = Math.max(0, ...values);
-  const range = Math.max(1, high - low);
-  const coords = forecast.points.map((point, index) => ({
-    x: 42 + index * (556 / Math.max(1, forecast.points.length - 1)),
-    y: 164 - ((point.balanceUSD - low) / range) * 118
-  }));
-  const points = coords.map(point => `${point.x},${point.y}`).join(' ');
-  const zeroY = 164 - ((0 - low) / range) * 118;
-  const danger = forecast.lowest.balanceUSD < 0;
-  return `<div class="forecastSummary"><div><span>Today</span><b>${baseMoney(forecast.startUSD)}</b></div><div><span>Expected in ${forecast.days} days</span><b>${baseMoney(forecast.endUSD)}</b></div></div>
-    <svg class="wealthSvg" viewBox="0 0 640 195" role="img" aria-label="Expected household cash for ${forecast.days} days">
-      <defs><linearGradient id="cashflowFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${danger ? '#e96d5b' : '#557fa3'}" stop-opacity=".24"/><stop offset="1" stop-color="#557fa3" stop-opacity=".02"/></linearGradient></defs>
-      <line x1="42" y1="${zeroY}" x2="598" y2="${zeroY}" class="chartZero"/>
-      <polygon points="42,164 ${points} 598,164" class="forecastArea"/><polyline points="${points}" class="forecastLine${danger ? ' forecastDanger' : ''}"/>
-      <text x="42" y="188">${esc(forecast.start.slice(5))}</text><text x="598" y="188" text-anchor="end">${esc(forecast.end.slice(5))}</text>
-    </svg>
-    <div class="chartFoot">Lowest expected balance: <b>${baseMoney(forecast.lowest.balanceUSD)}</b> on ${formatDate(forecast.lowest.date)}. Confirmed items disappear from this forecast.</div>
-    <div class="forecastAccounts">${forecast.accountEnd.map(account => `<div><span>${esc(account.name)}</span><b>${money(account.balance, account.currency)}</b></div>`).join('')}</div>`;
-}
-
-function setCashflowDays(days) {
-  cashflowDays = [30, 60, 90].includes(Number(days)) ? Number(days) : 30;
-  render();
-}
-
-function buildSuggestions(metrics, buckets) {
-  const suggestions = [];
-  const previous = previousMonthAllocation();
-  const essentialsBudgetUSD = Object.entries(state.budgets)
-    .filter(([category]) => ESSENTIAL_CATEGORIES.includes(category))
-    .reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
-  if (previous.transactions.length && previous.balanceUSD > .005) {
-    suggestions.push(previous.hasDebt
-      ? ['Put last month‚Äôs balance to work', `${previous.label} ended ${baseMoney(previous.balanceUSD)} ahead. If it is still available, consider ${baseMoney(previous.debtUSD)} for debt and ${baseMoney(previous.futureUSD)} for emergency savings, goals or long-term investing.`]
-      : ['Grow last month‚Äôs balance', `${previous.label} ended ${baseMoney(previous.balanceUSD)} ahead. If it is still available, consider directing it to emergency savings, goals or long-term investments.`]);
-  } else if (previous.transactions.length && previous.balanceUSD < -.005) {
-    suggestions.push(['Turn last month into a lesson', `${previous.label} spending was ${baseMoney(Math.abs(previous.balanceUSD))} above income. Protect the 20% Future target first and trim flexible Wants before touching savings.`]);
-  }
-  if (!activeAccounts().length) {
-    suggestions.push(['Add your real bank balance', 'Start with the amount currently in the bank. Salary and spending will then update it automatically.']);
-  }
-  if (!(metrics.incomeUSD > 0)) {
-    suggestions.push(['Add this month‚Äôs salary', 'That unlocks your safe daily spending amount and exact 40‚Äì30‚Äì20‚Äì10 targets.']);
-  }
-  if (metrics.debtUSD > 0) {
-    if (metrics.incomeUSD > 0) {
-      const monthly = metrics.incomeUSD * .3;
-      const target = debtPriority(activeDebts().filter(debt => debt.remaining > .005).map(debt => ({ ...debt, balanceUSD: usd(debt.remaining, debt.currency) })), state.settings.debtStrategy)[0];
-      suggestions.push(['Give debt its 30%', `Aim for ${baseMoney(monthly)} this month${target ? ` and direct extra to ${target.name}` : ''}.`]);
-    } else {
-      suggestions.push(['Debt gets the next 30%', 'Once salary is entered, the Plan page will turn 30% into a simple payment amount.']);
-    }
-  }
-  if (metrics.goalSavedUSD > metrics.cashUSD) {
-    suggestions.push(['Check reserved savings', `Goals currently reserve ${baseMoney(metrics.goalSavedUSD - metrics.cashUSD)} more than tracked cash. Update an account balance or reduce the goal amount.`]);
-  }
-  const emergencyTargetUSD = essentialsBudgetUSD * 3;
-  const emergencyGoal = activeGoals().find(goal => /emergency/i.test(goal.name));
-  const emergencySavedUSD = emergencyGoal ? usd(emergencyGoal.saved, emergencyGoal.currency) : 0;
-  if (emergencyTargetUSD > 0 && emergencySavedUSD < emergencyTargetUSD) {
-    suggestions.push(['Build a 3-month safety cushion', `Based on essential limits, the first target is ${baseMoney(emergencyTargetUSD)}. Keep it in an accessible account.`]);
-  }
-  const wants = buckets.find(bucket => bucket.key === 'wants');
-  if (metrics.incomeUSD > 0 && wants.actual > wants.target) {
-    suggestions.push(['Pause fun spending briefly', `Wants are ${baseMoney(wants.actual - wants.target)} over the 10% guide this month.`]);
-  }
-  if (activeGoals().length) {
-    const goal = activeGoals().find(item => item.saved < item.target);
-    if (goal?.due) {
-      const months = Math.max(1, Math.ceil((new Date(`${goal.due}T12:00:00`) - new Date(`${today()}T12:00:00`)) / (86400000 * 30.44)));
-      const monthly = Math.max(0, goal.target - goal.saved) / months;
-      suggestions.push([`Keep ${goal.name} moving`, `${money(monthly, goal.currency)} a month reaches the current target date, if the date and balance stay unchanged.`]);
-    }
-  }
-  if (!suggestions.length) suggestions.push(['Keep the rhythm', 'Record spending, confirm recurring items and check your Money page together once a week.']);
-  return suggestions.slice(0, 4);
-}
-
-function debtPriority(debts, strategy) {
-  return [...debts].sort((a, b) => strategy === 'snowball'
-    ? a.balanceUSD - b.balanceUSD || b.apr - a.apr
-    : b.apr - a.apr || a.balanceUSD - b.balanceUSD
-  );
-}
-
-function simulateDebtPlan(incomeUSD, extraUSD = 0, strategy = state.settings.debtStrategy) {
-  const debts = activeDebts().filter(debt => debt.remaining > .005).map(debt => ({
-    id: debt.id, name: debt.name, currency: debt.currency, apr: Number(debt.apr || 0),
-    minimumUSD: usd(debt.minimum || 0, debt.currency), balanceUSD: usd(debt.remaining, debt.currency)
-  }));
-  const requestedBudgetUSD = Math.max(0, incomeUSD * .3 + Number(extraUSD || 0));
-  const minimumRequiredUSD = debts.reduce((sum, debt) => sum + Math.min(debt.minimumUSD, debt.balanceUSD), 0);
-  const monthlyBudgetUSD = Math.max(requestedBudgetUSD, minimumRequiredUSD);
-  const minimumShortfallUSD = Math.max(0, minimumRequiredUSD - requestedBudgetUSD);
-  if (!debts.length) return { debts, months: 0, interestUSD: 0, monthlyBudgetUSD, requestedBudgetUSD, minimumRequiredUSD, minimumShortfallUSD, firstAllocations: [], paidOffAt: {} };
-  if (!(monthlyBudgetUSD > 0)) return { debts, months: Infinity, interestUSD: 0, monthlyBudgetUSD, requestedBudgetUSD, minimumRequiredUSD, minimumShortfallUSD, firstAllocations: [], paidOffAt: {} };
-
-  let working = debts.map(debt => ({ ...debt }));
-  let months = 0;
-  let interestUSD = 0;
-  let firstAllocations = [];
-  const paidOffAt = {};
-  while (working.some(debt => debt.balanceUSD > .005) && months < 600) {
-    months += 1;
-    const payments = new Map();
-    working.forEach(debt => {
-      if (debt.balanceUSD <= .005) return;
-      const interest = debt.balanceUSD * debt.apr / 1200;
-      debt.balanceUSD += interest;
-      interestUSD += interest;
-    });
-    let available = monthlyBudgetUSD;
-    debtPriority(working.filter(debt => debt.balanceUSD > .005), strategy).forEach(debt => {
-      const payment = Math.min(debt.minimumUSD, debt.balanceUSD, available);
-      if (payment > 0) {
-        payments.set(debt.id, payment);
-        debt.balanceUSD -= payment;
-        available -= payment;
-      }
-    });
-    for (const debt of debtPriority(working.filter(item => item.balanceUSD > .005), strategy)) {
-      if (available <= .005) break;
-      const payment = Math.min(debt.balanceUSD, available);
-      payments.set(debt.id, (payments.get(debt.id) || 0) + payment);
-      debt.balanceUSD -= payment;
-      available -= payment;
-    }
-    working.forEach(debt => {
-      if (debt.balanceUSD <= .005 && paidOffAt[debt.id] == null) paidOffAt[debt.id] = months;
-    });
-    if (months === 1) firstAllocations = debts.map(debt => ({ id: debt.id, name: debt.name, currency: debt.currency, amountUSD: payments.get(debt.id) || 0 }));
-    const paid = [...payments.values()].reduce((sum, amount) => sum + amount, 0);
-    if (paid <= .005) { months = Infinity; break; }
-  }
-  if (months >= 600 && working.some(debt => debt.balanceUSD > .005)) months = Infinity;
-  return { debts, months, interestUSD, monthlyBudgetUSD, requestedBudgetUSD, minimumRequiredUSD, minimumShortfallUSD, firstAllocations, paidOffAt };
-}
-
-function payoffDateLabel(months) {
-  if (!Number.isFinite(months)) return 'Not reducing yet';
-  if (months <= 0) return 'Debt-free now';
-  const date = new Date();
-  date.setDate(1);
-  date.setMonth(date.getMonth() + months);
-  return new Intl.DateTimeFormat('en', { month: 'short', year: 'numeric' }).format(date);
-}
-
-function debtPlanSummaryHtml(plan) {
-  if (!plan.debts.length) return '<div class="friendlyEmpty"><b>No active debt</b><span>When every debt is cleared, the 30% bucket can move to your future.</span></div>';
-  if (!(plan.monthlyBudgetUSD > 0)) return '<div class="friendlyEmpty"><b>Add salary or minimum payments</b><span>The app needs one of those amounts to build a payoff route.</span></div>';
-  const firstTarget = debtPriority(plan.debts, state.settings.debtStrategy)[0];
-  return `<div><b>${state.settings.debtStrategy === 'snowball' ? 'Quick-win plan' : 'Lowest-interest-cost plan'}</b><p>Minimums are covered first. Extra money targets ${esc(firstTarget?.name || 'the next debt')}.</p></div>
-    <div class="debtPlanStats">
-      <div><span>Monthly debt money</span><b>${baseMoney(plan.monthlyBudgetUSD)}</b></div>
-      <div><span>Debt-free estimate</span><b>${payoffDateLabel(plan.months)}</b></div>
-      <div><span>Estimated interest</span><b>${Number.isFinite(plan.months) ? baseMoney(plan.interestUSD) : 'Needs more'}</b></div>
-    </div>
-    ${plan.minimumShortfallUSD > .005 ? `<div class="warningNote" style="margin-top:10px">Minimums exceed the 30% bucket by ${baseMoney(plan.minimumShortfallUSD)}. The plan protects every minimum before sending extra to one debt.</div>` : ''}`;
-}
-
-async function setDebtStrategy(strategy) {
-  if (!['avalanche', 'snowball'].includes(strategy) || state.settings.debtStrategy === strategy) return;
-  state.settings.debtStrategy = strategy;
-  await saveOperation({ action: 'settings', row: settingsRow() }, { close: false, message: strategy === 'snowball' ? 'Quick-win debt plan selected' : 'Interest-saving debt plan selected' });
-}
-
-function debtSimulatorResultHtml(extraUSD) {
-  const metrics = moneyMetrics();
-  const baseline = simulateDebtPlan(metrics.incomeUSD, 0, state.settings.debtStrategy);
-  const plan = simulateDebtPlan(metrics.incomeUSD, extraUSD, state.settings.debtStrategy);
-  if (!plan.debts.length) return '<div class="friendlyNote">You have no active debt to simulate.</div>';
-  const monthsSaved = Number.isFinite(baseline.months) && Number.isFinite(plan.months) ? Math.max(0, baseline.months - plan.months) : 0;
-  const interestSavedUSD = Number.isFinite(baseline.months) && Number.isFinite(plan.months) ? Math.max(0, baseline.interestUSD - plan.interestUSD) : 0;
-  return `<div class="debtPlanStats">
-      <div><span>Debt-free</span><b>${payoffDateLabel(plan.months)}</b></div>
-      <div><span>Time saved</span><b>${monthsSaved} month${monthsSaved === 1 ? '' : 's'}</b></div>
-      <div><span>Interest saved</span><b>${baseMoney(interestSavedUSD)}</b></div>
-    </div>
-    <div class="debtAllocationList">${plan.firstAllocations.filter(item => item.amountUSD > .005).map(item => `<div class="debtAllocationRow"><div><b>${esc(item.name)}</b><span>Suggested this month</span></div><div><b>${baseMoney(item.amountUSD)}</b></div></div>`).join('')}</div>`;
-}
-
-function openDebtSimulator() {
-  const metrics = moneyMetrics();
-  if (!activeDebts().some(debt => debt.remaining > .005)) {
-    openModal('Debt what-if', '<div class="form"><div class="friendlyNote">There is no active debt to simulate.</div><button class="primary" onclick="closeModal();openDebtForm()">Add debt</button></div>');
-    return;
-  }
-  openModal('Debt what-if', `<div class="form">
-    <div class="friendlyNote">Test an extra monthly payment without changing real data. The base plan already uses ${baseMoney(metrics.incomeUSD * .3)}‚Äî30% of this month‚Äôs income.</div>
-    <label>Extra each month (${esc(state.settings.base)})<input id="debtExtra" type="number" min="0" step="0.01" value="0"></label>
-    <div id="debtSimulatorResult"></div>
-    <button class="primary" onclick="closeModal()">Done</button>
-  </div>`);
-  const update = () => { $('debtSimulatorResult').innerHTML = debtSimulatorResultHtml(usd(+$('debtExtra').value || 0, state.settings.base)); };
-  $('debtExtra').oninput = update;
-  update();
-}
-
-function paydayAssistantHtml(metrics, buckets) {
-  if (!(metrics.incomeUSD > 0)) return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>Add salary and the app will turn 40‚Äì30‚Äì20‚Äì10 into exact actions.</p></div><button class="primary compact" onclick="openQuickIncome({category:'Salary'})">Add salary</button></div>`;
-  return `<div class="paydayTop"><div><h3>Payday assistant</h3><p>One salary, four simple jobs. These targets update automatically.</p></div><button class="primary compact" onclick="openPaydayAssistant()">Use plan</button></div>
-    <div class="paydayBuckets">${buckets.map(bucket => `<div><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b></div>`).join('')}</div>`;
-}
-
-function previousMonthPlanHtml() {
-  const previous = previousMonthAllocation();
-  const hasRecords = previous.transactions.length > 0;
-  const positive = previous.balanceUSD > .005;
-  const negative = previous.balanceUSD < -.005;
-  const amount = !hasRecords ? '‚Äî'
-    : negative ? `‚àí ${baseMoney(Math.abs(previous.balanceUSD))}`
-      : `${positive ? '+ ' : ''}${baseMoney(Math.abs(previous.balanceUSD))}`;
-  let jobs = '';
-  let title = `Close ${previous.label} when ready`;
-  let message = 'Check last month‚Äôs income and spending. The app will show what remained and give it a simple next job.';
-  if (positive) {
-    title = 'Put the previous month‚Äôs win to work';
-    message = 'This result is already reflected in your Money totals. If the money is still available, use the guide below after your normal bills are protected.';
-    jobs = previous.hasDebt
-      ? `<div><span>60% ¬∑ Debt freedom</span><b>${baseMoney(previous.debtUSD)}</b></div><div><span>40% ¬∑ Savings & investments</span><b>${baseMoney(previous.futureUSD)}</b></div>`
-      : `<div class="full"><span>100% ¬∑ Savings, goals & investments</span><b>${baseMoney(previous.futureUSD)}</b></div>`;
-  } else if (negative) {
-    title = 'Use the short month as a clean reset';
-    message = 'No blame‚Äîthis is useful information. Protect Future savings first this month, then reduce Wants before essential spending.';
-    jobs = '<div><span>Keep protecting</span><b>20% Future</b></div><div><span>Trim first</span><b>10% Wants</b></div>';
-  } else if (hasRecords) {
-    title = 'A balanced month‚Äînow build a surplus';
-    message = 'Income matched recorded spending. Try to create one small amount this month for emergency savings, goals or investments.';
-    jobs = '<div class="full"><span>Next milestone</span><b>Your first positive carry-forward</b></div>';
-  }
-  return `<div class="rolloverPlanTop"><div><span>PREVIOUS MONTH BALANCE</span><h3>${esc(title)}</h3><p>${esc(message)}</p></div><button type="button" onclick="openStatementFor('previous')">Review</button></div>
-    <div class="rolloverPlanAmount${negative ? ' short' : ''}"><span>${esc(previous.label)} result</span><b>${amount}</b><small>${hasRecords ? `${baseMoney(previous.incomeUSD)} income ¬∑ ${baseMoney(previous.spentUSD)} spending` : 'No income or spending recorded for this period'}</small></div>
-    ${jobs ? `<div class="rolloverPlanJobs">${jobs}</div>` : ''}
-    <div class="rolloverPlanNote">A guide only: do not enter this as new income. Move money first, then record only the real debt payment, saving or investment.</div>`;
-}
-
-function openPaydayAssistant() {
-  const metrics = moneyMetrics();
-  const buckets = allocationBuckets(metrics);
-  if (!(metrics.incomeUSD > 0)) { openQuickIncome({ category: 'Salary' }); return; }
-  const debtPlan = simulateDebtPlan(metrics.incomeUSD);
-  const debtAction = debtPlan.firstAllocations.filter(item => item.amountUSD > .005).sort((a, b) => b.amountUSD - a.amountUSD)[0];
-  const goal = activeGoals().find(item => item.saved < item.target);
-  const future = buckets.find(bucket => bucket.key === 'future');
-  openModal('Use this payday', `<div class="form">
-    <div class="friendlyNote">These are targets, not automatic bank transfers. Record an action only after the money has actually moved.</div>
-    <div class="statement">
-      ${buckets.map((bucket, index) => `<div class="statementRow"><time>${bucket.pct}%</time><div><b>${esc(bucket.label)}</b><div class="meta">${bucket.key === 'essential' ? 'Keep ready for living costs' : bucket.key === 'debt' ? 'Minimums first, then the priority debt' : bucket.key === 'future' ? 'Reserve for goals and emergency savings' : 'Your flexible spending limit'}</div></div><div class="statementValue"><strong>${baseMoney(bucket.target)}</strong><span>${baseMoney(bucket.actual)} recorded</span></div></div>`).join('')}
-    </div>
-    <div class="buttonRow">
-      ${debtAction ? `<button class="secondary" onclick="closeModal();openDebtPayment('${debtAction.id}',null,{paymentUSD:${debtAction.amountUSD}})">Record debt payment</button>` : ''}
-      ${goal && future.target > 0 ? `<button class="secondary" onclick="closeModal();openGoalContribution('${goal.id}',null,{amountUSD:${future.target}})">Reserve for ${esc(goal.name)}</button>` : ''}
-      <button class="primary" onclick="closeModal()">Done</button>
-    </div>
-  </div>`);
-}
-
-function statementRangeFor(period = 'month', customFrom = '', customTo = '') {
-  const end = today();
-  if (period === 'today') return { from: end, to: end };
-  if (period === '30days') return { from: addDays(end, -29), to: end };
-  if (period === 'month') return { from: monthStart(), to: end };
-  if (period === 'previous') return { from: addMonths(monthStart(), -1), to: addDays(monthStart(), -1) };
-  let from = customFrom || monthStart();
-  let to = customTo || end;
-  if (from > end) from = end;
-  if (to > end) to = end;
-  if (from > to) [from, to] = [to, from];
-  return { from, to };
-}
-
-function statementRange() {
-  const range = statementRangeFor(statementPeriod, statementFrom, statementTo);
-  if (statementPeriod === 'custom') {
-    statementFrom = range.from;
-    statementTo = range.to;
-  }
-  return range;
-}
-
-function statementTransactionsFor(range, kind = 'all') {
-  return state.transactions.filter(transaction =>
-    transaction.date >= range.from &&
-    transaction.date <= range.to &&
-    ['income', 'expense'].includes(transaction.type) &&
-    transaction.category !== 'Balance adjustment' &&
-    (kind === 'all' || transaction.type === kind)
-  ).sort((a, b) => `${b.date}${b.createdAt || ''}`.localeCompare(`${a.date}${a.createdAt || ''}`));
-}
-
-function statementTransactions(kind = statementKind) {
-  return statementTransactionsFor(statementRange(), kind);
-}
-
-function statementTransactionHtml(transaction) {
-  const source = accountName(transaction.accountId) || transaction.account || 'Not linked';
-  const amount = `${transaction.type === 'income' ? '+' : '‚àí'} ${money(transaction.amount, transaction.currency)}`;
-  return `<div class="statementEntry ${transaction.type}">
-    <div class="statementEntryIcon">${txIcon(transaction)}</div>
-    <div class="statementEntryCopy"><b>${esc(transaction.category)}</b><span>${esc(formatDate(transaction.date, { day: 'numeric', month: 'short', year: 'numeric' }))} ¬∑ ${esc(source)} ¬∑ ${esc(transaction.paidBy || 'Shared')}${transaction.note ? ` ¬∑ ${esc(transaction.note)}` : ''}</span></div>
-    <strong>${amount}</strong>
-  </div>`;
-}
-
-function renderStatement() {
-  if (!$('statementSummary')) return;
-  const range = statementRange();
-  const allTransactions = statementTransactions('all');
-  const visibleTransactions = statementTransactions(statementKind);
-  const incomeUSD = allTransactions.filter(transaction => transaction.type === 'income')
-    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const spentUSD = allTransactions.filter(transaction => transaction.type === 'expense')
-    .reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const netUSD = incomeUSD - spentUSD;
-  const rangeText = range.from === range.to
-    ? formatDate(range.from)
-    : `${formatDate(range.from, { day: 'numeric', month: 'short', year: 'numeric' })} ‚Äì ${formatDate(range.to, { day: 'numeric', month: 'short', year: 'numeric' })}`;
-  document.querySelectorAll('#statementPeriodTabs button').forEach(button => button.classList.toggle('active', button.dataset.period === statementPeriod));
-  $('statementCustomRange').classList.toggle('hidden', statementPeriod !== 'custom');
-  $('statementFrom').value = range.from;
-  $('statementTo').value = range.to;
-  $('statementFrom').max = today();
-  $('statementTo').max = today();
-  $('statementSummary').innerHTML = `<div class="statementRangeLabel"><span>${esc(rangeText)}</span><b>${allTransactions.length} ${allTransactions.length === 1 ? 'entry' : 'entries'}</b></div>
-    <div class="statementTotals">
-      <div class="income"><span>Income</span><b>${baseMoney(incomeUSD)}</b></div>
-      <div class="expense"><span>Spends</span><b>${baseMoney(spentUSD)}</b></div>
-      <div class="${netUSD < 0 ? 'expense' : 'net'}"><span>Difference</span><b>${netUSD < 0 ? '‚àí ' : '+ '}${baseMoney(Math.abs(netUSD))}</b></div>
-    </div>`;
-  document.querySelectorAll('#statementKindTabs button').forEach(button => button.classList.toggle('active', button.dataset.kind === statementKind));
-  $('statementList').innerHTML = visibleTransactions.length
-    ? `${visibleTransactions.slice(0, 250).map(statementTransactionHtml).join('')}${visibleTransactions.length > 250 ? `<div class="statementLimitNote">Showing the latest 250 of ${visibleTransactions.length} entries.</div>` : ''}`
-    : `<div class="statementEmpty">No ${statementKind === 'all' ? 'income or spends' : statementKind === 'income' ? 'income' : 'spends'} recorded in this period.</div>`;
-}
-
-function setStatementPeriod(period) {
-  statementPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'month';
-  if (statementPeriod === 'custom' && (!statementFrom || !statementTo)) {
-    statementFrom = monthStart();
-    statementTo = today();
-  }
-  render();
-}
-
-function setStatementCustomRange() {
-  statementPeriod = 'custom';
-  statementFrom = $('statementFrom').value || monthStart();
-  statementTo = $('statementTo').value || today();
-  render();
-}
-
-function setStatementKind(kind) {
-  statementKind = ['all', 'income', 'expense'].includes(kind) ? kind : 'all';
-  renderStatement();
-}
-
-function openStatementFor(period = 'today') {
-  statementPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'today';
-  statementKind = 'all';
-  showPage('timeline');
-  requestAnimationFrame(() => document.querySelector('.statementPanel')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
-}
-
-function reportRange() { return statementRangeFor(reportPeriod, reportFrom, reportTo); }
-
-function statementReportTotals(range = reportRange()) {
-  const transactions = statementTransactionsFor(range, 'all');
-  const incomeUSD = transactions.filter(transaction => transaction.type === 'income').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const spentUSD = transactions.filter(transaction => transaction.type === 'expense').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  return { transactions, incomeUSD, spentUSD, differenceUSD: incomeUSD - spentUSD };
-}
-
-function statementCsvPackage(range = statementRange()) {
-  const totals = statementReportTotals(range);
-  const dashboardCurrency = state.settings.base;
-  const rows = [
-    ['Our DHAN statement'],
-    ['From', range.from],
-    ['To', range.to],
-    ['Dashboard currency', dashboardCurrency],
-    ['Income total', Number(fromUSD(totals.incomeUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
-    ['Spending total', Number(fromUSD(totals.spentUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
-    ['Difference', Number(fromUSD(totals.differenceUSD, dashboardCurrency).toFixed(2)), dashboardCurrency],
-    [],
-    ['Date', 'Type', 'Category', 'Amount', 'Currency', `Amount in ${dashboardCurrency}`, 'Paid by', 'Account', 'Note'],
-    ...totals.transactions.map(transaction => [
-      transaction.date, transaction.type, transaction.category, transaction.amount, transaction.currency,
-      Number((fromUSD(usd(transaction.amount, transaction.currency), dashboardCurrency) * (transaction.type === 'expense' ? -1 : 1)).toFixed(2)),
-      transaction.paidBy || 'Shared', accountName(transaction.accountId) || transaction.account || 'Not linked', transaction.note || ''
-    ])
-  ];
-  return {
-    totals,
-    filename: `our-dhan-statement-${range.from}-to-${range.to}.csv`,
-    text: rows.map(row => row.map(csvCell).join(',')).join('\n')
-  };
-}
-
-function renderStatementGenerator() {
-  const root = $('statementGeneratorBody');
-  if (!root) return;
-  const range = reportRange();
-  const totals = statementReportTotals(range);
-  const periods = [['today', 'Today'], ['month', 'This month'], ['previous', 'Previous month'], ['30days', 'Last 30 days'], ['custom', 'Custom']];
-  const rangeLabel = range.from === range.to ? formatDate(range.from) : `${formatDate(range.from, { day: 'numeric', month: 'short', year: 'numeric' })} ‚Äì ${formatDate(range.to, { day: 'numeric', month: 'short', year: 'numeric' })}`;
-  root.innerHTML = `<div class="statementGenerator">
-    <p>Choose the period once, then view the details or download a clean CSV statement.</p>
-    <div class="reportPeriodTabs">${periods.map(([value, label]) => `<button type="button" class="${reportPeriod === value ? 'active' : ''}" onclick="setReportPeriod('${value}')">${label}</button>`).join('')}</div>
-    ${reportPeriod === 'custom' ? `<div class="statementCustomRange reportCustomRange"><label>From<input id="reportFrom" type="date" max="${today()}" value="${esc(range.from)}" onchange="setReportCustomRange()"></label><label>To<input id="reportTo" type="date" max="${today()}" value="${esc(range.to)}" onchange="setReportCustomRange()"></label></div>` : ''}
-    <div class="statementRangeLabel"><span>${esc(rangeLabel)}</span><b>${totals.transactions.length} ${totals.transactions.length === 1 ? 'entry' : 'entries'}</b></div>
-    <div class="statementTotals">
-      <div class="income"><span>Income</span><b>${baseMoney(totals.incomeUSD)}</b></div>
-      <div class="expense"><span>Spends</span><b>${baseMoney(totals.spentUSD)}</b></div>
-      <div class="${totals.differenceUSD < 0 ? 'expense' : 'net'}"><span>Difference</span><b>${signedBaseMoney(totals.differenceUSD)}</b></div>
-    </div>
-    <div class="friendlyNote">Statements exclude transfers and balance corrections so money is not counted twice.</div>
-    <div class="buttonRow"><button type="button" class="secondary" onclick="viewGeneratedStatement()">View details</button><button type="button" class="primary" onclick="downloadGeneratedStatement()">Download CSV</button></div>
-  </div>`;
-}
-
-function openStatementGenerator(period = statementPeriod) {
-  reportPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'month';
-  reportFrom = statementFrom || monthStart();
-  reportTo = statementTo || today();
-  openModal('Generate statement', '<div id="statementGeneratorBody"></div>');
-  renderStatementGenerator();
-}
-
-function setReportPeriod(period) {
-  reportPeriod = ['today', 'month', 'previous', '30days', 'custom'].includes(period) ? period : 'month';
-  if (reportPeriod === 'custom' && (!reportFrom || !reportTo)) {
-    reportFrom = monthStart();
-    reportTo = today();
-  }
-  renderStatementGenerator();
-}
-
-function setReportCustomRange() {
-  reportPeriod = 'custom';
-  reportFrom = $('reportFrom')?.value || monthStart();
-  reportTo = $('reportTo')?.value || today();
-  renderStatementGenerator();
-}
-
-function viewGeneratedStatement() {
-  const range = reportRange();
-  statementPeriod = reportPeriod;
-  statementFrom = range.from;
-  statementTo = range.to;
-  statementKind = 'all';
-  closeModal();
-  showPage('timeline');
-  requestAnimationFrame(() => document.querySelector('.statementPanel')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
-}
-
-function downloadStatementCsv(range = statementRange()) {
-  const statement = statementCsvPackage(range);
-  downloadFile(statement.filename, statement.text, 'text/csv;charset=utf-8');
-  toast(`Statement downloaded ¬∑ ${statement.totals.transactions.length} ${statement.totals.transactions.length === 1 ? 'entry' : 'entries'}`);
-}
-
-function downloadGeneratedStatement() { downloadStatementCsv(reportRange()); }
-function downloadCurrentStatement() { downloadStatementCsv(statementRange()); }
-
-function preparedStatementFor(periodStart = '') {
-  const item = pendingStatementEmails().find(entry => entry.periodStart === periodStart)
-    || (!periodStart ? latestPreparedStatement() : null);
-  const range = item ? statementItemRange(item) : previousMonthRangeForDate(today());
-  return { item, range, statement: statementCsvPackage(range) };
-}
-
-function markPreparedStatementHandled(periodStart, action) {
-  const items = pendingStatementEmails();
-  const item = items.find(entry => entry.periodStart === periodStart);
-  if (!item) return;
-  item.handledAt = new Date().toISOString();
-  item.lastAction = action;
-  savePendingStatementEmails(items);
-  renderStatementEmailSettings();
-}
-
-function preparedStatementEmailText(range, totals) {
-  const label = formatDate(range.from, { month: 'long', year: 'numeric' });
-  return `Our DHAN ¬∑ ${label}\n\nIncome: ${baseMoney(totals.incomeUSD)}\nSpending: ${baseMoney(totals.spentUSD)}\nBalance: ${signedBaseMoney(totals.differenceUSD)}\n\n40‚Äì30‚Äì20‚Äì10 guide\n40% Essentials: ${baseMoney(totals.incomeUSD * .4)}\n30% Debt: ${baseMoney(totals.incomeUSD * .3)}\n20% Future: ${baseMoney(totals.incomeUSD * .2)}\n10% Wants: ${baseMoney(totals.incomeUSD * .1)}\n\nTransfers and balance corrections are excluded.`;
-}
-
-function openPreparedMonthlyStatement(periodStart = '') {
-  const prepared = preparedStatementFor(periodStart);
-  const { range, statement } = prepared;
-  const label = formatDate(range.from, { month: 'long', year: 'numeric' });
-  const allocation = [
-    ['40%', 'Essentials', .4], ['30%', 'Debt', .3], ['20%', 'Future', .2], ['10%', 'Wants', .1]
-  ];
-  openModal(`${label} statement`, `<div class="statementGenerator preparedStatement">
-    <p>Prepared automatically from your saved records. Nothing is uploaded or stored as a statement file.</p>
-    <div class="statementTotals">
-      <div class="income"><span>Income</span><b>${baseMoney(statement.totals.incomeUSD)}</b></div>
-      <div class="expense"><span>Spends</span><b>${baseMoney(statement.totals.spentUSD)}</b></div>
-      <div class="${statement.totals.differenceUSD < 0 ? 'expense' : 'net'}"><span>Balance</span><b>${signedBaseMoney(statement.totals.differenceUSD)}</b></div>
-    </div>
-    <div class="preparedAllocation">${allocation.map(([percent, name, ratio]) => `<div><span><b>${percent}</b> ${name}</span><strong>${baseMoney(statement.totals.incomeUSD * ratio)}</strong></div>`).join('')}</div>
-    <div class="friendlyNote">Share uses your phone's own share sheet. Choose Mail or Gmail to send the attached CSV to yourself.</div>
-    <div class="buttonRow"><button type="button" class="secondary" onclick="downloadPreparedMonthlyStatement('${range.from}')">Download CSV</button><button type="button" class="primary" onclick="sharePreparedMonthlyStatement('${range.from}')">Share or email</button></div>
-  </div>`);
-}
-
-function downloadPreparedMonthlyStatement(periodStart) {
-  const prepared = preparedStatementFor(periodStart);
-  downloadStatementCsv(prepared.range);
-  markPreparedStatementHandled(prepared.range.from, 'downloaded');
-}
-
-async function sharePreparedMonthlyStatement(periodStart) {
-  const prepared = preparedStatementFor(periodStart);
-  const { range, statement } = prepared;
-  const label = formatDate(range.from, { month: 'long', year: 'numeric' });
-  const summary = preparedStatementEmailText(range, statement.totals);
-  let file = null;
-  try { file = new File([statement.text], statement.filename, { type: 'text/csv' }); }
-  catch (_error) { file = null; }
-  const shareData = file ? { title: `Our DHAN ¬∑ ${label}`, text: summary, files: [file] } : null;
-  let canShareFile = false;
-  try { canShareFile = Boolean(shareData && navigator.share && navigator.canShare?.(shareData)); }
-  catch (_error) { canShareFile = false; }
-  if (canShareFile) {
-    try {
-      await navigator.share(shareData);
-      markPreparedStatementHandled(range.from, 'shared');
-      closeModal();
-      toast('Statement shared ‚úì');
-    } catch (error) {
-      if (error?.name !== 'AbortError') toast('Could not open sharing. Download the CSV instead.');
-    }
-    return;
-  }
-  downloadFile(statement.filename, statement.text, 'text/csv;charset=utf-8');
-  markPreparedStatementHandled(range.from, 'email_opened');
-  const recipient = state.member.role === 'owner' ? currentUser?.email || '' : '';
-  const draftBody = 'Your Our DHAN statement was downloaded on this phone. Attach the CSV to this draft, then send it to yourself.';
-  location.href = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(`Our DHAN ¬∑ ${label} statement`)}&body=${encodeURIComponent(draftBody)}`;
-  toast('CSV downloaded ¬∑ email draft opened');
-}
-
-function timelineEvents() {
-  const events = [];
-  state.transactions.forEach(transaction => {
-    const destination = accountName(transaction.toAccountId);
-    events.push({
-      date: transaction.date,
-      group: 'money',
-      kind: transaction.type,
-      title: transaction.type === 'transfer' ? `Transfer to ${destination || 'account'}` : transaction.category,
-      detail: transaction.type === 'transfer'
-        ? `${money(transaction.amount, transaction.currency)} sent ¬∑ ${money(transaction.toAmount, state.accounts.find(a => a.id === transaction.toAccountId)?.currency || transaction.currency)} received`
-        : `${transaction.type === 'income' ? '+' : '‚àí'} ${money(transaction.amount, transaction.currency)} ¬∑ ${transaction.paidBy}`,
-      id: transaction.id,
-      action: 'transaction'
-    });
-    if (transaction.debtId && transaction.debtPrincipal) {
-      const debt = state.debts.find(item => item.id === transaction.debtId);
-      events.push({ date: transaction.date, group: 'wins', kind: 'win', title: `${debt?.name || 'Debt'} reduced`, detail: `${money(transaction.debtPrincipal, debt?.currency || transaction.currency)} principal cleared` });
-    }
-  });
-  state.accounts.forEach(account => events.push({ date: account.openingDate, group: 'money', kind: 'account', title: `${account.name} tracking started`, detail: `Opening balance ${money(account.openingBalance, account.currency)}` }));
-  state.assets.forEach(asset => asset.createdAt && events.push({ date: asset.createdAt.slice(0, 10), group: 'money', kind: 'asset', title: `${asset.name} added`, detail: `Asset ¬∑ ${baseMoney(assetUSD(asset))}` }));
-  state.debts.forEach(debt => {
-    if (debt.createdAt) events.push({ date: debt.createdAt.slice(0, 10), group: 'plans', kind: 'debt', title: `${debt.name} added`, detail: `${money(debt.remaining, debt.currency)} remaining` });
-    if (debt.due && debt.active !== false) events.push({ date: debt.due, group: 'plans', kind: 'debt', title: `${debt.name} target date`, detail: `${money(debt.remaining, debt.currency)} remaining` });
-  });
-  state.goals.forEach(goal => {
-    if (goal.createdAt) events.push({ date: goal.createdAt.slice(0, 10), group: 'plans', kind: 'goal', title: `${goal.name} goal added`, detail: `${money(goal.saved, goal.currency)} saved` });
-    if (goal.due && goal.active !== false) events.push({ date: goal.due, group: 'plans', kind: 'goal', title: `${goal.name} target date`, detail: `Goal ${money(goal.target, goal.currency)}` });
-  });
-  state.contributions.forEach(contribution => {
-    const goal = state.goals.find(item => item.id === contribution.goalId);
-    events.push({ date: contribution.date, group: 'wins', kind: 'win', title: `${goal?.name || 'Goal'} grew`, detail: `+ ${money(contribution.amount, contribution.currency)} reserved` });
-  });
-  state.sinkingFunds.forEach(fund => {
-    if (fund.createdAt) events.push({ date: fund.createdAt.slice(0, 10), group: 'plans', kind: 'goal', title: `${fund.name} fund added`, detail: `${money(fund.target, fund.currency)} target` });
-    if (fund.due && fund.active !== false) events.push({ date: fund.due, group: 'plans', kind: 'goal', title: `${fund.name} needed`, detail: `${money(fund.saved, fund.currency)} of ${money(fund.target, fund.currency)} ready` });
-  });
-  state.weeklyReviews.forEach(review => events.push({ date: review.completedAt?.slice(0, 10) || review.weekStart, group: 'wins', kind: 'win', title: 'Weekly money date complete', detail: review.nextAction || review.win || 'Reviewed together' }));
-  state.recurring.filter(item => item.active !== false).forEach(item => events.push({ date: `${monthKey()}-${String(Math.min(item.day, new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate())).padStart(2, '0')}`, group: 'plans', kind: 'recurring', title: item.name, detail: `Monthly ${item.kind} ¬∑ ${money(item.amount, item.currency)}` }));
-  const budgetUSD = Object.values(state.budgets).reduce((sum, budget) => sum + usd(budget.amount, budget.currency), 0);
-  if (budgetUSD > 0) events.push({ date: monthStart(), group: 'plans', kind: 'budget', title: 'Monthly category plan', detail: baseMoney(budgetUSD) });
-  state.snapshots.forEach(snapshot => events.push({ date: snapshot.date, group: 'wins', kind: 'snapshot', title: 'Net worth check-in', detail: baseMoney(snapshot.netWorthUSD) }));
-  state.checkups.forEach(checkup => {
-    if (checkup.balancesCheckedAt) events.push({ date: checkup.balancesCheckedAt.slice(0, 10), group: 'wins', kind: 'win', title: 'Monthly money check complete', detail: `${checkup.accountCount} account${checkup.accountCount === 1 ? '' : 's'} confirmed${checkup.note ? ` ¬∑ ${checkup.note}` : ''}` });
-    if (checkup.closedAt) events.push({ date: checkup.closedAt.slice(0, 10), group: 'wins', kind: 'win', title: `${formatDate(checkup.month, { month: 'long' })} closed together`, detail: checkup.focus ? `Next focus ¬∑ ${checkup.focus}` : 'Month reviewed' });
-  });
-  const now = today();
-  return events.filter(event => event.date && (timelineFilter === 'all' || event.group === timelineFilter)).sort((a, b) => {
-    const aFuture = a.date > now;
-    const bFuture = b.date > now;
-    if (aFuture !== bFuture) return aFuture ? -1 : 1;
-    return aFuture ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date);
-  });
-}
-
-function timelineHtml() {
-  const events = timelineEvents();
-  if (!events.length) return '<div class="card hint">Nothing in this view yet. Your actions and plans will appear automatically.</div>';
-  return events.slice(0, 150).map(event => `<div class="timelineItem">
-    <div class="timelineDot ${event.kind}"></div><div class="timelineBody">
-      <div class="timelineDate">${esc(formatDate(event.date))}${event.date > today() ? ' ¬∑ upcoming' : ''}</div>
-      <div class="timelineTitle">${esc(event.title)}</div><div class="meta">${esc(event.detail)}</div>
-      ${event.action === 'transaction' ? `<div class="cardActions"><button class="linkBtn" onclick="editTransaction('${event.id}')">Edit</button><button class="dangerLink" onclick="deleteTransaction('${event.id}')">Delete</button></div>` : ''}
-    </div></div>`).join('');
-}
-
-function setTimelineFilter(filter) {
-  timelineFilter = filter;
-  render();
-}
-
-function currentWeeklyReview() { return state.weeklyReviews.find(review => review.weekStart === weekStart()); }
-
-function moneyDateHtml(metrics) {
-  const start = weekStart();
-  const review = currentWeeklyReview();
-  const weekTx = state.transactions.filter(transaction => transaction.date >= start && transaction.date <= today() && transaction.type !== 'transfer' && transaction.category !== 'Balance adjustment');
-  const income = weekTx.filter(transaction => transaction.type === 'income').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const spent = weekTx.filter(transaction => transaction.type === 'expense').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const nextBill = recurringOccurrences(today(), addDays(today(), 14), item => item.kind === 'expense').sort((a, b) => a.date.localeCompare(b.date))[0];
-  const goal = activeGoals().sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'))[0];
-  const previous = previousMonthAllocation();
-  const previousHasRecords = previous.transactions.length > 0;
-  const previousNegative = previous.balanceUSD < -.005;
-  const previousAmount = !previousHasRecords ? 'Not recorded'
-    : previousNegative ? `‚àí ${baseMoney(Math.abs(previous.balanceUSD))}`
-      : `${previous.balanceUSD > .005 ? '+ ' : ''}${baseMoney(Math.abs(previous.balanceUSD))}`;
-  const action = metrics.cashUSD < 0 ? 'Correct account balances and pause optional spending.'
-    : nextBill ? `Keep ${money(nextBill.item.amount, nextBill.item.currency)} ready for ${nextBill.item.name}.`
-      : activeSinkingFunds().some(fund => fund.lastReservedMonth !== monthStart()) ? 'Make this month‚Äôs first sinking-fund set-aside.'
-        : activeDebts().some(debt => debt.remaining > 0) ? 'Record the next debt payment when it leaves the bank.'
-          : 'Choose one small amount to move toward your nearest goal.';
-  return `<div class="moneyDateTop"><div><div class="eyebrow">5-MINUTE MONEY DATE</div><h2>${review ? 'Reviewed together ‚úì' : 'One calm check-in'}</h2><p>${review ? `This week‚Äôs action: ${esc(review.nextAction || action)}` : 'Look at the facts, celebrate one win, and agree on one action.'}</p></div><div class="coupleMark">D<span>‚ô•</span>S</div></div>
-    <div class="moneyDateStats"><div><span>Came in</span><b>${baseMoney(income)}</b></div><div><span>Went out</span><b>${baseMoney(spent)}</b></div><div><span>Net worth</span><b>${baseMoney(metrics.netWorthUSD)}</b></div>${goal ? `<div><span>${esc(goal.name)}</span><b>${Math.round(goal.saved / Math.max(.01, goal.target) * 100)}%</b></div>` : '<div><span>Goals</span><b>Start one</b></div>'}</div>
-    <button class="moneyDateRollover${previousNegative ? ' short' : ''}" type="button" onclick="openStatementFor('previous')"><span>Balance from previous month</span><b>${previousAmount}</b><small>${previousHasRecords ? previous.balanceUSD > .005 ? 'Tap to decide how to grow it' : previousNegative ? 'Tap to learn and reset gently' : 'Tap to create the next small win' : `Tap to review ${esc(previous.label)}`}</small><i aria-hidden="true">‚Ä∫</i></button>
-    <div class="moneyDateAction"><span>Suggested action</span><b>${esc(action)}</b></div>
-    <button class="${review ? 'secondary' : 'primary'} wide" onclick="openMoneyDate()">${review ? 'Update this week' : 'Review together'}</button>`;
-}
-
-function calendarEventsFor(month) {
-  const events = [];
-  const start = `${month}-01`;
-  const end = monthlyDate(start, 31);
-  state.recurring.filter(item => item.active !== false).forEach(item => events.push({ date: monthlyDate(start, item.day), type: item.kind, title: item.name, amount: money(item.amount, item.currency) }));
-  activeDebts().filter(debt => debt.paymentDay && debt.minimum > 0).forEach(debt => {
-    const alreadyListed = state.recurring.some(item => item.active !== false && item.kind === 'expense' && item.category === 'Debt' && Number(item.day) === Number(debt.paymentDay) && Math.abs(usd(item.amount, item.currency) - usd(debt.minimum, debt.currency)) < .01);
-    if (!alreadyListed) events.push({ date: monthlyDate(start, debt.paymentDay), type: 'debt', title: debt.name, amount: money(debt.minimum, debt.currency) });
-  });
-  activeGoals().filter(goal => goal.due >= start && goal.due <= end).forEach(goal => events.push({ date: goal.due, type: 'goal', title: goal.name, amount: money(goal.target, goal.currency) }));
-  activeSinkingFunds().filter(fund => fund.due >= start && fund.due <= end).forEach(fund => events.push({ date: fund.due, type: 'fund', title: fund.name, amount: money(fund.target, fund.currency) }));
-  const payday = Number(state.settings.paydayDay);
-  if (payday) events.push({ date: monthlyDate(start, payday), type: 'income', title: 'Expected payday', amount: '' });
-  return events.sort((a, b) => a.date.localeCompare(b.date));
-}
-
-function calendarHtml(month) {
-  const first = dateObject(`${month}-01`);
-  const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-  const offset = (first.getDay() + 6) % 7;
-  const events = calendarEventsFor(month);
-  const cells = Array.from({ length: offset }, () => '<div class="calendarDay empty"></div>');
-  for (let day = 1; day <= days; day += 1) {
-    const date = `${month}-${String(day).padStart(2, '0')}`;
-    const dayEvents = events.filter(event => event.date === date);
-    cells.push(`<div class="calendarDay${date === today() ? ' today' : ''}${dayEvents.length ? ' hasEvent' : ''}"><b>${day}</b><div>${dayEvents.slice(0, 3).map(event => `<i class="${event.type}" title="${esc(event.title)}"></i>`).join('')}</div></div>`);
-  }
-  return `<div class="calendarWeek"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div><div class="calendarGrid">${cells.join('')}</div>`;
-}
-
-function moveCalendar(direction) {
-  if (!calendarMonth) calendarMonth = monthKey();
-  calendarMonth = monthKey(addMonths(`${calendarMonth}-01`, direction));
-  render();
-}
-
-function runwayHtml(metrics) {
-  const essentials = Object.entries(state.budgets).filter(([category]) => ESSENTIAL_CATEGORIES.includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0)
-    || state.recurring.filter(item => item.active !== false && item.kind === 'expense' && ESSENTIAL_CATEGORIES.includes(item.category)).reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
-  if (!(essentials > 0)) return '<div class="friendlyEmpty"><b>Add essential category limits first</b><span>Housing, food, transport, bills and health are used to calculate your runway.</span><button class="secondary compact" onclick="showPage(\'plan\');openBudget()">Set essentials</button></div>';
-  const protectedCash = Math.max(0, metrics.cashUSD - metrics.goalSavedUSD - metrics.sinkingSavedUSD);
-  const scenarios = [
-    ['Current free cash', protectedCash, 'cash'],
-    ['If income falls 25%', Math.max(0, protectedCash + metrics.incomeUSD * .75), 'caution'],
-    ['Unexpected cost', Math.max(0, protectedCash - usd(500, state.settings.base)), 'shock']
-  ];
-  const currentMonths = protectedCash / essentials;
-  return `<div class="runwayTop"><div class="runwayGauge" style="--runway:${Math.min(100, currentMonths / 6 * 100)}%"><div><b>${currentMonths.toFixed(1)}</b><span>months</span></div></div><div><h3>${currentMonths >= 3 ? 'A useful cushion' : currentMonths >= 1 ? 'Build the next month' : 'Cash is tight'}</h3><p>Based on ${baseMoney(essentials)} of essentials each month. Goal and sinking-fund money stays protected.</p></div></div><div class="scenarioList">${scenarios.map(([label, cash, tone]) => `<div class="${tone}"><span>${label}</span><b>${(cash / essentials).toFixed(1)} months</b></div>`).join('')}</div><button class="secondary wide" onclick="openRunwayWhatIf()">Try another income drop or expense</button>`;
-}
-
-function monthCloseHtml(metrics) {
-  const checkup = currentCheckup();
-  const closed = Boolean(checkup?.closedAt);
-  const priorKey = monthKey(addMonths(monthStart(), -1));
-  const priorTx = state.transactions.filter(transaction => transaction.date.startsWith(priorKey) && transaction.type !== 'transfer' && transaction.category !== 'Balance adjustment');
-  const priorSpent = priorTx.filter(transaction => transaction.type === 'expense').reduce((sum, transaction) => sum + usd(transaction.amount, transaction.currency), 0);
-  const debtPaid = metrics.monthTx.filter(transaction => transaction.debtId).reduce((sum, transaction) => sum + usd(transaction.debtPrincipal || 0, transaction.currency), 0);
-  const saved = state.contributions.filter(item => item.date.startsWith(monthKey())).reduce((sum, item) => sum + usd(item.amount, item.currency), 0);
-  const comparison = priorSpent > 0 ? (metrics.spentUSD - priorSpent) / priorSpent * 100 : null;
-  return `<div class="closeTop"><div><h3>${closed ? `${formatDate(monthStart(), { month: 'long' })} closed ‚úì` : 'Finish with clean numbers'}</h3><p>${closed ? `Next focus: ${esc(checkup.focus || 'Keep the plan simple.')}` : 'Review the month without blame. Keep one lesson and one next step.'}</p></div><span class="closeSeal">${closed ? '‚úì' : monthKey().slice(5)}</span></div><div class="closeStats"><div><span>Spent</span><b>${baseMoney(metrics.spentUSD)}</b><small>${comparison == null ? 'First comparison month' : `${Math.abs(comparison).toFixed(0)}% ${comparison <= 0 ? 'less' : 'more'} than last month`}</small></div><div><span>Debt cleared</span><b>${baseMoney(debtPaid)}</b><small>Principal this month</small></div><div><span>Goals added</span><b>${baseMoney(saved)}</b><small>Recorded contributions</small></div></div><div class="buttonRow">${checkup?.balancesCheckedAt ? '' : '<button class="secondary" onclick="openMonthlyCheckup()">Check balances first</button>'}<button class="primary" onclick="openMonthClose()">${closed ? 'Update focus' : 'Close this month'}</button></div>`;
-}
-
-function openMoneyDate() {
-  const review = currentWeeklyReview();
-  openModal('Our weekly money date', `<form id="moneyDateForm" class="form"><div class="friendlyNote">No blame and no long meeting. Agree on one win and one useful action for the next seven days.</div><label>What went well?<textarea id="moneyDateWin" maxlength="300" placeholder="We recorded our spending‚Ä¶">${esc(review?.win || '')}</textarea></label><label>Our one next action<textarea id="moneyDateAction" maxlength="300" required placeholder="Move money to the emergency goal‚Ä¶">${esc(review?.nextAction || '')}</textarea></label><button class="primary" type="submit">Reviewed together ‚úì</button></form>`);
-  $('moneyDateForm').onsubmit = async event => {
-    event.preventDefault();
-    const item = { id: review?.id || crypto.randomUUID(), weekStart: weekStart(), reviewedBy: currentUser.id, win: $('moneyDateWin').value.trim(), nextAction: $('moneyDateAction').value.trim(), completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-    const index = state.weeklyReviews.findIndex(existing => existing.id === item.id);
-    if (index >= 0) state.weeklyReviews[index] = item; else state.weeklyReviews.push(item);
-    await saveOperation({ action: 'moneyDate', row: { id: item.id, household_id: householdId, week_start: item.weekStart, reviewed_by: currentUser.id, win: item.win || null, next_action: item.nextAction, completed_at: item.completedAt, updated_at: item.updatedAt } }, { message: 'Weekly money date complete ‚úì', celebrate: true });
-  };
-}
-
-function openRunwayWhatIf() {
-  openModal('Emergency what-if', `<div class="form"><label>Monthly income reduction (%)<input id="runwayDrop" type="range" min="0" max="100" step="5" value="25"><span id="runwayDropLabel" class="rangeLabel">25%</span></label><label>Unexpected expense (${esc(state.settings.base)})<input id="runwayExpense" type="number" min="0" step="50" value="500"></label><div id="runwayResult" class="friendlyNote"></div><button class="primary" onclick="closeModal()">Done</button></div>`);
-  const update = () => {
-    const metrics = moneyMetrics();
-    const essentials = Object.entries(state.budgets).filter(([category]) => ESSENTIAL_CATEGORIES.includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
-    const drop = +$('runwayDrop').value;
-    const cash = Math.max(0, metrics.cashUSD - metrics.goalSavedUSD - metrics.sinkingSavedUSD - usd(+$('runwayExpense').value || 0, state.settings.base));
-    const monthlyGap = Math.max(0, essentials - metrics.incomeUSD * (1 - drop / 100));
-    const months = monthlyGap > 0 ? cash / monthlyGap : Infinity;
-    $('runwayDropLabel').textContent = `${drop}%`;
-    $('runwayResult').innerHTML = monthlyGap <= 0 ? 'Reduced income still covers the current essential plan.' : `Free cash could cover the monthly shortfall for <b>${months.toFixed(1)} months</b>.`;
-  };
-  $('runwayDrop').oninput = update; $('runwayExpense').oninput = update; update();
-}
-
-function openMonthClose() {
-  const existing = currentCheckup();
-  openModal('Close the month', `<form id="monthCloseForm" class="form"><div class="friendlyNote">Closing a month does not lock or delete anything. It simply saves your lesson and next focus.</div><label>What should we remember?<textarea id="monthCloseNote" maxlength="300" placeholder="We spent less on takeaways‚Ä¶">${esc(existing?.note || '')}</textarea></label><label>One focus for next month<textarea id="monthCloseFocus" maxlength="300" required placeholder="Build the car repair fund‚Ä¶">${esc(existing?.focus || '')}</textarea></label><button class="primary" type="submit">Close this month ‚úì</button></form>`);
-  $('monthCloseForm').onsubmit = async event => {
-    event.preventDefault();
-    const item = { id: existing?.id || crypto.randomUUID(), month: monthStart(), accountCount: existing?.accountCount || 0, adjustmentUSD: existing?.adjustmentUSD || 0, note: $('monthCloseNote').value.trim(), focus: $('monthCloseFocus').value.trim(), closedAt: new Date().toISOString(), balancesCheckedAt: existing?.balancesCheckedAt || '', completedBy: currentUser.id, completedAt: existing?.completedAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
-    const index = state.checkups.findIndex(checkup => checkup.id === item.id);
-    if (index >= 0) state.checkups[index] = item; else state.checkups.push(item);
-    await saveOperation({ action: 'checkup', row: { id: item.id, household_id: householdId, month: item.month, completed_by: currentUser.id, account_count: item.accountCount, adjustment_total_usd: item.adjustmentUSD, note: item.note || null, focus: item.focus, closed_at: item.closedAt, balances_checked_at: item.balancesCheckedAt || null, completed_at: item.completedAt, updated_at: item.updatedAt } }, { message: 'Month closed together ‚úì', celebrate: true });
-  };
-}
-
-function sinkingFundRow(fund) {
-  return { id: fund.id, household_id: householdId, created_by: currentUser.id, name: fund.name, target_amount: fund.target, saved_amount: fund.saved, currency: fund.currency, due_date: fund.due || null, last_reserved_month: fund.lastReservedMonth || null, note: fund.note || null, active: fund.active !== false, updated_at: new Date().toISOString() };
-}
-
-function openSinkingFundForm(id = null) {
-  const fund = id ? state.sinkingFunds.find(item => item.id === id) : null;
-  openModal(fund ? 'Edit sinking fund' : 'Add sinking fund', `<form id="sinkingFundForm" class="form"><div class="friendlyNote">Use this for expected costs such as annual insurance, travel, gifts, repairs or medical expenses‚Äînot long-term dreams already tracked in Goals.</div><label>Name<input id="fundName" required maxlength="100" value="${esc(fund?.name || '')}" placeholder="Annual insurance"></label><div class="fieldRow"><label>Target amount<input id="fundTarget" type="number" min="0.01" step="0.01" required value="${fund?.target ?? ''}"></label><label>Currency<select id="fundCurrency">${currencyOptions(fund?.currency || state.settings.lastCurrency)}</select></label></div><label>Already set aside<input id="fundSaved" type="number" min="0" step="0.01" required value="${fund?.saved ?? 0}"></label><label>Needed by<input id="fundDue" type="date" min="${today()}" value="${fund?.due || ''}"></label><label>Note<input id="fundNote" maxlength="300" value="${esc(fund?.note || '')}" placeholder="Optional"></label><button class="primary" type="submit">Save sinking fund</button></form>`);
-  $('sinkingFundForm').onsubmit = async event => {
-    event.preventDefault();
-    const item = { id: fund?.id || crypto.randomUUID(), name: $('fundName').value.trim(), target: +$('fundTarget').value, saved: +$('fundSaved').value || 0, currency: $('fundCurrency').value, due: $('fundDue').value, lastReservedMonth: fund?.lastReservedMonth || '', note: $('fundNote').value.trim(), active: true, createdAt: fund?.createdAt || new Date().toISOString() };
-    if (item.saved > item.target) item.saved = item.target;
-    rememberCurrency(item.currency);
-    const index = state.sinkingFunds.findIndex(existing => existing.id === item.id);
-    if (index >= 0) state.sinkingFunds[index] = item; else state.sinkingFunds.push(item);
-    await saveOperation({ action: 'upsert', table: 'sinking_funds', row: sinkingFundRow(item) }, { message: 'Sinking fund saved ‚úì' });
-  };
-}
-
-async function reserveSinkingFund(id) {
-  const fund = state.sinkingFunds.find(item => item.id === id);
-  if (!fund || fund.lastReservedMonth === monthStart()) return;
-  const amountUSD = Math.min(sinkingMonthlyNeedUSD(fund), usd(fund.target - fund.saved, fund.currency));
-  fund.saved = Math.min(fund.target, fund.saved + fromUSD(amountUSD, fund.currency));
-  fund.lastReservedMonth = monthStart();
-  await saveOperation({ action: 'upsert', table: 'sinking_funds', row: sinkingFundRow(fund) }, { close: false, message: `${fund.name} set-aside recorded ‚úì`, celebrate: fund.saved + .005 >= fund.target });
-}
-
-async function archiveSinkingFund(id) {
-  const fund = state.sinkingFunds.find(item => item.id === id);
-  if (!fund || !confirm(`Archive ${fund.name}? Its saved history will remain in backups.`)) return;
-  fund.active = false;
-  await saveOperation({ action: 'upsert', table: 'sinking_funds', row: sinkingFundRow(fund) }, { close: false, message: 'Sinking fund archived' });
-}
-
-function render() {
-  if (!$('app')) return;
-  const metrics = moneyMetrics();
-  const buckets = allocationBuckets(metrics);
-  const safe = safeSpendPlan(metrics, buckets);
-  const name = state.member.displayName || 'there';
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  $('greeting').textContent = `Our DHAN ¬∑ ${name}`;
-  $('todayDate').textContent = new Intl.DateTimeFormat('en', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
-  $('todayHello').textContent = `${greeting}, ${name}`;
-  $('trackingBadge').textContent = pending().length ? 'Saving offline' : 'Together ‚úì';
-  $('trackingBadge').className = `statusBadge${pending().length ? ' warn' : ''}`;
-
-  $('safeToday').textContent = safe.ready ? baseMoney(safe.dailyUSD) : 'Not ready yet';
-  $('safeWeek').textContent = safe.ready ? baseMoney(safe.weeklyUSD) : '‚Äî';
-  $('nextPayday').textContent = safe.payday ? formatDate(safe.payday.date, { day: 'numeric', month: 'short' }) : 'Not set';
-  $('safeProtected').textContent = safe.ready ? baseMoney(safe.protectedUSD) : '‚Äî';
-  $('safeBuffer').textContent = safe.ready ? baseMoney(safe.bufferUSD) : '‚Äî';
-  $('safeMessage').textContent = safe.ready
-    ? safe.shortfallUSD > .005
-      ? `Pause optional spending for now. Protected commitments are ${baseMoney(safe.shortfallUSD)} above free cash.`
-      : safe.remainingUSD + .005 < safe.wantsRemainingUSD
-        ? `Your real available cash‚Äînot only the 10% allowance‚Äîsets this safer limit until payday.`
-        : `${baseMoney(safe.remainingUSD)} of the 10% wants allowance is safely available until payday.`
-    : metrics.incomeUSD > 0 ? 'Set the salary day in Settings to calculate a safe daily fun amount.' : 'Add salary and set the salary day to calculate this safely.';
-  $('todayCash').textContent = baseMoney(metrics.cashUSD);
-  $('todayReserved').textContent = baseMoney(metrics.goalSavedUSD + metrics.sinkingSavedUSD);
-  $('todaySurplus').textContent = baseMoney(metrics.surplusUSD);
-  $('todayMoneyHighlight').innerHTML = todayMoneyHighlightHtml(metrics);
-  $('todayAllocation').innerHTML = buckets.map(bucket => `<div class="bucket ${bucket.key}"><span>${bucket.pct}% ${esc(bucket.label)}</span><b>${baseMoney(bucket.target)}</b><small>${baseMoney(bucket.actual)} used</small></div>`).join('');
-  $('monthlyCheckupCard').innerHTML = monthlyCheckupHtml();
-
-  const currentRecurringMonth = monthStart();
-  const dueItems = state.recurring.filter(item => item.active !== false).sort((a, b) => a.day - b.day);
-  const currentMonthLastDay = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-  $('dueList').innerHTML = dueItems.length ? dueItems.map(item => {
-    const done = state.transactions.some(t => t.recurringItemId === item.id && t.recurringMonth === currentRecurringMonth);
-    const dueDate = `${monthKey()}-${String(Math.min(item.day, currentMonthLastDay)).padStart(2, '0')}`;
-    return `<div class="dueItem${done ? ' done' : ''}"><div class="dueIcon">${done ? '‚úì' : item.kind === 'income' ? '‚Üë' : '‚óã'}</div><div class="dueBody"><b>${esc(item.name)}</b><span>${money(item.amount, item.currency)} ¬∑ due ${formatDate(dueDate, { day: 'numeric', month: 'short' })}</span></div><button ${done ? 'disabled' : `onclick="confirmRecurring('${item.id}')"`}>${done ? 'Done' : 'Confirm'}</button></div>`;
-  }).join('') : '<div class="card friendlyEmpty"><b>No monthly checklist yet</b><span>Add salary, rent or bills once, then confirm them each month.</span><button class="secondary compact" onclick="openRecurringForm()">Ôºã Add regular item</button></div>';
-
-  const sortedTransactions = [...state.transactions].sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
-  $('recentList').innerHTML = sortedTransactions.length ? sortedTransactions.slice(0, 6).map(t => transactionHtml(t)).join('') : '<div class="hint" style="padding:16px 0">No activity yet. Add salary or a spend to begin.</div>';
-
-  $('netWorth').textContent = baseMoney(metrics.netWorthUSD);
-  $('moneyCash').textContent = baseMoney(metrics.cashUSD);
-  $('moneyAssets').textContent = baseMoney(metrics.assetsUSD);
-  $('moneyDebt').textContent = baseMoney(metrics.debtUSD);
-  $('moneySpendable').textContent = baseMoney(metrics.spendableUSD);
-  $('netWorthMood').textContent = metrics.netWorthUSD < 0 ? 'üßó' : metrics.debtUSD > 0 ? 'üå±' : 'üå≥';
-  $('wealthMessage').textContent = metrics.netWorthUSD < 0
-    ? 'Every principal payment lifts this number. You are moving, not stuck.'
-    : metrics.debtUSD > 0 ? 'Your assets are growing while you work toward debt freedom.'
-      : metrics.netWorthUSD > 0 ? 'You are building real momentum together.' : 'Add your real balances to see your starting point.';
-  $('actualChartButton').classList.toggle('active', wealthChartMode === 'actual');
-  $('projectionChartButton').classList.toggle('active', wealthChartMode === 'projection');
-  $('wealthChart').innerHTML = wealthChartMode === 'actual' ? actualChartHtml(metrics) : projectionChartHtml(metrics);
-
-  const accountCards = activeAccounts().map(account => {
-    const native = accountBalanceNative(account);
-    const converted = account.currency === state.settings.base ? '' : baseMoney(usd(native, account.currency));
-    return `<div class="accountCard"><div class="cardTop"><div><span class="accountBadge">${esc(accountTypeLabel(account.type))}</span><h3>${esc(account.name)}</h3><div class="meta">Since ${esc(account.openingDate)}${account.notes ? ` ¬∑ ${esc(account.notes)}` : ''}</div></div><div class="value">${money(native, account.currency)}${converted ? `<div class="meta">${converted}</div>` : ''}</div></div><div class="cardActions"><button class="linkBtn" onclick="openAccountStatement('${account.id}')">Statement</button><button class="linkBtn" onclick="reconcileAccount('${account.id}')">Correct balance</button><button class="linkBtn" onclick="openAccountForm('${account.id}')">Edit</button><button class="dangerLink" onclick="archiveAccount('${account.id}')">Archive</button></div></div>`;
-  });
-  if (Math.abs(metrics.unassignedCashUSD) > .005 || state.transactions.some(t => !t.accountId && t.type !== 'transfer')) {
-    const count = state.transactions.filter(t => !t.accountId && t.type !== 'transfer').length;
-    accountCards.push(`<div class="accountCard unassigned"><div class="cardTop"><div><span class="accountBadge">Not linked</span><h3>Older entries</h3><div class="meta">${count} record${count === 1 ? '' : 's'} without an account. They still count in Money available.</div></div><div class="value">${baseMoney(metrics.unassignedCashUSD)}</div></div></div>`);
-  }
-  $('accountList').innerHTML = accountCards.length ? accountCards.join('') : '<div class="card friendlyEmpty"><b>Start with the bank</b><span>Add today‚Äôs real balance, then choose this account for salary and spending.</span><button class="secondary compact" onclick="openAccountForm()">Ôºã Add account</button></div>';
-
-  $('assetTotal').textContent = baseMoney(metrics.assetsUSD);
-  $('marketStrip').innerHTML = ['XAU', 'XAG', 'BTC', 'ETH'].map(symbol => {
-    const price = state.prices[symbol];
-    return `<div class="quote"><span>${symbol}${['XAU', 'XAG'].includes(symbol) ? ' / oz' : ''}</span><b>${price ? money(price.usd, 'USD') : '‚Äî'}</b></div>`;
-  }).join('');
-  $('assetList').innerHTML = state.assets.length ? state.assets.map(asset => {
-    const value = assetUSD(asset);
-    const missing = ['metal', 'crypto'].includes(asset.type) && !state.prices[asset.symbol];
-    return `<div class="assetCard"><div class="cardTop"><div><h3>${esc(asset.name)}</h3><div class="meta">${esc(marketLabel(asset))}${asset.notes ? ` ¬∑ ${esc(asset.notes)}` : ''}</div>${asset.type === 'cash' ? '<div class="meta legacyNote">Legacy cash asset: move this to Accounts when convenient.</div>' : ''}${missing ? '<div class="meta">Waiting for a live price; excluded from total for now.</div>' : ''}</div><div class="value">${baseMoney(value)}</div></div><div class="cardActions"><button class="linkBtn" onclick="openAssetForm('${asset.id}')">Edit</button><button class="dangerLink" onclick="deleteAsset('${asset.id}')">Delete</button></div></div>`;
-  }).join('') : '<div class="card hint">No other assets yet. Bank balances belong in Accounts above.</div>';
-  const suggestions = buildSuggestions(metrics, buckets);
-  $('moneySuggestions').innerHTML = suggestions.map(([title, body], index) => `<div class="adviceCard"><span class="adviceNumber">${index + 1}</span><div><h3>${esc(title)}</h3><p>${esc(body)}</p></div></div>`).join('');
-
-  $('planIncome').textContent = metrics.incomeUSD > 0 ? `${baseMoney(metrics.incomeUSD)} income` : 'Add salary';
-  $('planIncome').className = `statusBadge${metrics.incomeUSD > 0 ? '' : ' warn'}`;
-  $('planAllocation').innerHTML = buckets.map(bucket => `<div class="allocationItem ${bucket.key}"><div class="allocationHeading"><span class="allocationColor"></span><b>${bucket.pct}% ${esc(bucket.label)}</b></div><div class="allocationTarget">${baseMoney(bucket.target)}</div><div class="allocationActual">Used ${baseMoney(bucket.actual)}</div></div>`).join('');
-  $('paydayAssistant').innerHTML = paydayAssistantHtml(metrics, buckets);
-  $('previousMonthPlan').innerHTML = previousMonthPlanHtml();
-
-  const essentialsBudgetUSD = Object.entries(state.budgets).filter(([category]) => ESSENTIAL_CATEGORIES.includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
-  const emergencyThreeUSD = essentialsBudgetUSD * 3;
-  const emergencySixUSD = essentialsBudgetUSD * 6;
-  const emergencyGoal = activeGoals().find(goal => /emergency/i.test(goal.name));
-  const emergencySavedUSD = emergencyGoal ? usd(emergencyGoal.saved, emergencyGoal.currency) : 0;
-  $('emergencyFundCard').innerHTML = `<div class="emergencyTop"><div class="emergencyIcon">‚òÇÔ∏è</div><div><h3>Emergency fund</h3><p>Based on essential category limits of ${baseMoney(essentialsBudgetUSD)} a month. Start with 3 months, then grow toward 6.</p></div></div><div class="emergencyNumbers"><div><span>First target ¬∑ 3 months</span><b>${baseMoney(emergencyThreeUSD)}</b></div><div><span>Strong target ¬∑ 6 months</span><b>${baseMoney(emergencySixUSD)}</b></div></div><div class="progress" style="margin-top:11px"><i style="width:${Math.min(100, emergencySavedUSD / Math.max(.01, emergencyThreeUSD) * 100)}%"></i></div><div class="cardActions" style="margin-top:10px">${emergencyGoal ? `<button class="linkBtn" onclick="openGoalContribution('${emergencyGoal.id}')">Ôºã Add saving</button>` : `<button class="linkBtn" onclick="createEmergencyGoal()">Create this goal</button>`}</div>`;
-
-  const debtPlan = simulateDebtPlan(metrics.incomeUSD);
-  document.querySelectorAll('#debtStrategyTabs button').forEach(button => button.classList.toggle('active', button.dataset.strategy === state.settings.debtStrategy));
-  $('debtPlanSummary').innerHTML = debtPlanSummaryHtml(debtPlan);
-  const debts = activeDebts().filter(debt => debt.active !== false || debt.remaining > 0);
-  $('debtList').innerHTML = debts.length ? debts.map(debt => {
-    const progress = Math.max(0, Math.min(100, (1 - debt.remaining / Math.max(debt.original, .01)) * 100));
-    const payoffMonth = debtPlan.paidOffAt[debt.id];
-    const allocation = debtPlan.firstAllocations.find(item => item.id === debt.id)?.amountUSD || 0;
-    const estimateText = debt.remaining <= .005 ? 'Cleared' : payoffMonth ? `${payoffDateLabel(payoffMonth)} ¬∑ ${baseMoney(allocation)} suggested this month` : !Number.isFinite(debtPlan.months) && debtPlan.monthlyBudgetUSD > 0 ? 'Current payment does not clear the growing interest' : 'Add salary or a minimum payment for an estimate';
-    return `<div class="debtCard"><div class="cardTop"><div><h3>${esc(debt.name)}</h3><div class="meta">${money(debt.remaining, debt.currency)} left of ${money(debt.original, debt.currency)}${debt.apr ? ` ¬∑ ${debt.apr}% APR` : ''}</div><div class="meta">${esc(estimateText)}</div></div><span class="pill${debt.remaining <= 0 ? '' : ' warn'}">${Math.round(progress)}% paid</span></div><div class="miniBar"><i style="width:${progress}%"></i></div><div class="cardActions">${debt.remaining > 0 ? `<button class="linkBtn" onclick="openDebtPayment('${debt.id}')">Make payment</button>` : ''}<button class="linkBtn" onclick="openDebtForm('${debt.id}')">Edit</button>${debt.remaining <= 0 ? `<button class="dangerLink" onclick="archiveDebt('${debt.id}')">Archive</button>` : ''}</div></div>`;
-  }).join('') : '<div class="card friendlyEmpty"><b>No active debts</b><span>Add a balance to make a clear payoff plan.</span><button class="secondary compact" onclick="openDebtForm()">Ôºã Add debt</button></div>';
-
-  const goals = activeGoals();
-  $('goalList').innerHTML = goals.length ? goals.map(goal => {
-    const progress = Math.max(0, Math.min(100, goal.saved / Math.max(goal.target, .01) * 100));
-    const latest = state.contributions.filter(c => c.goalId === goal.id).sort((a, b) => b.date.localeCompare(a.date))[0];
-    return `<div class="goalCard"><div class="cardTop"><div><h3>${esc(goal.name)}</h3><div class="meta">${money(goal.saved, goal.currency)} of ${money(goal.target, goal.currency)}${goal.due ? ` ¬∑ target ${formatDate(goal.due)}` : ''}</div>${latest ? `<div class="meta">Last added ${money(latest.amount, latest.currency)} on ${formatDate(latest.date)}</div>` : ''}</div><span class="pill">${Math.round(progress)}%</span></div><div class="miniBar"><i style="width:${progress}%"></i></div><div class="cardActions"><button class="linkBtn" onclick="openGoalContribution('${goal.id}')">Ôºã Add saving</button><button class="linkBtn" onclick="openGoalHistory('${goal.id}')">History</button><button class="linkBtn" onclick="openGoalForm('${goal.id}')">Edit</button><button class="dangerLink" onclick="archiveGoal('${goal.id}')">Archive</button></div></div>`;
-  }).join('') : '<div class="card friendlyEmpty"><b>No active goals</b><span>Add one clear target and celebrate every contribution.</span><button class="secondary compact" onclick="openGoalForm()">Ôºã Add goal</button></div>';
-
-  const funds = state.sinkingFunds.filter(fund => fund.active !== false);
-  const monthlyFundNeedUSD = activeSinkingFunds().reduce((sum, fund) => sum + sinkingMonthlyNeedUSD(fund), 0);
-  $('sinkingFundSummary').innerHTML = funds.length ? `<div><span>Set aside each month</span><b>${baseMoney(monthlyFundNeedUSD)}</b></div><div><span>Already protected</span><b>${baseMoney(metrics.sinkingSavedUSD)}</b></div>` : '';
-  $('sinkingFundList').innerHTML = funds.length ? funds.map(fund => {
-    const progress = Math.max(0, Math.min(100, fund.saved / Math.max(.01, fund.target) * 100));
-    const monthly = sinkingMonthlyNeedUSD(fund);
-    const reserved = fund.lastReservedMonth === monthStart();
-    return `<div class="fundCard"><div class="cardTop"><div><h3>${esc(fund.name)}</h3><div class="meta">${money(fund.saved, fund.currency)} of ${money(fund.target, fund.currency)}${fund.due ? ` ¬∑ needed ${formatDate(fund.due)}` : ''}</div><div class="meta">${fund.saved + .005 >= fund.target ? 'Fully prepared' : `${baseMoney(monthly)} a month keeps this on track`}</div></div><span class="pill${reserved ? '' : ' warn'}">${reserved ? 'Set aside ‚úì' : `${Math.round(progress)}%`}</span></div><div class="miniBar"><i style="width:${progress}%"></i></div><div class="cardActions">${!reserved && fund.saved + .005 < fund.target ? `<button class="linkBtn" onclick="reserveSinkingFund('${fund.id}')">Reserve ${baseMoney(monthly)}</button>` : ''}<button class="linkBtn" onclick="openSinkingFundForm('${fund.id}')">Edit</button><button class="dangerLink" onclick="archiveSinkingFund('${fund.id}')">Archive</button></div></div>`;
-  }).join('') : '<div class="card friendlyEmpty"><b>Turn future surprises into small monthly amounts</b><span>Start with one predictable cost such as insurance, travel or repairs.</span><button class="secondary compact" onclick="openSinkingFundForm()">Ôºã Add sinking fund</button></div>';
-
-  $('budgetList').innerHTML = Object.keys(state.budgets).length ? Object.entries(state.budgets).map(([category, budget]) => {
-    const spent = metrics.monthTx.filter(t => t.type === 'expense' && t.category === category).reduce((sum, t) => sum + usd(t.amount, t.currency), 0);
-    const limit = usd(budget.amount, budget.currency);
-    const ratio = Math.min(100, spent / Math.max(.01, limit) * 100);
-    return `<div class="goalCard"><div class="cardTop"><div><h3>${esc(category)}</h3><div class="meta">${baseMoney(spent)} spent of ${baseMoney(limit)}</div></div><span class="pill${spent > limit ? ' danger' : ''}">${Math.round(ratio)}%</span></div><div class="miniBar"><i style="width:${ratio}%"></i></div></div>`;
-  }).join('') : '<div class="card hint">No category budget yet.</div>';
-
-  const recurringItems = state.recurring.filter(item => item.active !== false).sort((a, b) => a.day - b.day);
-  $('recurringList').innerHTML = recurringItems.length ? recurringItems.map(item => `<div class="recurringCard"><div class="cardTop"><div><h3>${esc(item.name)}</h3><div class="meta">${item.kind === 'income' ? 'Income' : 'Expense'} ¬∑ ${money(item.amount, item.currency)} ¬∑ day ${item.day}${item.accountId ? ` ¬∑ ${esc(accountName(item.accountId))}` : ''}</div></div><span class="pill">Monthly</span></div><div class="cardActions"><button class="linkBtn" onclick="openRecurringForm('${item.id}')">Edit</button><button class="dangerLink" onclick="archiveRecurring('${item.id}')">Archive</button></div></div>`).join('') : '<div class="card hint">No regular items yet.</div>';
-
-  document.querySelectorAll('#cashflowTabs button').forEach(button => button.classList.toggle('active', Number(button.dataset.days) === cashflowDays));
-  $('cashflowChart').innerHTML = cashflowChartHtml(cashflowForecast(cashflowDays));
-  renderStatement();
-  document.querySelectorAll('#timelineFilters button').forEach(button => button.classList.toggle('active', button.dataset.filter === timelineFilter));
-  $('timelineList').innerHTML = timelineHtml();
-
-  if (!calendarMonth) calendarMonth = monthKey();
-  $('moneyDateCard').innerHTML = moneyDateHtml(metrics);
-  $('togetherBadge').textContent = currentWeeklyReview() ? 'Reviewed ‚úì' : 'This week';
-  $('togetherBadge').className = `statusBadge${currentWeeklyReview() ? '' : ' warn'}`;
-  $('calendarTitle').textContent = formatDate(`${calendarMonth}-01`, { month: 'long', year: 'numeric' });
-  $('moneyCalendar').innerHTML = calendarHtml(calendarMonth);
-  const agenda = calendarEventsFor(calendarMonth);
-  $('calendarAgenda').innerHTML = agenda.length ? agenda.map(event => `<div class="agendaItem"><time>${formatDate(event.date, { day: 'numeric', month: 'short' })}</time><i class="${event.type}"></i><div><b>${esc(event.title)}</b><span>${esc(event.amount || (event.type === 'income' ? 'Payday' : ''))}</span></div></div>`).join('') : '<div class="card hint">No planned money events this month.</div>';
-  $('runwayCard').innerHTML = runwayHtml(metrics);
-  $('monthCloseCard').innerHTML = monthCloseHtml(metrics);
-
-  $('baseCurrency').value = state.settings.base;
-  $('paydayDay').value = state.settings.paydayDay || '';
-  $('rateAED').value = state.settings.rates.AED;
-  $('rateMVR').value = state.settings.rates.MVR;
-  $('rateINR').value = state.settings.rates.INR;
-  renderStatementEmailSettings();
-  renderDataSafetyStatus();
-  updateSakhiTourLauncher();
-  queueMicrotask(() => syncAllInlineControls());
-}
-
-function accountSelectOptions(selected = '', includeEmpty = true) {
-  return `${includeEmpty ? '<option value="">Not linked to an account</option>' : ''}${activeAccounts().map(account => `<option value="${account.id}"${account.id === selected ? ' selected' : ''}>${esc(account.name)} ¬∑ ${account.currency}</option>`).join('')}`;
-}
-
-function transactionRow(transaction) {
-  return {
-    id: transaction.id,
-    household_id: householdId,
-    user_id: currentUser.id,
-    type: transaction.type,
-    amount: transaction.amount,
-    currency: transaction.currency,
-    category: transaction.category,
-    paid_by: transaction.paidBy,
-    account_id: transaction.accountId || null,
-    account: transaction.account || null,
-    to_account_id: transaction.toAccountId || null,
-    to_amount: transaction.toAmount == null ? null : transaction.toAmount,
-    debt_id: transaction.debtId || null,
-    debt_principal: transaction.debtPrincipal == null ? null : transaction.debtPrincipal,
-    debt_interest: transaction.debtId ? Number(transaction.debtInterest || 0) : null,
-    recurring_item_id: transaction.recurringItemId || null,
-    recurring_month: transaction.recurringItemId ? transaction.recurringMonth || monthStart(transaction.date) : null,
-    date: transaction.date,
-    note: transaction.note || null,
-    updated_at: new Date().toISOString()
-  };
-}
-
-function quickNote(category) {
-  return QUICK_NOTE_SUGGESTIONS[category] || '';
-}
-
-function openQuickExpense() {
-  openQuickTransaction('expense');
-}
-
-function openQuickIncome(options = {}) {
-  openQuickTransaction('income', options);
-}
-
-function openQuickTransaction(type, options = {}) {
-  const accounts = activeAccounts();
-  const isIncome = type === 'income';
-  const rememberedAccountId = isIncome ? state.settings.lastIncomeAccountId : state.settings.lastExpenseAccountId;
-  const rememberedAccount = accounts.some(a => a.id === rememberedAccountId) ? rememberedAccountId : accounts[0]?.id || '';
-  const rememberedCategory = isIncome
-    ? (INCOME_CATEGORIES.includes(options.category) ? options.category : 'Salary')
-    : (EXPENSE_CATEGORIES.some(([category]) => category === state.settings.lastExpenseCategory) ? state.settings.lastExpenseCategory : 'Food');
-  const categories = isIncome ? INCOME_CATEGORIES.map(category => [category, INCOME_CATEGORY_ICONS[category]]) : EXPENSE_CATEGORIES;
-  const suggestedNote = options.note || quickNote(rememberedCategory);
-  const startingCurrency = accounts.find(a => a.id === rememberedAccount)?.currency || options.currency || state.settings.lastCurrency;
-  openModal(isIncome ? 'Add income' : 'Add spend', `<form id="quickTransactionForm" class="form quickEntryForm" data-flow-manual="true">
-    <section class="flowStep" data-flow-title="Date, amount and currency">
-      <label>Date<input id="quickDate" type="date" value="${options.date || today()}" required></label>
-      <label class="amountField">Amount<span id="quickAmountPrefix" class="amountPrefix">${esc(startingCurrency)}</span><input id="quickAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(options.amount || '')}" required></label>
-      <label>Currency<select id="quickCurrency">${currencyOptions(startingCurrency)}</select></label>
-    </section>
-    <section class="flowStep" data-flow-title="${isIncome ? 'Received in' : 'Paid from'}">
-      <label>${isIncome ? 'Which account received it?' : 'Which account paid?'}<select id="quickAccount">${accounts.length ? accounts.map(account => `<option value="${account.id}"${account.id === rememberedAccount ? ' selected' : ''}>${esc(account.name)} ¬∑ ${account.currency}</option>`).join('') : '<option value="">Not linked</option>'}</select></label>
-      ${accounts.length ? '' : '<div class="friendlyNote">You can save now and add the bank account later.</div>'}
-    </section>
-    <section class="flowStep" data-flow-title="${isIncome ? 'Income type' : 'Reason'}">
-      <label>${isIncome ? 'What type of income?' : 'What was it for?'}<select id="quickCategory">${categories.map(([category, icon]) => `<option value="${esc(category)}"${category === rememberedCategory ? ' selected' : ''}>${icon} ${esc(category)}</option>`).join('')}</select></label>
-    </section>
-    <section class="flowStep" data-flow-title="${isIncome ? 'Received by' : 'Who paid'}">
-      <label>${isIncome ? 'Who received it?' : 'Who paid?'}<select id="quickPaidBy">${peopleOptions(options.paidBy || defaultPerson())}</select></label>
-    </section>
-    <section class="flowStep" data-flow-title="Note and save">
-      <label>Short note<input id="quickNote" maxlength="160" value="${esc(suggestedNote)}" aria-describedby="quickNoteHint"><small id="quickNoteHint" class="fieldHint">Suggested from the reason‚Äîedit it or clear it.</small></label>
-      <button class="primary quickSave" type="submit">${isIncome ? 'Save income' : 'Save spend'}</button>
-    </section>
-  </form>`);
-  let category = rememberedCategory;
-  let accountId = rememberedAccount;
-  let autoNote = suggestedNote;
-  $('quickPaidBy').value = options.paidBy || defaultPerson();
-  $('quickCurrency').onchange = () => { $('quickAmountPrefix').textContent = $('quickCurrency').value; };
-  $('quickCategory').onchange = () => {
-    category = $('quickCategory').value;
-    const note = $('quickNote');
-    if (!note.value.trim() || note.value === autoNote) {
-      autoNote = quickNote(category);
-      note.value = autoNote;
-    }
-  };
-  $('quickAccount').onchange = () => {
-    accountId = $('quickAccount').value;
-    const accountCurrency = accounts.find(a => a.id === accountId)?.currency;
-    if (accountCurrency) {
-      $('quickCurrency').value = accountCurrency;
-      syncInlineOptionWheel($('quickCurrency'), false);
-    }
-    $('quickAmountPrefix').textContent = accountCurrency || $('quickCurrency').value;
-  };
-  $('quickTransactionForm').onsubmit = async event => {
-    event.preventDefault();
-    const account = accounts.find(a => a.id === accountId);
-    const date = $('quickDate').value;
-    if (account && date < account.openingDate) { toast(`Choose ${account.openingDate} or later for this account.`); return; }
-    const transaction = {
-      id: crypto.randomUUID(), type, amount: +$('quickAmount').value,
-      currency: account?.currency || $('quickCurrency').value, category, paidBy: $('quickPaidBy').value,
-      accountId: account?.id || '', account: account?.name || '', toAccountId: '', toAmount: null,
-      debtId: '', debtPrincipal: null, debtInterest: 0, recurringItemId: options.recurringItemId || '', recurringMonth: options.recurringMonth || '',
-      date, note: $('quickNote').value.trim(), createdAt: new Date().toISOString()
-    };
-    if (isIncome) state.settings.lastIncomeAccountId = transaction.accountId;
-    else {
-      state.settings.lastExpenseCategory = category;
-      state.settings.lastExpenseAccountId = transaction.accountId;
-    }
-    rememberCurrency(transaction.currency);
-    state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: isIncome ? 'Income added ‚úì' : 'Spend recorded ‚úì', celebrate: isIncome });
-    queueSalaryStatement(transaction);
-    ensureTodaySnapshot();
-  };
-}
-
-function openTransaction(type, id = null, options = {}) {
-  const existing = id ? state.transactions.find(t => t.id === id) : null;
-  if (existing?.type === 'transfer') { openTransfer(id); return; }
-  if (existing?.debtId) { openDebtPayment(existing.debtId, id); return; }
-  if (existing) type = existing.type;
-  const categories = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES.map(([category]) => category);
-  const selectedCategory = existing?.category || options.category || categories[0];
-  const selectedAccount = existing?.accountId || options.accountId || '';
-  openModal(existing ? `Edit ${type}` : type === 'income' ? 'Add income' : 'Add expense', `<form class="form" id="transactionForm" data-flow-manual="true">
-    <section class="flowStep" data-flow-title="Date, amount and currency">
-      <label>Date<input id="transactionDate" type="date" required value="${existing?.date || options.date || today()}"></label>
-      <label>Amount<input id="transactionAmount" type="number" step="0.01" min="0.01" required value="${existing?.amount ?? options.amount ?? ''}"></label>
-      <label>Currency<select id="transactionCurrency">${currencyOptions(existing?.currency || options.currency || state.settings.lastCurrency)}</select></label>
-    </section>
-    <section class="flowStep" data-flow-title="${type === 'income' ? 'Received in' : 'Paid from'}"><label>Account<select id="transactionAccount">${accountSelectOptions(selectedAccount)}</select></label>${activeAccounts().length ? '' : '<div class="friendlyNote">Add a bank or cash account later to update its balance automatically.</div>'}</section>
-    <section class="flowStep" data-flow-title="${type === 'income' ? 'Income type' : 'Reason'}"><label>${type === 'income' ? 'Income type' : 'What was it for?'}<select id="transactionCategory">${[...new Set([selectedCategory, ...categories])].map(category => `<option>${esc(category)}</option>`).join('')}</select></label></section>
-    <section class="flowStep" data-flow-title="${type === 'income' ? 'Received by' : 'Who paid'}"><label>${type === 'income' ? 'Received by' : 'Paid by'}<select id="transactionPaidBy">${peopleOptions(existing?.paidBy || options.paidBy || defaultPerson())}</select></label></section>
-    <section class="flowStep" data-flow-title="Note and save"><label>Note<input id="transactionNote" maxlength="200" value="${esc(existing?.note || options.note || '')}" placeholder="Optional"></label><button class="primary" type="submit">Save ${type}</button></section>
-  </form>`);
-  $('transactionCategory').value = selectedCategory;
-  $('transactionPaidBy').value = existing?.paidBy || options.paidBy || defaultPerson();
-  $('transactionAccount').value = selectedAccount;
-  const syncCurrency = () => {
-    const account = state.accounts.find(a => a.id === $('transactionAccount').value);
-    $('transactionCurrency').disabled = !!account;
-    if (account) $('transactionCurrency').value = account.currency;
-    syncInlineOptionWheel($('transactionCurrency'), false);
-  };
-  $('transactionAccount').onchange = syncCurrency;
-  syncCurrency();
-  $('transactionForm').onsubmit = async event => {
-    event.preventDefault();
-    const account = state.accounts.find(a => a.id === $('transactionAccount').value);
-    const date = $('transactionDate').value;
-    if (account && date < account.openingDate) { toast(`Choose ${account.openingDate} or later for ${account.name}.`); return; }
-    const transaction = {
-      id: existing?.id || crypto.randomUUID(), type, amount: +$('transactionAmount').value,
-      currency: account?.currency || $('transactionCurrency').value, category: $('transactionCategory').value,
-      paidBy: $('transactionPaidBy').value, accountId: account?.id || '', account: account?.name || '',
-      toAccountId: '', toAmount: null, debtId: '', debtPrincipal: null, debtInterest: 0,
-      recurringItemId: existing?.recurringItemId || options.recurringItemId || '',
-      recurringMonth: existing?.recurringMonth || options.recurringMonth || '',
-      date, note: $('transactionNote').value.trim(), createdAt: existing?.createdAt || new Date().toISOString()
-    };
-    rememberCurrency(transaction.currency);
-    const index = state.transactions.findIndex(t => t.id === transaction.id);
-    if (index >= 0) state.transactions[index] = transaction;
-    else state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: type === 'income' ? 'Income added ‚úì' : 'Expense saved ‚úì', celebrate: type === 'income' });
-    queueSalaryStatement(transaction);
-    ensureTodaySnapshot();
-  };
-}
-
-function openTransfer(id = null) {
-  const existing = id ? state.transactions.find(t => t.id === id && t.type === 'transfer') : null;
-  const accounts = activeAccounts();
-  if (accounts.length < 2) {
-    openModal('Transfer between accounts', `<div class="form"><div class="friendlyNote">Add at least two active accounts first. A transfer moves money without changing income, spending or net worth.</div><button class="primary" onclick="closeModal();openAccountForm()">Add another account</button></div>`);
-    return;
-  }
-  const sourceId = existing?.accountId || accounts[0].id;
-  const destinationId = existing?.toAccountId || accounts.find(a => a.id !== sourceId)?.id;
-  openModal(existing ? 'Edit transfer' : 'Transfer money', `<form class="form" id="transferForm">
-    <div class="friendlyNote">One linked transfer updates both account balances and never counts as income or spending.</div>
-    <label>From account<select id="transferFrom">${accountSelectOptions(sourceId, false)}</select></label>
-    <label>To account<select id="transferTo">${accountSelectOptions(destinationId, false)}</select></label>
-    <div class="fieldRow"><label>Amount sent <span id="transferFromCurrency"></span><input id="transferAmount" type="number" min="0.01" step="0.01" required value="${existing?.amount ?? ''}"></label><label>Amount received <span id="transferToCurrency"></span><input id="transferReceived" type="number" min="0.01" step="0.01" required value="${existing?.toAmount ?? ''}"></label></div>
-    <label>Date<input id="transferDate" type="date" required value="${existing?.date || today()}"></label>
-    <label>Note<input id="transferNote" maxlength="200" value="${esc(existing?.note || '')}" placeholder="Optional"></label>
-    <button class="primary" type="submit">Save transfer</button>
-  </form>`);
-  const updateTransferCurrencies = changed => {
-    const source = state.accounts.find(a => a.id === $('transferFrom').value);
-    const destination = state.accounts.find(a => a.id === $('transferTo').value);
-    $('transferFromCurrency').textContent = source?.currency || '';
-    $('transferToCurrency').textContent = destination?.currency || '';
-    if (source && destination && source.currency === destination.currency && (changed || !$('transferReceived').value)) {
-      $('transferReceived').value = $('transferAmount').value;
-      $('transferReceived').disabled = true;
-    } else $('transferReceived').disabled = false;
-  };
-  $('transferFrom').value = sourceId;
-  $('transferTo').value = destinationId;
-  $('transferFrom').onchange = () => updateTransferCurrencies(true);
-  $('transferTo').onchange = () => updateTransferCurrencies(true);
-  $('transferAmount').oninput = () => {
-    const source = state.accounts.find(a => a.id === $('transferFrom').value);
-    const destination = state.accounts.find(a => a.id === $('transferTo').value);
-    if (source?.currency === destination?.currency) $('transferReceived').value = $('transferAmount').value;
-  };
-  updateTransferCurrencies(false);
-  $('transferForm').onsubmit = async event => {
-    event.preventDefault();
-    const source = state.accounts.find(a => a.id === $('transferFrom').value);
-    const destination = state.accounts.find(a => a.id === $('transferTo').value);
-    if (!source || !destination || source.id === destination.id) { toast('Choose two different accounts.'); return; }
-    const date = $('transferDate').value;
-    if (date < source.openingDate || date < destination.openingDate) { toast('Choose a date after both accounts started tracking.'); return; }
-    const transaction = {
-      id: existing?.id || crypto.randomUUID(), type: 'transfer', amount: +$('transferAmount').value,
-      currency: source.currency, category: 'Transfer', paidBy: 'Shared', accountId: source.id, account: source.name,
-      toAccountId: destination.id, toAmount: +$('transferReceived').value, debtId: '', debtPrincipal: null,
-      debtInterest: 0, recurringItemId: '', recurringMonth: '', date,
-      note: $('transferNote').value.trim(), createdAt: existing?.createdAt || new Date().toISOString()
-    };
-    const index = state.transactions.findIndex(t => t.id === transaction.id);
-    if (index >= 0) state.transactions[index] = transaction;
-    else state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: 'Transfer saved ‚úì' });
-    ensureTodaySnapshot();
-  };
-}
-
-function editTransaction(id) {
-  const transaction = state.transactions.find(t => t.id === id);
-  if (!transaction) return;
-  if (transaction.type === 'transfer') openTransfer(id);
-  else if (transaction.debtId) openDebtPayment(transaction.debtId, id);
-  else openTransaction(transaction.type, id);
-}
-
-async function deleteTransaction(id) {
-  const transaction = state.transactions.find(t => t.id === id);
-  if (!transaction || !confirm(`Delete this ${transaction.type === 'transfer' ? 'transfer' : 'record'}?`)) return;
-  if (transaction.debtId && transaction.debtPrincipal) {
-    const debt = state.debts.find(item => item.id === transaction.debtId);
-    if (debt) debt.remaining = Math.min(debt.original, debt.remaining + transaction.debtPrincipal);
-  }
-  state.transactions = state.transactions.filter(t => t.id !== id);
-  await saveOperation({ action: 'delete', table: 'transactions', id }, { close: false, message: 'Record deleted' });
-  ensureTodaySnapshot();
-}
-
-function openAccountForm(id = null) {
-  const account = id ? state.accounts.find(item => item.id === id) : null;
-  openModal(account ? 'Edit account' : 'Add bank, cash or wallet', `<form class="form" id="accountForm">
-    <div class="friendlyNote">Starting balance means the real balance just before tracking begins. Linked salary, spending and transfers update it after that.${account ? ' Currency stays fixed so older records keep their meaning.' : ''}</div>
-    <label>Name<input id="accountName" required maxlength="80" value="${esc(account?.name || '')}" placeholder="Main bank account"></label>
-    <div class="fieldRow"><label>Type<select id="accountType"><option value="bank">Bank account</option><option value="cash">Cash</option><option value="wallet">Mobile wallet</option></select></label><label>Currency<select id="accountCurrency"${account ? ' disabled' : ''}>${currencyOptions(account?.currency || state.settings.lastCurrency)}</select></label></div>
-    <div class="fieldRow"><label>Starting balance<input id="accountOpening" type="number" step="0.01" required value="${account?.openingBalance ?? 0}"></label><label>Track from<input id="accountDate" type="date" required value="${account?.openingDate || today()}"></label></div>
-    <label>Notes<input id="accountNotes" maxlength="200" value="${esc(account?.notes || '')}" placeholder="Optional"></label>
-    <button class="primary" type="submit">${account ? 'Update account' : 'Add account'}</button>
-  </form>`);
-  $('accountType').value = account?.type || 'bank';
-  $('accountForm').onsubmit = async event => {
-    event.preventDefault();
-    const name = $('accountName').value.trim();
-    if (state.accounts.some(item => item.id !== account?.id && item.name.toLowerCase() === name.toLowerCase())) {
-      toast('An account with that name already exists.');
-      return;
-    }
-    const openingDate = $('accountDate').value;
-    const earlierLinked = account && state.transactions.some(transaction =>
-      (transaction.accountId === account.id || transaction.toAccountId === account.id) && transaction.date < openingDate
-    );
-    if (earlierLinked) { toast('The tracking date cannot move after an existing linked record.'); return; }
-    const item = {
-      id: account?.id || crypto.randomUUID(), name, type: $('accountType').value,
-      currency: $('accountCurrency').value, openingBalance: +$('accountOpening').value,
-      openingDate, notes: $('accountNotes').value.trim(), active: true,
-      createdAt: account?.createdAt || new Date().toISOString()
-    };
-    rememberCurrency(item.currency);
-    const index = state.accounts.findIndex(a => a.id === item.id);
-    if (index >= 0) state.accounts[index] = item;
-    else state.accounts.push(item);
-    await saveOperation({ action: 'upsert', table: 'accounts', row: { id: item.id, household_id: householdId, name: item.name, account_type: item.type, currency: item.currency, opening_balance: item.openingBalance, opening_date: item.openingDate, notes: item.notes || null, active: true, updated_at: new Date().toISOString() } }, { message: 'Account saved ‚úì' });
-    ensureTodaySnapshot();
-  };
-}
-
-function openAccountStatement(id) {
-  const account = state.accounts.find(item => item.id === id);
-  if (!account) return;
-  const records = state.transactions
-    .filter(transaction => transaction.date >= account.openingDate && (transaction.accountId === id || transaction.toAccountId === id))
-    .sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt));
-  let running = account.openingBalance;
-  const rows = [{ date: account.openingDate, title: 'Opening balance', delta: null, balance: running }];
-  records.forEach(transaction => {
-    const delta = accountDeltaNative(account, transaction);
-    running += delta;
-    rows.push({ date: transaction.date, title: transaction.type === 'transfer' ? (delta < 0 ? `Transfer to ${accountName(transaction.toAccountId)}` : `Transfer from ${accountName(transaction.accountId)}`) : transaction.category, delta, balance: running });
-  });
-  openModal(`${account.name} statement`, `<div class="friendlyNote">This running balance starts from ${formatDate(account.openingDate)} and updates from every linked entry.</div><div class="statement">${rows.map(row => `<div class="statementRow"><time>${esc(row.date)}</time><div><b>${esc(row.title)}</b>${row.delta == null ? '' : `<div class="meta">${row.delta >= 0 ? '+' : '‚àí'} ${money(Math.abs(row.delta), account.currency)}</div>`}</div><div class="statementValue"><strong>${money(row.balance, account.currency)}</strong><span>balance</span></div></div>`).join('')}</div><button class="secondary wide" onclick="closeModal();reconcileAccount('${account.id}')">Correct to today‚Äôs balance</button>`);
-}
-
-function reconcileAccount(id) {
-  const account = state.accounts.find(item => item.id === id);
-  if (!account) return;
-  const current = accountBalanceNative(account);
-  openModal('Correct account balance', `<form class="form" id="reconcileForm">
-    <div class="friendlyNote">The app shows <b>${money(current, account.currency)}</b>. Enter the real bank or wallet balance; the difference will be kept as a clear adjustment in history.</div>
-    <label>Actual balance<input id="actualBalance" type="number" step="0.01" required value="${current.toFixed(2)}"></label>
-    <button class="primary" type="submit">Update balance</button>
-  </form>`);
-  $('reconcileForm').onsubmit = async event => {
-    event.preventDefault();
-    const actual = +$('actualBalance').value;
-    const difference = actual - current;
-    if (Math.abs(difference) < .005) { closeModal(); toast('Balance already matches ‚úì'); return; }
-    const transaction = {
-      id: crypto.randomUUID(), type: difference > 0 ? 'income' : 'expense', amount: Math.abs(difference),
-      currency: account.currency, category: 'Balance adjustment', paidBy: 'Shared', accountId: account.id,
-      account: account.name, toAccountId: '', toAmount: null, debtId: '', debtPrincipal: null, debtInterest: 0,
-      recurringItemId: '', recurringMonth: '', date: today(), note: 'Manual account balance correction', createdAt: new Date().toISOString()
-    };
-    state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: 'Balance corrected ‚úì' });
-    ensureTodaySnapshot();
-  };
-}
-
-function currentCheckup() { return state.checkups.find(checkup => checkup.month === monthStart()); }
-
-function monthlyCheckupHtml() {
-  const checkup = currentCheckup();
-  if (checkup?.balancesCheckedAt) return `<div class="checkupTop"><div class="checkupIcon">‚úì</div><div><h3>${formatDate(checkup.month, { month: 'long', year: 'numeric' })} checked</h3><p>${checkup.accountCount} account${checkup.accountCount === 1 ? '' : 's'} confirmed${Math.abs(checkup.adjustmentUSD) > .005 ? ` ¬∑ ${baseMoney(Math.abs(checkup.adjustmentUSD))} corrected` : ' ¬∑ balances matched'}</p></div><button class="secondary compact" onclick="openMonthlyCheckup()">Check again</button></div>`;
-  return `<div class="checkupTop"><div class="checkupIcon">‚óé</div><div><h3>Monthly money check</h3><p>Confirm the real balances together and finish the month with clean numbers.</p></div><button class="primary compact" onclick="openMonthlyCheckup()">Start</button></div>`;
-}
-
-function openMonthlyCheckup() {
-  const accounts = activeAccounts();
-  if (!accounts.length) {
-    openModal('Monthly money check', '<div class="form"><div class="friendlyNote">Add your bank, cash or wallet account first. The check-up compares the app with the real balance.</div><button class="primary" onclick="closeModal();openAccountForm()">Add account</button></div>');
-    return;
-  }
-  const existing = currentCheckup();
-  openModal('Monthly money check', `<form id="monthlyCheckupForm" class="form">
-    <div class="friendlyNote">Open each bank or wallet and enter the balance you see now. Any difference becomes a visible balance adjustment‚Äînothing is silently changed.</div>
-    <div class="checkupInputs">${accounts.map((account, index) => `<label class="checkupAccount"><div><b>${esc(account.name)}</b><span>App shows ${money(accountBalanceNative(account), account.currency)}</span></div><input id="checkupBalance${index}" type="number" step="0.01" required value="${accountBalanceNative(account).toFixed(2)}" aria-label="Actual balance for ${esc(account.name)}"></label>`).join('')}</div>
-    <label>One note for this month<textarea id="checkupNote" maxlength="300" placeholder="What went well or needs attention?">${esc(existing?.note || '')}</textarea></label>
-    <button class="primary" type="submit">Finish monthly check</button>
-  </form>`);
-  $('monthlyCheckupForm').onsubmit = async event => {
-    event.preventDefault();
-    const operations = [];
-    let adjustmentUSD = 0;
-    accounts.forEach((account, index) => {
-      const current = accountBalanceNative(account);
-      const actual = +$(`checkupBalance${index}`).value;
-      const difference = actual - current;
-      if (Math.abs(difference) < .005) return;
-      adjustmentUSD += Math.abs(usd(difference, account.currency));
-      const transaction = {
-        id: crypto.randomUUID(), type: difference > 0 ? 'income' : 'expense', amount: Math.abs(difference),
-        currency: account.currency, category: 'Balance adjustment', paidBy: defaultPerson(), accountId: account.id,
-        account: account.name, toAccountId: '', toAmount: null, debtId: '', debtPrincipal: null, debtInterest: 0,
-        recurringItemId: '', recurringMonth: '', date: today(), note: `Monthly check ¬∑ ${monthKey()}`, createdAt: new Date().toISOString()
-      };
-      state.transactions.push(transaction);
-      operations.push({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) });
-    });
-    const checkup = {
-      id: existing?.id || crypto.randomUUID(), month: monthStart(), accountCount: accounts.length,
-      adjustmentUSD, note: $('checkupNote').value.trim(), completedBy: currentUser.id,
-      focus: existing?.focus || '', closedAt: existing?.closedAt || '', balancesCheckedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-    };
-    const index = state.checkups.findIndex(item => item.id === checkup.id);
-    if (index >= 0) state.checkups[index] = checkup;
-    else state.checkups.push(checkup);
-    operations.push({ action: 'checkup', row: {
-      id: checkup.id, household_id: householdId, month: checkup.month, completed_by: currentUser.id,
-      account_count: checkup.accountCount, adjustment_total_usd: checkup.adjustmentUSD,
-      note: checkup.note || null, focus: checkup.focus || null, closed_at: checkup.closedAt || null, balances_checked_at: checkup.balancesCheckedAt,
-      completed_at: checkup.completedAt, updated_at: checkup.updatedAt
-    } });
-    await saveOperations(operations, { message: 'Monthly check complete ‚úì', celebrate: true });
-    ensureTodaySnapshot();
-  };
-}
-
-async function archiveAccount(id) {
-  const account = state.accounts.find(item => item.id === id);
-  if (!account) return;
-  if (Math.abs(accountBalanceNative(account)) >= .005) {
-    toast('Transfer or correct this account to zero before archiving.');
-    return;
-  }
-  if (!confirm(`Archive ${account.name}? Its history will stay available in Timeline.`)) return;
-  account.active = false;
-  await saveOperation({ action: 'upsert', table: 'accounts', row: { id: account.id, household_id: householdId, name: account.name, account_type: account.type, currency: account.currency, opening_balance: account.openingBalance, opening_date: account.openingDate, notes: account.notes || null, active: false, updated_at: new Date().toISOString() } }, { close: false, message: 'Account archived' });
-  ensureTodaySnapshot();
-}
-
-function openAssetForm(id = null) {
-  const asset = id ? state.assets.find(item => item.id === id) : null;
-  openModal(asset ? 'Edit asset' : 'Add other asset', `<form class="form" id="assetForm">
-    <div class="friendlyNote">Use this for gold, investments, crypto or property. Bank and cash balances belong in Accounts so they are never counted twice.</div>
-    <label>Name<input id="assetName" required maxlength="100" value="${esc(asset?.name || '')}" placeholder="Gold jewellery / Investment / Property"></label>
-    <label>Type<select id="assetType">${asset?.type === 'cash' ? '<option value="cash">Legacy cash balance</option>' : ''}<option value="manual">Other asset / investment</option><option value="metal">Precious metal</option><option value="crypto">Crypto</option></select></label>
-    <div id="assetSymbolWrap" class="hidden"><label>Asset<select id="assetSymbol"></select></label></div>
-    <label id="assetQuantityLabel">Amount / quantity<input id="assetQuantity" type="number" step="0.00000001" min="0" value="${asset?.quantity ?? ''}"></label>
-    <label id="assetCurrencyWrap">Currency<select id="assetCurrency">${currencyOptions(asset?.currency || state.settings.lastCurrency)}</select></label>
-    <label id="assetManualWrap" class="hidden">Current total value<input id="assetManualValue" type="number" step="0.01" min="0" value="${asset?.manualValue ?? ''}"></label>
-    <label>Notes<input id="assetNotes" maxlength="200" value="${esc(asset?.notes || '')}" placeholder="Optional"></label>
-    <button class="primary" type="submit">Save asset</button>
-  </form>`);
-  $('assetType').value = asset?.type || 'manual';
-  $('assetType').onchange = () => configureAssetForm();
-  configureAssetForm(asset?.symbol || '');
-  $('assetForm').onsubmit = async event => {
-    event.preventDefault();
-    const type = $('assetType').value;
-    const item = {
-      id: asset?.id || crypto.randomUUID(), name: $('assetName').value.trim(), type,
-      symbol: ['metal', 'crypto'].includes(type) ? $('assetSymbol').value : '',
-      quantity: +$('assetQuantity').value || 0, currency: ['metal', 'crypto'].includes(type) ? 'USD' : $('assetCurrency').value,
-      manualValue: type === 'manual' ? +$('assetManualValue').value : null,
-      notes: $('assetNotes').value.trim(), createdAt: asset?.createdAt || new Date().toISOString()
-    };
-    if (type !== 'manual' && !(item.quantity > 0)) { toast('Enter an amount or quantity greater than zero.'); return; }
-    if (type === 'manual' && !(item.manualValue >= 0)) { toast('Enter the current value.'); return; }
-    if (!['metal', 'crypto'].includes(type)) rememberCurrency(item.currency);
-    const index = state.assets.findIndex(a => a.id === item.id);
-    if (index >= 0) state.assets[index] = item;
-    else state.assets.push(item);
-    await saveOperation({ action: 'upsert', table: 'assets', row: { id: item.id, household_id: householdId, user_id: currentUser.id, name: item.name, asset_type: item.type, symbol: item.symbol || null, quantity: item.quantity, currency: item.currency, manual_value: item.manualValue, notes: item.notes || null, updated_at: new Date().toISOString() } }, { message: 'Asset saved ‚úì' });
-    await refreshPrices(true);
-    ensureTodaySnapshot();
-  };
-}
-
-function configureAssetForm(selected = '') {
-  const type = $('assetType').value;
-  const market = ['metal', 'crypto'].includes(type);
-  $('assetSymbolWrap').classList.toggle('hidden', !market);
-  $('assetCurrencyWrap').classList.toggle('hidden', market);
-  $('assetManualWrap').classList.toggle('hidden', type !== 'manual');
-  const quantityLabel = $('assetQuantityLabel');
-  if (type === 'metal') {
-    $('assetSymbol').innerHTML = METALS.map(([symbol, name]) => `<option value="${symbol}">${name} (${symbol})</option>`).join('');
-    quantityLabel.childNodes[0].nodeValue = 'Weight in grams';
-  } else if (type === 'crypto') {
-    $('assetSymbol').innerHTML = CRYPTO.map(([symbol, name]) => `<option value="${symbol}">${name} (${symbol})</option>`).join('');
-    quantityLabel.childNodes[0].nodeValue = 'Coin quantity';
-  } else if (type === 'cash') quantityLabel.childNodes[0].nodeValue = 'Balance';
-  else quantityLabel.childNodes[0].nodeValue = 'Quantity (optional reference)';
-  if (selected && market) $('assetSymbol').value = selected;
-}
-
-async function deleteAsset(id) {
-  const asset = state.assets.find(item => item.id === id);
-  if (!asset || !confirm(`Delete ${asset.name}?`)) return;
-  state.assets = state.assets.filter(item => item.id !== id);
-  await saveOperation({ action: 'delete', table: 'assets', id }, { close: false, message: 'Asset deleted' });
-  ensureTodaySnapshot();
-}
-
-function openDebtForm(id = null) {
-  const debt = id ? state.debts.find(item => item.id === id) : null;
-  openModal(debt ? 'Edit debt' : 'Add debt', `<form class="form" id="debtForm">
-    <label>Name<input id="debtName" required maxlength="100" value="${esc(debt?.name || '')}" placeholder="Credit card / Loan"></label>
-    <div class="fieldRow"><label>Original amount<input id="debtOriginal" type="number" min="0" step="0.01" required value="${debt?.original ?? ''}"></label><label>Remaining now<input id="debtRemaining" type="number" min="0" step="0.01" required value="${debt?.remaining ?? ''}"></label></div>
-    <label>Currency<select id="debtCurrency"${debt ? ' disabled' : ''}>${currencyOptions(debt?.currency || state.settings.lastCurrency)}</select></label>
-    <div class="fieldRow"><label>Annual interest %<input id="debtApr" type="number" min="0" max="100" step="0.001" value="${debt?.apr ?? 0}"></label><label>Minimum monthly payment<input id="debtMinimum" type="number" min="0" step="0.01" value="${debt?.minimum ?? 0}"></label></div>
-    <div class="fieldRow"><label>Usual payment day<input id="debtPaymentDay" type="number" min="1" max="31" value="${debt?.paymentDay || ''}" placeholder="Optional"></label><label>Target payoff date<input id="debtDue" type="date" value="${debt?.due || ''}"></label></div>
-    <div class="warningNote">Use ‚ÄúMake payment‚Äù after this is saved. A linked payment reduces the remaining balance automatically and keeps the history accurate.${debt ? ' Currency stays fixed to protect payment history.' : ''}</div>
-    <button class="primary" type="submit">Save debt</button>
-  </form>`);
-  $('debtForm').onsubmit = async event => {
-    event.preventDefault();
-    const original = +$('debtOriginal').value;
-    const remaining = +$('debtRemaining').value;
-    if (remaining > original) { toast('Remaining balance cannot exceed the original amount.'); return; }
-    const item = {
-      id: debt?.id || crypto.randomUUID(), name: $('debtName').value.trim(), original, remaining,
-      currency: $('debtCurrency').value, due: $('debtDue').value, apr: +$('debtApr').value || 0,
-      minimum: +$('debtMinimum').value || 0, paymentDay: +$('debtPaymentDay').value || null,
-      active: true, createdAt: debt?.createdAt || new Date().toISOString()
-    };
-    rememberCurrency(item.currency);
-    const index = state.debts.findIndex(d => d.id === item.id);
-    if (index >= 0) state.debts[index] = item;
-    else state.debts.push(item);
-    await saveOperation({ action: 'upsert', table: 'debts', row: { id: item.id, household_id: householdId, name: item.name, original_amount: item.original, remaining_amount: item.remaining, currency: item.currency, due_date: item.due || null, annual_interest_rate: item.apr, minimum_payment: item.minimum, payment_day: item.paymentDay, active: true } }, { message: 'Debt plan saved ‚úì' });
-    ensureTodaySnapshot();
-  };
-}
-
-function openDebtPayment(debtId, transactionId = null, preset = {}) {
-  const existing = transactionId ? state.transactions.find(t => t.id === transactionId) : null;
-  const debt = state.debts.find(item => item.id === (existing?.debtId || debtId));
-  const accounts = activeAccounts();
-  if (!debt) return;
-  if (!accounts.length) {
-    openModal('Make debt payment', `<div class="form"><div class="friendlyNote">Add the bank or cash account the payment leaves from first. That keeps both your debt and account balance correct.</div><button class="primary" onclick="closeModal();openAccountForm()">Add account</button></div>`);
-    return;
-  }
-  const selectedAccount = existing?.accountId || accounts.find(a => a.currency === debt.currency)?.id || accounts[0].id;
-  const maxPrincipal = debt.remaining + Number(existing?.debtPrincipal || 0);
-  const suggestedPaymentUSD = Number(preset.paymentUSD || 0);
-  const suggestedInterestUSD = Math.min(suggestedPaymentUSD, usd(debt.remaining, debt.currency) * Number(debt.apr || 0) / 1200);
-  const suggestedPrincipal = Math.min(maxPrincipal, fromUSD(Math.max(0, suggestedPaymentUSD - suggestedInterestUSD), debt.currency));
-  const suggestedInterest = fromUSD(suggestedInterestUSD, debt.currency);
-  const suggestedAccountTotal = fromUSD(suggestedPaymentUSD, accounts.find(account => account.id === selectedAccount)?.currency || debt.currency);
-  openModal(existing ? 'Edit debt payment' : `Pay ${debt.name}`, `<form class="form" id="debtPaymentForm">
-    <div class="friendlyNote">Principal reduces the debt. Interest is recorded but does not reduce it. The total leaving the selected account updates its balance.</div>
-    <label>Pay from<select id="debtPaymentAccount">${accountSelectOptions(selectedAccount, false)}</select></label>
-    <label>Total leaving account <span id="debtAccountCurrency"></span><input id="debtPaymentTotal" type="number" min="0.01" step="0.01" required value="${existing?.amount ?? (suggestedPaymentUSD > 0 ? suggestedAccountTotal.toFixed(2) : '')}"></label>
-    <div class="fieldRow"><label>Principal <span>${debt.currency}</span><input id="debtPaymentPrincipal" type="number" min="0.01" max="${maxPrincipal}" step="0.01" required value="${existing?.debtPrincipal ?? (suggestedPaymentUSD > 0 ? suggestedPrincipal.toFixed(2) : '')}"></label><label>Interest / fees <span>${debt.currency}</span><input id="debtPaymentInterest" type="number" min="0" step="0.01" value="${existing?.debtInterest ?? (suggestedPaymentUSD > 0 ? suggestedInterest.toFixed(2) : 0)}"></label></div>
-    <div id="debtPaymentHint" class="friendlyNote"></div>
-    <label>Date<input id="debtPaymentDate" type="date" required value="${existing?.date || today()}"></label>
-    <label>Note<input id="debtPaymentNote" maxlength="200" value="${esc(existing?.note || '')}" placeholder="Optional"></label>
-    <button class="primary" type="submit">Save payment</button>
-  </form>`);
-  $('debtPaymentAccount').value = selectedAccount;
-  const syncDebtPayment = source => {
-    const account = state.accounts.find(a => a.id === $('debtPaymentAccount').value);
-    $('debtAccountCurrency').textContent = account?.currency || '';
-    const sameCurrency = account?.currency === debt.currency;
-    $('debtPaymentHint').textContent = sameCurrency
-      ? 'Same currency: principal + interest must equal the total leaving the account.'
-      : `Cross-currency payment: enter the exact ${account?.currency || ''} debited and the exact ${debt.currency} principal shown by the lender.`;
-    if (sameCurrency && source === 'total') {
-      $('debtPaymentPrincipal').value = Math.max(0, +$('debtPaymentTotal').value - (+$('debtPaymentInterest').value || 0)).toFixed(2);
-    }
-  };
-  $('debtPaymentAccount').onchange = () => syncDebtPayment('account');
-  $('debtPaymentTotal').oninput = () => syncDebtPayment('total');
-  $('debtPaymentInterest').oninput = () => syncDebtPayment('total');
-  syncDebtPayment('account');
-  $('debtPaymentForm').onsubmit = async event => {
-    event.preventDefault();
-    const account = state.accounts.find(a => a.id === $('debtPaymentAccount').value);
-    const total = +$('debtPaymentTotal').value;
-    const principal = +$('debtPaymentPrincipal').value;
-    const interest = +$('debtPaymentInterest').value || 0;
-    if (!account) return;
-    if (principal > maxPrincipal + .005) { toast(`Principal cannot exceed ${money(maxPrincipal, debt.currency)}.`); return; }
-    if (account.currency === debt.currency && Math.abs(total - principal - interest) > .01) {
-      toast('For the same currency, total must equal principal plus interest.');
-      return;
-    }
-    const date = $('debtPaymentDate').value;
-    if (date < account.openingDate) { toast(`Choose ${account.openingDate} or later for this account.`); return; }
-    if (existing?.debtId && existing.debtPrincipal) {
-      const oldDebt = state.debts.find(item => item.id === existing.debtId);
-      if (oldDebt) oldDebt.remaining = Math.min(oldDebt.original, oldDebt.remaining + existing.debtPrincipal);
-    }
-    debt.remaining = Math.max(0, debt.remaining - principal);
-    const transaction = {
-      id: existing?.id || crypto.randomUUID(), type: 'expense', amount: total, currency: account.currency,
-      category: 'Debt', paidBy: defaultPerson(),
-      accountId: account.id, account: account.name, toAccountId: '', toAmount: null, debtId: debt.id,
-      debtPrincipal: principal, debtInterest: interest, recurringItemId: '', recurringMonth: '', date,
-      note: $('debtPaymentNote').value.trim(), createdAt: existing?.createdAt || new Date().toISOString()
-    };
-    const index = state.transactions.findIndex(t => t.id === transaction.id);
-    if (index >= 0) state.transactions[index] = transaction;
-    else state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: `${money(principal, debt.currency)} knocked off debt ‚úì`, celebrate: true });
-    ensureTodaySnapshot();
-  };
-}
-
-async function archiveDebt(id) {
-  const debt = state.debts.find(item => item.id === id);
-  if (!debt) return;
-  if (debt.remaining > .005) { toast('Only a cleared debt can be archived.'); return; }
-  if (!confirm(`Archive ${debt.name}? Its payment history will remain.`)) return;
-  debt.active = false;
-  await saveOperation({ action: 'upsert', table: 'debts', row: { id: debt.id, household_id: householdId, name: debt.name, original_amount: debt.original, remaining_amount: debt.remaining, currency: debt.currency, due_date: debt.due || null, annual_interest_rate: debt.apr, minimum_payment: debt.minimum, payment_day: debt.paymentDay, active: false } }, { close: false, message: 'Debt archived ¬∑ well done!' });
-}
-
-function openGoalForm(id = null, preset = {}) {
-  const goal = id ? state.goals.find(item => item.id === id) : null;
-  openModal(goal ? 'Edit goal' : 'Add savings goal', `<form class="form" id="goalForm">
-    <label>Name<input id="goalName" required maxlength="100" value="${esc(goal?.name || preset.name || '')}" placeholder="Emergency fund / Vacation"></label>
-    <div class="fieldRow"><label>Target amount<input id="goalTarget" type="number" min="0.01" step="0.01" required value="${goal?.target ?? preset.target ?? ''}"></label><label>Currency<select id="goalCurrency"${goal ? ' disabled' : ''}>${currencyOptions(goal?.currency || preset.currency || state.settings.lastCurrency)}</select></label></div>
-    ${goal ? `<div class="friendlyNote">Already reserved: <b>${money(goal.saved, goal.currency)}</b>. Use ‚ÄúAdd saving‚Äù on the goal card so every change has a date and history. Currency stays fixed to protect that history.</div>` : `<label>Already saved (optional)<input id="goalStarting" type="number" min="0" step="0.01" value="${preset.saved || 0}"></label>`}
-    <label>Target date<input id="goalDue" type="date" value="${goal?.due || preset.due || ''}"></label>
-    <button class="primary" type="submit">Save goal</button>
-  </form>`);
-  $('goalForm').onsubmit = async event => {
-    event.preventDefault();
-    const item = {
-      id: goal?.id || crypto.randomUUID(), name: $('goalName').value.trim(), target: +$('goalTarget').value,
-      saved: goal ? goal.saved : +$('goalStarting').value || 0, currency: $('goalCurrency').value,
-      due: $('goalDue').value, active: true, createdAt: goal?.createdAt || new Date().toISOString()
-    };
-    const metrics = moneyMetrics();
-    if (!goal && usd(item.saved, item.currency) > Math.max(0, metrics.cashUSD - metrics.goalSavedUSD) + .005) {
-      toast('Add or correct the account holding this saving first.');
-      return;
-    }
-    if (item.saved > item.target && !confirm('Saved is above the target. Keep it anyway?')) return;
-    rememberCurrency(item.currency);
-    const index = state.goals.findIndex(g => g.id === item.id);
-    if (index >= 0) state.goals[index] = item;
-    else state.goals.push(item);
-    await saveOperation({ action: 'upsert', table: 'goals', row: { id: item.id, household_id: householdId, name: item.name, target: item.target, saved: item.saved, currency: item.currency, due_date: item.due || null, active: true } }, { message: 'Goal saved ‚úì', celebrate: !goal });
-  };
-}
-
-function createEmergencyGoal() {
-  const essentialsUSD = Object.entries(state.budgets).filter(([category]) => ESSENTIAL_CATEGORIES.includes(category)).reduce((sum, [, budget]) => sum + usd(budget.amount, budget.currency), 0);
-  openGoalForm(null, { name: 'Emergency Fund', target: Math.round(fromUSD(essentialsUSD * 3, state.settings.base) * 100) / 100, currency: state.settings.base });
-}
-
-function openGoalContribution(goalId, contributionId = null, preset = {}) {
-  const goal = state.goals.find(item => item.id === goalId);
-  const existing = contributionId ? state.contributions.find(item => item.id === contributionId) : null;
-  if (!goal) return;
-  const suggestedAmount = Math.min(Math.max(0, goal.target - goal.saved), fromUSD(Number(preset.amountUSD || 0), goal.currency));
-  const suggestedAccount = activeAccounts().find(account => account.currency === goal.currency)?.id || '';
-  openModal(existing ? 'Edit goal saving' : `Add to ${goal.name}`, `<form class="form" id="goalContributionForm">
-    <div class="friendlyNote">This reserves money already held in an account. It does not create extra cash or double-count net worth.</div>
-    <label>Amount ${goal.currency}<input id="goalContributionAmount" type="number" min="0.01" step="0.01" required value="${existing?.amount ?? (suggestedAmount > 0 ? suggestedAmount.toFixed(2) : '')}"></label>
-    <label>Where is it held? <select id="goalContributionAccount"><option value="">Not assigned to one account</option>${activeAccounts().map(account => `<option value="${account.id}">${esc(account.name)} ¬∑ ${account.currency}</option>`).join('')}</select></label>
-    <label>Date<input id="goalContributionDate" type="date" required value="${existing?.date || today()}"></label>
-    <label>Note<input id="goalContributionNote" maxlength="200" value="${esc(existing?.note || '')}" placeholder="Optional"></label>
-    <button class="primary" type="submit">Save contribution</button>
-  </form>`);
-  $('goalContributionAccount').value = existing?.accountId || suggestedAccount;
-  $('goalContributionForm').onsubmit = async event => {
-    event.preventDefault();
-    const amount = +$('goalContributionAmount').value;
-    const metrics = moneyMetrics();
-    const existingUSD = existing ? usd(existing.amount, existing.currency) : 0;
-    const availableToReserveUSD = Math.max(0, metrics.cashUSD - (metrics.goalSavedUSD - existingUSD));
-    if (usd(amount, goal.currency) > availableToReserveUSD + .005) {
-      toast(`Only ${baseMoney(availableToReserveUSD)} is currently free to reserve.`);
-      return;
-    }
-    if (existing) goal.saved = Math.max(0, goal.saved - existing.amount);
-    goal.saved += amount;
-    const item = {
-      id: existing?.id || crypto.randomUUID(), goalId: goal.id,
-      accountId: $('goalContributionAccount').value, amount, currency: goal.currency,
-      date: $('goalContributionDate').value, note: $('goalContributionNote').value.trim(),
-      createdAt: existing?.createdAt || new Date().toISOString()
-    };
-    const index = state.contributions.findIndex(c => c.id === item.id);
-    if (index >= 0) state.contributions[index] = item;
-    else state.contributions.push(item);
-    await saveOperation({ action: 'upsert', table: 'goal_contributions', row: { id: item.id, household_id: householdId, goal_id: item.goalId, account_id: item.accountId || null, user_id: currentUser.id, amount: item.amount, currency: item.currency, date: item.date, note: item.note || null } }, { message: `${money(amount, goal.currency)} closer to ${goal.name} ‚úì`, celebrate: true });
-  };
-}
-
-function openGoalHistory(goalId) {
-  const goal = state.goals.find(item => item.id === goalId);
-  if (!goal) return;
-  const contributions = state.contributions.filter(item => item.goalId === goalId).sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
-  openModal(`${goal.name} history`, `<div class="friendlyNote">Current reserved total: <b>${money(goal.saved, goal.currency)}</b>. Starting savings are included in the total even if they predate this history.</div>${contributions.length ? `<div class="statement">${contributions.map(item => `<div class="statementRow"><time>${esc(item.date)}</time><div><b>${esc(item.note || 'Goal saving')}</b><div class="meta">${esc(accountName(item.accountId) || 'No account assigned')}</div><div class="cardActions"><button class="linkBtn" onclick="openGoalContribution('${goal.id}','${item.id}')">Edit</button><button class="dangerLink" onclick="deleteGoalContribution('${item.id}')">Delete</button></div></div><div class="statementValue"><strong>+ ${money(item.amount, item.currency)}</strong><span>reserved</span></div></div>`).join('')}</div>` : '<div class="card hint" style="margin-top:12px">No dated contributions yet.</div>'}<button class="primary wide" style="margin-top:12px" onclick="openGoalContribution('${goal.id}')">Ôºã Add saving</button>`);
-}
-
-async function deleteGoalContribution(id) {
-  const contribution = state.contributions.find(item => item.id === id);
-  if (!contribution || !confirm('Delete this goal contribution?')) return;
-  const goal = state.goals.find(item => item.id === contribution.goalId);
-  if (goal) goal.saved = Math.max(0, goal.saved - contribution.amount);
-  state.contributions = state.contributions.filter(item => item.id !== id);
-  await saveOperation({ action: 'delete', table: 'goal_contributions', id }, { close: false, message: 'Contribution deleted' });
-}
-
-async function archiveGoal(id) {
-  const goal = state.goals.find(item => item.id === id);
-  if (!goal || !confirm(`Archive ${goal.name}? Reserved money will return to spendable cash, while its history remains.`)) return;
-  goal.active = false;
-  await saveOperation({ action: 'upsert', table: 'goals', row: { id: goal.id, household_id: householdId, name: goal.name, target: goal.target, saved: goal.saved, currency: goal.currency, due_date: goal.due || null, active: false } }, { close: false, message: 'Goal archived' });
-}
-
-function openRecurringForm(id = null) {
-  const item = id ? state.recurring.find(entry => entry.id === id) : null;
-  const kind = item?.kind || 'expense';
-  openModal(item ? 'Edit regular item' : 'Add regular item', `<form class="form" id="recurringForm">
-    <div class="friendlyNote">Set this up once. Each month, tap Confirm on Today to create the real dated entry.</div>
-    <label>Name<input id="recurringName" required maxlength="80" value="${esc(item?.name || '')}" placeholder="Salary / Rent / Internet"></label>
-    <div class="fieldRow"><label>Type<select id="recurringKind"><option value="income">Income</option><option value="expense">Expense</option></select></label><label>Day each month<input id="recurringDay" type="number" min="1" max="31" required value="${item?.day || 1}"></label></div>
-    <div class="fieldRow"><label>Amount<input id="recurringAmount" type="number" min="0.01" step="0.01" required value="${item?.amount ?? ''}"></label><label>Currency<select id="recurringCurrency">${currencyOptions(item?.currency || state.settings.lastCurrency)}</select></label></div>
-    <label>Category<select id="recurringCategory"></select></label>
-    <label>Account<select id="recurringAccount">${accountSelectOptions(item?.accountId || '')}</select></label>
-    <label>Paid / received by<select id="recurringPaidBy">${peopleOptions(item?.paidBy || 'Shared')}</select></label>
-    <label>Note<input id="recurringNote" maxlength="200" value="${esc(item?.note || '')}" placeholder="Optional"></label>
-    <button class="primary" type="submit">Save monthly item</button>
-  </form>`);
-  $('recurringKind').value = kind;
-  $('recurringPaidBy').value = item?.paidBy || 'Shared';
-  $('recurringAccount').value = item?.accountId || '';
-  const configureRecurring = () => {
-    const currentKind = $('recurringKind').value;
-    const categories = currentKind === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES.map(([category]) => category);
-    const selected = item?.category && (item.kind === currentKind) ? item.category : currentKind === 'income' ? 'Salary' : 'Bills';
-    $('recurringCategory').innerHTML = categories.map(category => `<option>${esc(category)}</option>`).join('');
-    $('recurringCategory').value = selected;
-  };
-  const syncRecurringCurrency = () => {
-    const account = state.accounts.find(a => a.id === $('recurringAccount').value);
-    $('recurringCurrency').disabled = !!account;
-    if (account) $('recurringCurrency').value = account.currency;
-  };
-  $('recurringKind').onchange = configureRecurring;
-  $('recurringAccount').onchange = syncRecurringCurrency;
-  configureRecurring();
-  syncRecurringCurrency();
-  $('recurringForm').onsubmit = async event => {
-    event.preventDefault();
-    const account = state.accounts.find(a => a.id === $('recurringAccount').value);
-    const recurringItem = {
-      id: item?.id || crypto.randomUUID(), name: $('recurringName').value.trim(), kind: $('recurringKind').value,
-      amount: +$('recurringAmount').value, currency: account?.currency || $('recurringCurrency').value,
-      category: $('recurringCategory').value, paidBy: $('recurringPaidBy').value, accountId: account?.id || '',
-      day: +$('recurringDay').value, note: $('recurringNote').value.trim(), active: true,
-      createdAt: item?.createdAt || new Date().toISOString()
-    };
-    rememberCurrency(recurringItem.currency);
-    const index = state.recurring.findIndex(entry => entry.id === recurringItem.id);
-    if (index >= 0) state.recurring[index] = recurringItem;
-    else state.recurring.push(recurringItem);
-    await saveOperation({ action: 'upsert', table: 'recurring_items', row: { id: recurringItem.id, household_id: householdId, created_by: currentUser.id, name: recurringItem.name, kind: recurringItem.kind, amount: recurringItem.amount, currency: recurringItem.currency, category: recurringItem.category, paid_by: recurringItem.paidBy, account_id: recurringItem.accountId || null, day_of_month: recurringItem.day, note: recurringItem.note || null, active: true } }, { message: 'Monthly checklist updated ‚úì' });
-  };
-}
-
-function confirmRecurring(id) {
-  const item = state.recurring.find(entry => entry.id === id);
-  if (!item) return;
-  const lastDay = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-  const date = `${monthKey()}-${String(Math.min(item.day, lastDay)).padStart(2, '0')}`;
-  openTransaction(item.kind, null, { amount: item.amount, currency: item.currency, category: item.category, paidBy: item.paidBy, accountId: item.accountId, date, note: item.note, recurringItemId: item.id, recurringMonth: monthStart() });
-}
-
-async function archiveRecurring(id) {
-  const item = state.recurring.find(entry => entry.id === id);
-  if (!item || !confirm(`Archive ${item.name}? Past confirmations remain.`)) return;
-  item.active = false;
-  await saveOperation({ action: 'upsert', table: 'recurring_items', row: { id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, kind: item.kind, amount: item.amount, currency: item.currency, category: item.category, paid_by: item.paidBy, account_id: item.accountId || null, day_of_month: item.day, note: item.note || null, active: false } }, { close: false, message: 'Regular item archived' });
-}
-
-function openBudget() {
-  const defaultCategories = ['Housing', 'Food', 'Transport', 'Bills', 'Health', 'Shopping', 'Entertainment', 'Travel', 'Other'];
-  const categories = [...new Set([...defaultCategories, ...Object.keys(state.budgets)])];
-  openModal('Monthly category budget', `<form class="form" id="budgetForm"><div class="friendlyNote">These limits guide the 40% essentials and 10% wants buckets. Debt and goal targets come directly from income.</div>${categories.map((category, index) => {
-    const budget = state.budgets[category] || { amount: 0, currency: state.settings.base };
-    return `<div class="fieldRow"><label>${esc(category)}<input id="budgetAmount${index}" type="number" min="0" step="0.01" value="${budget.amount}" required></label><label>Currency<select id="budgetCurrency${index}">${currencyOptions(budget.currency)}</select></label></div>`;
-  }).join('')}<button class="primary" type="submit">Save category budget</button></form>`);
-  $('budgetForm').onsubmit = async event => {
-    event.preventDefault();
-    categories.forEach((category, index) => { state.budgets[category] = { amount: +$(`budgetAmount${index}`).value || 0, currency: $(`budgetCurrency${index}`).value }; });
-    const rows = Object.entries(state.budgets).map(([category, budget]) => ({ household_id: householdId, category, amount: budget.amount, currency: budget.currency }));
-    await saveOperation({ action: 'budget', rows }, { message: 'Budget updated ‚úì' });
-  };
-}
-
-function settingsRow() {
-  const row = {
-    household_id: householdId, base_currency: state.settings.base, payday_day: state.settings.paydayDay,
-    fun_mode: state.settings.funMode, debt_strategy: state.settings.debtStrategy,
-    usd_to_aed: state.settings.rates.AED, usd_to_mvr: state.settings.rates.MVR, usd_to_inr: state.settings.rates.INR,
-    last_portable_backup_at: state.settings.lastBackupAt || null,
-    last_portable_backup_sha256: state.settings.lastBackupHash || null
-  };
-  if (state.member.role === 'owner') {
-    row.email_statements_enabled = state.settings.emailStatements === true;
-    row.statement_recipient_user_id = state.settings.statementRecipientUserId || null;
-  }
-  return row;
-}
-
-function renderStatementEmailSettings() {
-  const root = $('emailStatementCopy');
-  const button = $('emailStatementAction');
-  if (!root || !button) return;
-  const ready = latestPreparedStatement(false);
-  const latest = ready || latestPreparedStatement(true);
-  const label = latest ? formatDate(statementItemRange(latest).from, { month: 'long', year: 'numeric' }) : '';
-  root.innerHTML = ready
-    ? `<h3>Monthly statement ready</h3><p>${esc(label)} ¬∑ share to Mail or Gmail with the CSV attached.</p>`
-    : latest
-      ? `<h3>Monthly statement</h3><p>${esc(label)} prepared ‚úì ¬∑ open or regenerate it anytime.</p>`
-      : '<h3>Monthly statement</h3><p>Prepared automatically after Salary is recorded.</p>';
-  button.textContent = ready ? 'Open' : 'Preview';
-  button.disabled = false;
-  if ($('moneyStatementStatus')) $('moneyStatementStatus').textContent = ready ? `${label} ready` : 'Choose a period';
-}
-
-function renderDataSafetyStatus() {
-  const root = $('dataSafetyCopy');
-  if (!root) return;
-  const bytes = new Blob([JSON.stringify(state)]).size;
-  const lastBackup = state.settings.lastBackupAt ? formatDate(state.settings.lastBackupAt.slice(0, 10)) : '';
-  const ageDays = lastBackup ? Math.floor((Date.now() - new Date(`${state.settings.lastBackupAt.slice(0, 10)}T12:00:00`).getTime()) / 86_400_000) : Infinity;
-  const status = ageDays <= 35 ? `Protected copy made ${esc(lastBackup)} ‚úì` : 'Private backup is due';
-  root.innerHTML = `<h3>Own your data</h3><p>${state.transactions.length.toLocaleString('en-US')} records ¬∑ about ${humanBytes(bytes)} on this phone ¬∑ ${status}</p>`;
-  if ($('moneyBackupStatus')) $('moneyBackupStatus').textContent = ageDays <= 35 ? `Protected ${lastBackup} ‚úì` : 'Private backup due';
-}
-
-async function toggleStatementEmails() {
-  if (state.member.role !== 'owner') { toast('Only the household owner can change email delivery.'); return; }
-  state.settings.emailStatements = !state.settings.emailStatements;
-  if (state.settings.emailStatements) state.settings.statementRecipientUserId = currentUser.id;
-  await saveOperation({ action: 'settings', row: settingsRow() }, {
-    close: false,
-    message: state.settings.emailStatements ? 'Monthly statement email turned on' : 'Monthly statement email paused'
-  });
-  if (state.settings.emailStatements) {
-    await refreshStatementEmailStatus();
-    await flushStatementEmailQueue(true);
-  } else {
-    savePendingStatementEmails([]);
-    statementEmailLastStatus = '';
-    renderStatementEmailSettings();
-  }
-}
-
-function openStatementEmailInfo() {
-  openModal('Monthly statement sharing', `<div class="emailInfo">
-    <div class="emailInfoHero"><span>FREE &amp; PRIVATE</span><b>Prepared on this phone</b><small>No separate statement file is kept online</small></div>
-    <div class="emailInfoSteps">
-      <div><i>1</i><span><b>Record Salary</b><small>Saving an income entry with the Salary category is the trigger.</small></span></div>
-      <div><i>2</i><span><b>Previous month closes</b><small>Income, spending and the 40‚Äì30‚Äì20‚Äì10 guide are calculated without transfers or balance corrections.</small></span></div>
-      <div><i>3</i><span><b>Share or email</b><small>Your phone opens Mail, Gmail or another app with the CSV attached when supported.</small></span></div>
-    </div>
-    <div class="friendlyNote">The statement is built only when needed from the records already in Our DHAN. Sharing is never sent silently‚Äîyou choose the app and recipient.</div>
-    <div class="buttonRow"><button class="primary" onclick="closeModal();openPreparedMonthlyStatement()">Preview statement</button><button class="secondary" onclick="closeModal()">Done</button></div>
-  </div>`);
-}
-
-async function saveSettings() {
-  const rates = { USD: 1, AED: +$('rateAED').value, MVR: +$('rateMVR').value, INR: +$('rateINR').value };
-  const paydayDay = +$('paydayDay').value || null;
-  if (!rates.AED || !rates.MVR || !rates.INR) { toast('Every exchange rate must be greater than zero.'); return; }
-  if (paydayDay && (paydayDay < 1 || paydayDay > 31)) { toast('Salary day must be from 1 to 31.'); return; }
-  state.settings.base = $('baseCurrency').value;
-  state.settings.paydayDay = paydayDay;
-  state.settings.rates = rates;
-  await saveOperation({ action: 'settings', row: settingsRow() }, { close: false, message: 'Settings synced ‚úì' });
-  ensureTodaySnapshot();
-}
-
-const quickExpenseUrl = () => `${location.origin}${location.pathname}?quick=expense`;
-
-function shortcutPanel(platform) {
-  if (platform === 'android') {
-    return `<div class="steps">
-      <div class="step"><span>1</span><div><b>Install Our DHAN</b><p>Open this site in Chrome, use the browser menu and choose Install app or Add to Home screen.</p></div></div>
-      <div class="step"><span>2</span><div><b>Long-press its app icon</b><p>Choose ‚ÄúAdd spend‚Äù for a direct expense form. You can drag that shortcut onto the home screen.</p></div></div>
-      <div class="step"><span>3</span><div><b>Pixel option: Quick Tap</b><p>Settings ‚Üí System ‚Üí Gestures ‚Üí Quick Tap ‚Üí Open app ‚Üí Our DHAN. The direct home-screen shortcut is still the fastest route to Add Spend.</p></div></div>
-    </div>`;
-  }
-  return `<div class="steps">
-    <div class="step"><span>1</span><div><b>Create an Apple Shortcut</b><p>In Shortcuts, create ‚ÄúLog Spend,‚Äù add the Open URLs action, and paste the quick link below.</p></div></div>
-    <div class="step"><span>2</span><div><b>Choose Back Tap</b><p>Settings ‚Üí Accessibility ‚Üí Touch ‚Üí Back Tap ‚Üí Double Tap ‚Üí Log Spend.</p></div></div>
-    <div class="step"><span>3</span><div><b>Stay signed in</b><p>A double tap will open the private Add Spend form. The first visit may ask you to sign in.</p></div></div>
-  </div>`;
-}
-
-function openShortcutHelp(platform = /Android/i.test(navigator.userAgent) ? 'android' : 'iphone') {
-  openModal('Fast expense shortcut', `<div class="shortcutTabs"><button id="shortcutIphone" class="${platform === 'iphone' ? 'active' : ''}" onclick="switchShortcutTab('iphone')">iPhone Back Tap</button><button id="shortcutAndroid" class="${platform === 'android' ? 'active' : ''}" onclick="switchShortcutTab('android')">Android</button></div><div id="shortcutPanel">${shortcutPanel(platform)}</div><div class="form" style="margin-top:15px"><label>Direct Add Spend link<input id="quickExpenseLink" readonly value="${esc(quickExpenseUrl())}"></label><div class="buttonRow"><button class="secondary compact" onclick="copyQuickLink()">Copy link</button><button class="primary compact" onclick="shareQuickLink()">Share</button></div><div class="friendlyNote">This uses only the website and your phone‚Äôs built-in shortcut features. It stays free and does not use ChatGPT.</div></div>`);
-}
-
-function switchShortcutTab(platform) {
-  $('shortcutPanel').innerHTML = shortcutPanel(platform);
-  $('shortcutIphone').classList.toggle('active', platform === 'iphone');
-  $('shortcutAndroid').classList.toggle('active', platform === 'android');
-}
-
-async function copyQuickLink() {
-  try { await navigator.clipboard.writeText(quickExpenseUrl()); toast('Quick link copied ‚úì'); }
-  catch (_error) { $('quickExpenseLink')?.select(); document.execCommand('copy'); toast('Quick link copied ‚úì'); }
-}
-
-async function shareQuickLink() {
-  if (navigator.share) {
-    try { await navigator.share({ title: 'Our DHAN ¬∑ Add Spend', text: 'Quick expense entry for Our DHAN', url: quickExpenseUrl() }); }
-    catch (_error) { /* User cancelled. */ }
-  } else copyQuickLink();
-}
-
-function downloadFile(name, text, type) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function humanBytes(bytes) {
-  const value = Number(bytes || 0);
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 ** 2).toFixed(1)} MB`;
-}
-
-function backupRecordCounts() {
-  return Object.fromEntries(['transactions', 'accounts', 'assets', 'debts', 'goals', 'contributions', 'recurring', 'snapshots', 'checkups', 'sinkingFunds', 'weeklyReviews']
-    .map(key => [key, state[key]?.length || 0]));
-}
-
-function backupBody() {
-  return {
-    format: 'our-dhan-portable-backup', formatVersion: 1, appVersion: VERSION,
-    exportedAt: new Date().toISOString(), household: 'Our DHAN',
-    recovery: 'Open Our DHAN and choose Restore backup. The data is plain JSON so it can also be read without this app.',
-    recordCounts: backupRecordCounts(), data: state
-  };
-}
-
-function canonicalJson(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(item => item === undefined ? 'null' : canonicalJson(item)).join(',')}]`;
-  return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
-}
-
-async function sha256Hex(value) {
-  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function bytesToBase64(bytes) {
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  return btoa(binary);
-}
-
-function base64ToBytes(value) {
-  const binary = atob(value);
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
-}
-
-async function compressBackupBytes(bytes) {
-  if (!('CompressionStream' in window)) return { bytes, compression: 'none' };
-  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
-  return { bytes: new Uint8Array(await new Response(stream).arrayBuffer()), compression: 'gzip' };
-}
-
-async function streamBytesWithLimit(stream, limit = 100 * 1024 * 1024) {
-  const reader = stream.getReader();
-  const chunks = [];
-  let total = 0;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > limit) { await reader.cancel(); throw new Error('The expanded backup is unexpectedly large.'); }
-    chunks.push(value);
-  }
-  const output = new Uint8Array(total);
-  let offset = 0;
-  chunks.forEach(chunk => { output.set(chunk, offset); offset += chunk.byteLength; });
-  return output;
-}
-
-async function decompressBackupBytes(bytes, compression) {
-  if (compression === 'none') {
-    if (bytes.byteLength > 100 * 1024 * 1024) throw new Error('The backup is unexpectedly large.');
-    return bytes;
-  }
-  if (compression !== 'gzip' || !('DecompressionStream' in window)) throw new Error('This browser cannot open the compressed backup.');
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-  return streamBytesWithLimit(stream);
-}
-
-async function backupEncryptionKey(passphrase, salt, iterations, usages) {
-  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-    material,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    usages
-  );
-}
-
-function recordBackupCreated(checksum, createdAt) {
-  state.settings.lastBackupAt = createdAt;
-  state.settings.lastBackupHash = checksum;
-  cache();
-  if (db && householdId) {
-    enqueue({ action: 'settings', row: settingsRow() });
-    flushPending().then(ok => { if (ok) loadRemote(); });
-  }
-}
-
-async function exportBackup(label = '', quiet = false) {
-  const body = backupBody();
-  const canonical = canonicalJson(body);
-  const checksum = await sha256Hex(canonical);
-  const backup = { ...body, integrity: { algorithm: 'SHA-256', value: checksum } };
-  downloadFile(`our-dhan-${label ? `${label}-` : 'backup-'}${today()}.json`, JSON.stringify(backup, null, 2), 'application/json');
-  recordBackupCreated(checksum, body.exportedAt);
-  if (!quiet) toast('Readable backup downloaded ‚úì');
-}
-
-function openPrivateBackupForm() {
-  openModal('Create private backup', `<form id="privateBackupForm" class="form">
-    <section class="flowStep">
-      <div class="friendlyNote">Recommended. Your complete backup is compressed, then locked with a passphrase before it leaves this phone.</div>
-      <label>Backup passphrase<input id="backupPassphrase" type="password" minlength="10" maxlength="128" autocomplete="new-password" required><small class="fieldHint">Use at least 10 characters. It is never stored or sent anywhere.</small></label>
-      <label>Repeat passphrase<input id="backupPassphraseAgain" type="password" minlength="10" maxlength="128" autocomplete="new-password" required></label>
-      <div class="warningNote">If this passphrase is lost, nobody can recover the backup. Keep it in your password manager.</div>
-      <button class="primary" type="submit">Lock and download</button>
-    </section>
-  </form>`);
-  $('privateBackupForm').onsubmit = async event => {
-    event.preventDefault();
-    const passphrase = $('backupPassphrase').value;
-    if (passphrase !== $('backupPassphraseAgain').value) { toast('The passphrases do not match.'); return; }
-    const button = event.submitter;
-    if (button) { button.disabled = true; button.textContent = 'Protecting‚Ä¶'; }
-    try {
-      const body = backupBody();
-      const plain = new TextEncoder().encode(JSON.stringify(body));
-      const checksum = await sha256Hex(canonicalJson(body));
-      const compressed = await compressBackupBytes(plain);
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const iterations = 310000;
-      const key = await backupEncryptionKey(passphrase, salt, iterations, ['encrypt']);
-      const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, compressed.bytes));
-      const envelope = {
-        format: 'our-dhan-private-backup', formatVersion: 1, appVersion: VERSION, createdAt: body.exportedAt,
-        encryption: { cipher: 'AES-256-GCM', kdf: 'PBKDF2-HMAC-SHA-256', iterations, salt: bytesToBase64(salt), iv: bytesToBase64(iv) },
-        compression: compressed.compression, ciphertext: bytesToBase64(ciphertext)
-      };
-      downloadFile(`our-dhan-private-${today()}.odhan`, JSON.stringify(envelope), 'application/vnd.our-dhan.backup+json');
-      recordBackupCreated(checksum, body.exportedAt);
-      closeModal();
-      toast(`Private backup downloaded ¬∑ ${humanBytes(new Blob([JSON.stringify(envelope)]).size)} ‚úì`);
-    } catch (_error) {
-      if (button) { button.disabled = false; button.textContent = 'Lock and download'; }
-      toast('This phone could not create the private backup.');
-    }
-  };
-}
-
-function openBackupCenter() {
-  const bytes = new Blob([JSON.stringify(state)]).size;
-  const last = state.settings.lastBackupAt ? formatDate(state.settings.lastBackupAt.slice(0, 10)) : 'No verified backup yet';
-  openModal('Backup & data safety', `<div class="backupCenter">
-    <div class="backupHealth"><div><span>Current data</span><b>${humanBytes(bytes)}</b><small>${state.transactions.length.toLocaleString('en-US')} transaction records</small></div><div><span>Last backup</span><b>${esc(last)}</b><small>${state.settings.lastBackupHash ? 'Integrity recorded ‚úì' : 'Make two copies'}</small></div></div>
-    <div class="backupChoice recommended"><div><i>üîí</i><span><b>Private backup</b><small>Compressed and encrypted on this phone</small></span></div><button class="primary compact" onclick="openPrivateBackupForm()">Download</button></div>
-    <div class="backupChoice"><div><i>‚åò</i><span><b>Readable JSON</b><small>Most future-proof; anyone with the file can read it</small></span></div><button class="secondary compact" onclick="exportBackup()">Download</button></div>
-    <div class="backupChoice"><div><i>‚Ü•</i><span><b>Restore a copy</b><small>Supports .odhan and older Our DHAN JSON files</small></span></div><button class="secondary compact" onclick="chooseBackupFile()">Choose file</button></div>
-    <div class="friendlyNote">Keep one private backup in each of two places you control, such as your phone and a personal drive. Our DHAN never uploads these backup files.</div>
-    <a class="recoveryLink" href="recovery.html" target="_blank" rel="noopener">Open the independent recovery tool <span>‚Ä∫</span></a>
-    <button type="button" class="secondary wide" onclick="closeModal()">Done</button>
-  </div>`);
-}
-
-function chooseBackupFile() {
-  const input = $('backupFile');
-  input.value = '';
-  input.click();
-}
-
-function validateBackupData(data, version) {
-  if (!data || typeof data !== 'object') return 'This file has no budget data.';
-  if (!(version >= 7 && version <= VERSION)) return `Only Our Budget v7‚Äìv8 or Our DHAN v${VERSION} backups can be restored safely.`;
-  const arrayKeys = ['transactions', 'goals', 'debts', 'assets', 'accounts', 'recurring', 'contributions', 'snapshots'];
-  for (const key of arrayKeys) {
-    if (!Array.isArray(data[key])) return `The ${key} section is missing.`;
-    if (data[key].length > 250000) return `The ${key} section is unexpectedly large.`;
-  }
-  for (const key of ['checkups', 'sinkingFunds', 'weeklyReviews']) {
-    if (data[key] != null && !Array.isArray(data[key])) return `The ${key} section is invalid.`;
-    if ((data[key]?.length || 0) > 250000) return `The ${key} section is unexpectedly large.`;
-    if (data[key] == null) data[key] = [];
-  }
-  const allRecords = [...arrayKeys, 'checkups', 'sinkingFunds', 'weeklyReviews'].flatMap(key => data[key]);
-  if (allRecords.some(item => !item || typeof item !== 'object' || ('id' in item && typeof item.id !== 'string'))) return 'One or more records are invalid.';
-  const accountIds = new Set([...state.accounts, ...data.accounts].map(item => item.id));
-  const debtIds = new Set([...state.debts, ...data.debts].map(item => item.id));
-  const goalIds = new Set([...state.goals, ...data.goals].map(item => item.id));
-  const recurringIds = new Set([...state.recurring, ...data.recurring].map(item => item.id));
-  const brokenLink = data.transactions.some(item =>
-    (item.accountId && !accountIds.has(item.accountId)) || (item.toAccountId && !accountIds.has(item.toAccountId)) ||
-    (item.debtId && !debtIds.has(item.debtId)) || (item.recurringItemId && !recurringIds.has(item.recurringItemId))
-  ) || data.contributions.some(item => !goalIds.has(item.goalId) || (item.accountId && !accountIds.has(item.accountId)));
-  if (brokenLink) return 'This backup contains a link to a missing account, debt, goal or regular item.';
-  return '';
-}
-
-async function verifyReadableBackup(payload) {
-  if (!payload?.integrity) return 'Older backup ¬∑ no checksum';
-  if (payload.integrity.algorithm !== 'SHA-256' || !/^[0-9a-f]{64}$/.test(payload.integrity.value || '')) throw new Error('Invalid backup checksum.');
-  const { integrity, ...body } = payload;
-  const actual = await sha256Hex(canonicalJson(body));
-  if (actual !== integrity.value) throw new Error('The backup changed or is damaged.');
-  return 'Integrity verified ‚úì';
-}
-
-function prepareBackupRestore(payload, verification) {
-  const version = Number(payload?.appVersion || payload?.data?.version || 0);
-  const error = validateBackupData(payload?.data, version);
-  if (error) { toast(error); return; }
-  pendingRestoreData = normalizeState(payload.data);
-  const data = pendingRestoreData;
-  openModal('Restore backup', `<div class="form">
-    <div class="friendlyNote">${esc(verification)}. A safety copy of today‚Äôs data downloads first. Restore merges this file into the household and keeps newer records.</div>
-    <div class="restorePreview">
-      <div><span>Transactions</span><b>${data.transactions.length.toLocaleString('en-US')}</b></div>
-      <div><span>Accounts</span><b>${data.accounts.length}</b></div>
-      <div><span>Plans</span><b>${data.goals.length + data.debts.length}</b></div>
-      <div><span>Regular items</span><b>${data.recurring.length}</b></div>
-      <div><span>Assets</span><b>${data.assets.length}</b></div>
-      <div><span>Snapshots</span><b>${data.snapshots.length.toLocaleString('en-US')}</b></div>
-    </div>
-    <div class="warningNote">Keep this page open until the restore finishes. Nothing is restored while offline.</div>
-    <button id="restoreConfirm" class="primary" onclick="confirmBackupRestore()">Download safety copy and restore</button>
-    <button class="secondary" onclick="pendingRestoreData=null;closeModal()">Cancel</button>
-  </div>`);
-}
-
-async function decryptSelectedBackup() {
-  const envelope = pendingEncryptedBackup;
-  if (!envelope) return;
-  const passphrase = $('restorePassphrase').value;
-  const button = $('decryptBackupButton');
-  if (button) { button.disabled = true; button.textContent = 'Unlocking‚Ä¶'; }
-  try {
-    const encryption = envelope.encryption || {};
-    const iterations = Number(encryption.iterations);
-    if (encryption.cipher !== 'AES-256-GCM' || encryption.kdf !== 'PBKDF2-HMAC-SHA-256' || iterations < 100000 || iterations > 2000000) throw new Error('Unsupported encryption settings.');
-    const salt = base64ToBytes(encryption.salt || '');
-    const iv = base64ToBytes(encryption.iv || '');
-    const key = await backupEncryptionKey(passphrase, salt, iterations, ['decrypt']);
-    const decrypted = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, base64ToBytes(envelope.ciphertext || '')));
-    const plain = await decompressBackupBytes(decrypted, envelope.compression || 'none');
-    const payload = safeParse(new TextDecoder().decode(plain));
-    if (!payload) throw new Error('Invalid backup payload.');
-    pendingEncryptedBackup = null;
-    prepareBackupRestore(payload, 'Private backup unlocked and authenticated');
-  } catch (_error) {
-    if (button) { button.disabled = false; button.textContent = 'Unlock backup'; }
-    toast('Wrong passphrase or damaged backup.');
-  }
-}
-
-async function handleBackupFile(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  if (file.size > 50 * 1024 * 1024) { toast('Backup files must be under 50 MB.'); return; }
-  try {
-    const payload = safeParse(await file.text());
-    if (!payload) throw new Error('Invalid JSON.');
-    if (payload.format === 'our-dhan-private-backup') {
-      pendingEncryptedBackup = payload;
-      openModal('Unlock private backup', `<form class="form" onsubmit="event.preventDefault();decryptSelectedBackup()"><section class="flowStep"><div class="friendlyNote">This file is encrypted. Enter the passphrase used when it was created.</div><label>Backup passphrase<input id="restorePassphrase" type="password" minlength="10" maxlength="128" autocomplete="current-password" required autofocus></label><button id="decryptBackupButton" class="primary" type="submit">Unlock backup</button><button class="secondary" type="button" onclick="pendingEncryptedBackup=null;closeModal()">Cancel</button></section></form>`);
-      return;
-    }
-    prepareBackupRestore(payload, await verifyReadableBackup(payload));
-  } catch (error) { toast(error?.message || 'This backup could not be read.'); }
-}
-
-function accountRestoreRow(account) {
-  return { id: account.id, household_id: householdId, name: String(account.name || '').trim(), account_type: account.type, currency: cleanCurrency(account.currency), opening_balance: Number(account.openingBalance || 0), opening_date: account.openingDate, notes: account.notes || null, active: account.active !== false, updated_at: new Date().toISOString() };
-}
-function goalRestoreRow(goal, saved = goal.saved) {
-  return { id: goal.id, household_id: householdId, name: String(goal.name || '').trim(), target: Number(goal.target || 0), saved: Number(saved || 0), currency: cleanCurrency(goal.currency), due_date: goal.due || null, active: goal.active !== false, updated_at: new Date().toISOString() };
-}
-function debtRestoreRow(debt, remaining = debt.remaining) {
-  return { id: debt.id, household_id: householdId, name: String(debt.name || '').trim(), original_amount: Number(debt.original || 0), remaining_amount: Number(remaining || 0), currency: cleanCurrency(debt.currency), due_date: debt.due || null, annual_interest_rate: Number(debt.apr || 0), minimum_payment: Number(debt.minimum || 0), payment_day: debt.paymentDay || null, active: debt.active !== false, updated_at: new Date().toISOString() };
-}
-
-function addRestoreBatches(operations, table, rows, onConflict = '') {
-  const size = 500;
-  for (let index = 0; index < rows.length; index += size) {
-    operations.push({ action: 'bulkUpsert', table, rows: rows.slice(index, index + size), onConflict });
-  }
-}
-
-async function confirmBackupRestore() {
-  const data = pendingRestoreData;
-  if (!data || !db || !householdId) return;
-  if (!navigator.onLine) { toast('Reconnect before restoring a backup.'); return; }
-  if (pending().length && !(await flushPending())) { toast('Waiting changes must sync before restore.'); return; }
-  const button = $('restoreConfirm');
-  if (button) { button.disabled = true; button.textContent = 'Restoring‚Ä¶'; }
-  await exportBackup('before-restore', true);
-  const operations = [];
-  operations.push({ action: 'settings', row: {
-    household_id: householdId, base_currency: data.settings.base, payday_day: data.settings.paydayDay,
-    fun_mode: data.settings.funMode !== false, debt_strategy: data.settings.debtStrategy,
-    usd_to_aed: data.settings.rates.AED, usd_to_mvr: data.settings.rates.MVR, usd_to_inr: data.settings.rates.INR
-  } });
-  const budgetRows = Object.entries(data.budgets).map(([category, budget]) => ({ household_id: householdId, category, amount: Number(budget.amount || 0), currency: cleanCurrency(budget.currency) }));
-  if (budgetRows.length) operations.push({ action: 'budget', rows: budgetRows });
-  addRestoreBatches(operations, 'accounts', data.accounts.map(accountRestoreRow));
-  addRestoreBatches(operations, 'goals', data.goals.map(goal => goalRestoreRow(goal, 0)));
-  addRestoreBatches(operations, 'debts', data.debts.map(debt => debtRestoreRow(debt, debt.original)));
-  addRestoreBatches(operations, 'recurring_items', data.recurring.map(item => ({
-    id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, kind: item.kind,
-    amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category, paid_by: item.paidBy || 'Shared',
-    account_id: item.accountId || null, day_of_month: Number(item.day), note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString()
-  })));
-  addRestoreBatches(operations, 'transactions', data.transactions.map(item => transactionRow({
-    id: item.id, type: item.type, amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category,
-    paidBy: item.paidBy || 'Shared', accountId: item.accountId || '', account: item.account || '', toAccountId: item.toAccountId || '',
-    toAmount: item.toAmount == null ? null : Number(item.toAmount), debtId: item.debtId || '', debtPrincipal: item.debtPrincipal == null ? null : Number(item.debtPrincipal),
-    debtInterest: Number(item.debtInterest || 0), recurringItemId: item.recurringItemId || '', recurringMonth: item.recurringMonth || '',
-    date: item.date, note: item.note || '', createdAt: item.createdAt || new Date().toISOString()
-  })));
-  addRestoreBatches(operations, 'goal_contributions', data.contributions.map(item => ({
-    id: item.id, household_id: householdId, goal_id: item.goalId, account_id: item.accountId || null, user_id: currentUser.id,
-    amount: Number(item.amount), currency: cleanCurrency(item.currency), date: item.date, note: item.note || null, updated_at: new Date().toISOString()
-  })));
-  addRestoreBatches(operations, 'debts', data.debts.map(debt => debtRestoreRow(debt)));
-  addRestoreBatches(operations, 'goals', data.goals.map(goal => goalRestoreRow(goal)));
-  addRestoreBatches(operations, 'assets', data.assets.map(item => ({
-    id: item.id, household_id: householdId, user_id: currentUser.id, name: item.name, asset_type: item.type,
-    symbol: item.symbol || null, quantity: Number(item.quantity || 0), currency: cleanCurrency(item.currency),
-    manual_value: item.manualValue == null ? null : Number(item.manualValue), notes: item.notes || null, updated_at: new Date().toISOString()
-  })));
-  const snapshotRows = data.snapshots.map(item => {
-    const existing = state.snapshots.find(snapshot => snapshot.date === item.date);
-    return { id: existing?.id || item.id, household_id: householdId, snapshot_date: item.date, cash_usd: Number(item.cashUSD), assets_usd: Number(item.assetsUSD), debt_usd: Number(item.debtUSD), net_worth_usd: Number(item.netWorthUSD) };
-  });
-  addRestoreBatches(operations, 'net_worth_snapshots', snapshotRows, 'household_id,snapshot_date');
-  const checkupRows = data.checkups.map(item => {
-    const existing = state.checkups.find(checkup => checkup.month === item.month);
-    return { id: existing?.id || item.id, household_id: householdId, month: item.month, completed_by: currentUser.id, account_count: Number(item.accountCount || 0), adjustment_total_usd: Number(item.adjustmentUSD || 0), note: item.note || null, focus: item.focus || null, closed_at: item.closedAt || null, balances_checked_at: item.balancesCheckedAt || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() };
-  });
-  addRestoreBatches(operations, 'monthly_checkups', checkupRows, 'household_id,month');
-  addRestoreBatches(operations, 'sinking_funds', data.sinkingFunds.map(item => ({ id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, target_amount: Number(item.target), saved_amount: Number(item.saved || 0), currency: cleanCurrency(item.currency), due_date: item.due || null, last_reserved_month: item.lastReservedMonth || null, note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString() })));
-  addRestoreBatches(operations, 'weekly_money_dates', data.weeklyReviews.map(item => ({ id: item.id, household_id: householdId, week_start: item.weekStart, reviewed_by: currentUser.id, win: item.win || null, next_action: item.nextAction || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() })), 'household_id,week_start');
-  try {
-    for (let index = 0; index < operations.length; index += 1) {
-      const operation = operations[index];
-      if (button) button.textContent = `Restoring ${Math.round(index / Math.max(1, operations.length) * 100)}%‚Ä¶`;
-      const { error } = await runOperation(operation);
-      if (error) throw error;
-    }
-    pendingRestoreData = null;
-    state.settings.lastCurrency = data.settings.lastCurrency;
-    state.prices = data.prices;
-    cache();
-    await loadRemote();
-    closeModal();
-    toast('Backup restored safely ‚úì');
-    celebrate();
-    await ensureTodaySnapshot();
-  } catch (error) {
-    if (button) { button.disabled = false; button.textContent = 'Retry restore'; }
-    toast(`Restore stopped: ${error?.message || 'unknown error'}`);
-    await loadRemote();
-  }
-}
-
-function csvCell(value) {
-  const text = String(value ?? '');
-  const safe = /^\s*[=+\-@]/.test(text) ? `'${text}` : text;
-  return `"${safe.replace(/"/g, '""')}"`;
-}
-function exportTransactionsCsv() {
-  const headers = ['Date', 'Type', 'Category', 'Amount', 'Currency', 'Paid by', 'From account', 'To account', 'Amount received', 'Debt principal', 'Note'];
-  const lines = [headers, ...[...state.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [t.date, t.type, t.category, t.amount, t.currency, t.paidBy, accountName(t.accountId) || t.account, accountName(t.toAccountId), t.toAmount ?? '', t.debtPrincipal ?? '', t.note])];
-  downloadFile(`our-dhan-transactions-${today()}.csv`, lines.map(row => row.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
-  toast('Transaction CSV downloaded ‚úì');
-}
-
-async function signOut() {
-  if (db) await db.auth.signOut();
-  showAuth();
-}
-
-$('modal').addEventListener('click', event => { if (event.target === $('modal')) closeModal(); });
-$('sakhiTourModal').addEventListener('click', event => { if (event.target === $('sakhiTourModal')) closeSakhiTour(); });
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && !$('sakhiTourModal').classList.contains('hidden')) { closeSakhiTour(); return; }
-  if (event.key === 'Escape' && !$('modal').classList.contains('hidden')) { closeModal(); return; }
-});
-const wheelObserver = new MutationObserver(mutations => mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
-  if (node.nodeType === Node.ELEMENT_NODE) prepareInlineControls(node);
-})));
-wheelObserver.observe(document.body, { childList: true, subtree: true });
-prepareInlineControls();
-setupFormFlow($('settingsFlow'));
-
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-render();
-showPage('today');
-boot();
+Y™Áäx-ÆÈ‹j◊ù¢Îi∫⁄+äßj[hëÈ‹¢ÈÌ◊Mµ”ÑËµ©h∫⁄n∂XßzÕX€€ú›ëTî“S”àHN¬ò€€ú›’TîëSê“QT»H…–QQ	À	”UîâÀ	“SîâÀ	’T—	◊N¬ò€€ú›VSî—W––UQ”‘íQT»H¬à…“›\⁄[ô…À	¸'„Ë	◊K…—õ€Ÿ	À	¸'„lâ◊K…’ò[ú‹‹ù	À	¸'Ê•I◊K…–ö[…À	¸'‰®I◊Kà…“X[	À	¯ßi;Ó#…◊K…—Xù	À	¸'ÈÔâ◊K…‘ÿ]ö[ô‹…À	¸'„,I◊K…‘⁄‹[ô…À	¸'Ê„{Ó#…◊Kà…—[ù\ùZ[õY[ù	À	¸'„´	◊K…’ò]ô[	À	¯ß";Ó#…◊K…”›\âÀ	¯†(∏†(∏†(â◊BóN¬ò€€ú›Sê””QW––UQ”‘íQT»H…‘ÿ[\ûIÀ	–õ€ù\…À	‘⁄YH[ò€€YIÀ	—⁄Yù	À	‘ôYù[ô	À	”›\à[ò€€YI◊N¬ò€€ú›Sê””QW––UQ”‘ñW“P””î»H»ÿ[\ûNà	¸'‰Ø	Àõ€ù\Œà	¯ß*	À	‘⁄YH[ò€€YIŒà	¸'ÊË;Ó#…À⁄Yùà	¸'„†IÀôYù[ôà	¯°™{Ó#…À	”›\à[ò€€YIŒà	˚Ô"…»N¬ò€€ú›URP“◊”ì’W‘’Q——T’S”î»H¬à›\⁄[ôŒà	‘ô[ù‹à€YH€‹›	Àõ€Ÿà	—‹õÿŸ\öY\»‹àYX[	Àò[ú‹‹ùà	’^Kù\»‹àùY[	Àö[Œà	”[€ùHö[	ÀàX[à	”YYX⁄[ôH‹àÿ\ôIÀXùà	—Xù^[Y[ù	Àÿ]ö[ô‹Œà	”[€ô^HŸ]\⁄YIÀ⁄‹[ôŒà	“›\ŸZ€⁄‹[ô…Àà[ù\ùZ[õY[ùà	”[›öYH‹à›][ô…Àò]ô[à	’ö\^[úŸIÀ›\éà	”›\à^[úŸIÀàÿ[\ûNà	”[€ùHÿ[\ûIÀõ€ù\Œà	’€‹ö»õ€ù\…À	‘⁄YH[ò€€YIŒà	—^òH[ò€€YIÀ⁄Yùà	—⁄YùôXŸZ]ôY	ÀàôYù[ôà	‘ôYù[ôôXŸZ]ôY	À	”›\à[ò€€YIŒà	”›\à[ò€€YI¬üN¬ò€€ú›T‘—SïPS––UQ”‘íQT»H…“›\⁄[ô…À	—õ€Ÿ	À	’ò[ú‹‹ù	À	–ö[…À	“X[	◊N¬ò€€ú›–Sï––UQ”‘íQT»H…‘⁄‹[ô…À	—[ù\ùZ[õY[ù	À	’ò]ô[	À	”›\â◊N¬ò€€ú›QUS»H÷…÷UIÀ	—€€	◊K…÷Q…À	‘⁄[ô\â◊K…÷	À	‘][ù[I◊K…÷	À	‘[Y][I◊WN¬ò€€ú›‘ñT»H÷…–ï…À	–ö]€⁄[â◊K…—U	À	—]\ô][I◊K…”…À	”]X€⁄[â◊K…÷î	À	÷î	◊K…—’	À	‘€ÿY›	◊K…–QIÀ	–ÿ\ô[õ…◊WN¬ò€€ú›QêUSH¬àô\ú⁄[€éàëTî“S”ãàŸ][ô‹Œà¬àò\ŸNà	”UîâÀ\››\úô[òﬁNà	”UîâÀò]\Œà»T—àKQQàÀççÃçKUîéàMKçãSîéàKà^Y^Q^Nàù[ù[ì[ŸNàùYKXù›ò]YﬁNà	ÿ]ò[[ò⁄IÀ\›^[úŸPÿ]Y€‹ûNà	—õ€Ÿ	À\›^[úŸPXÿ€›[ùYà	…À\›[ò€€YPXÿ€›[ùYà	…Àà[XZ[›][Y[ùŒàò[ŸK›][Y[ùôX⁄\Y[ù\Ÿ\íYà	…À\›òX⁄›\]à	…À\›òX⁄›\\⁄à	…¬àKàY[Xô\éà»\‹^Sò[YNà	…Àõ€Nà	…»K[‹Nà◊Kàò[úÿX›[€úŒà◊KàùYŸ]Œà¬à›\⁄[ôŒà»[[›[ùàLML›\úô[òﬁNà	”Uîâ»Kõ€Ÿà»[[›[ùàÃ›\úô[òﬁNà	”Uîâ»Kàö[Œà»[[›[ùàML›\úô[òﬁNà	”Uîâ»Kò[ú‹‹ùà»[[›[ùàL›\úô[òﬁNà	”Uîâ»Kà⁄‹[ôŒà»[[›[ùàå›\úô[òﬁNà	”Uîâ»K›\éà»[[›[ùàå›\úô[òﬁNà	”Uîâ»BàKà€ÿ[Œà◊KXùŒà◊K\‹Ÿ]Œà◊KXÿ€›[ùŒà◊KôX›\úö[ôŒà◊K€€ùöXù][€úŒà◊K€ò\⁄›Œà◊K⁄X⁄›\Œà◊Kà⁄[ö⁄[ô—ù[ôŒà◊KŸYZ€Tô]öY]‹Œà◊KöXŸ\ŒàﬂBüN¬Çõ]›]HH›ùX›\ôY€€ôJQêUS
+N¬õ]àHù[¬õ]›\úô[ù\Ÿ\àHù[¬õ]›\ŸZ€YHù[¬õ]›]RŸ^HH	…Œ¬õ][ô[ô“Ÿ^HH	…Œ¬õ]›][Y[ù[XZ[Ÿ^HH	…Œ¬õ]ôX[[YP⁄[õô[Hù[¬õ]ôX[[YU[Y\àHù[¬õ]öXŸTôYúô\⁄Hù[¬õ]\òXõPÿX⁄U[Y\àHù[¬õ][ô[ô—[ò‹û\YòX⁄›\Hù[¬õ][ô[ô”‹\ò][€ú”Y[[‹ûHH◊N¬õ]›][Y[ù[XZ[]Y]YSY[[‹ûHH◊N¬õ]›][Y[ù[XZ[õ›öY\îôXYHHù[¬õ]›][Y[ù[XZ[ôX⁄\Y[ùôXYHHò[ŸN¬õ]›][Y[ù[XZ[ôX⁄\Y[ùH	…Œ¬õ]›][Y[ù[XZ[\››]\»H	…Œ¬õ]›\úô[ùYŸHH	›Ÿ^IŒ¬õ]ŸX[⁄\ù[ŸHH	ÿX›X[	Œ¬õ][Y[[ôQö[\àH	ÿ[	Œ¬õ]ÿ\⁄õ›—^\»HÃ¬õ]›][Y[ù\ö[ŸH	€[€ù	Œ¬õ]›][Y[ù⁄[ôH	ÿ[	Œ¬õ]›][Y[ùúõ€HH	…Œ¬õ]›][Y[ù»H	…Œ¬õ]ô\‹ù\ö[ŸH	€[€ù	Œ¬õ]ô\‹ùúõ€HH	…Œ¬õ]ô\‹ù»H	…Œ¬õ]X›]ôT›][Y[ù‹ò\[Ÿ[Hù[¬õ]ÿ[[ô\ì[€ùH	…Œ¬õ]ÿ\›[Y\àHù[¬õ][ô[ô‘]ZX⁄–X›[€àHô]»TìŸX\ò⁄\ò[\ ÿÿ][€ãúŸX\ò⁄
+KôŸ]
+	‹]ZX⁄… H	…Œ¬õ][ô[ô‘ô\›‹ôQ]HHù[¬õ]ÿZ⁄U›\î›\H¬õ]ÿZ⁄U›\îô]\õëõÿ›\»Hù[¬õ]ÿZ⁄U›\êŸ[Xúò]YHò[ŸN¬õ]ÿZ⁄TòX›XŸHHù[¬Çò€€ú›	HYOàÿ›[Y[ùôŸ][[Y[ùûRY
+Y
+N¬ò€€ú›€€ôHHò[YHOà›ùX›\ôY€€ôJò[YJN¬ò€€ú›\ÿ»Hò[YHOà›ö[ô ò[YHœ»	… Kúô\XŸJ÷…èàâ◊KŸÀ⁄\àOà
+»	…âŒà	…ò[\…À	œ	Œà	…õ…À	œâŒà	…ô›…À	»âŒà	…ú][›…Àâ»éà	…àÃŒN…»JVÿ⁄\óJN¬ò€€ú›ÿYôT\úŸHHò[YHOà»ûH»ô]\õàî””ãú\úŸJò[YJN»Hÿ]⁄
+Ÿ\úõ‹äH»ô]\õàù[»HN¬ò€€ú››‹òYŸQŸ]HŸ^HOà»ûH»ô]\õàÿÿ[›‹òYŸKôŸ]][JŸ^JN»Hÿ]⁄
+Ÿ\úõ‹äH»ô]\õàù[»HN¬ò€€ú›ÿÿ[]HH]HOà¬à€€ú›H]Hô]»]J
+N¬à€€ú›ŸôúŸ]HôŸ][Y^õ€ôSŸôúŸ]
+
+H
+àå¬àô]\õàô]»]JôŸ][YJ
+HHŸôúŸ]
+Kù“T”‘›ö[ô 
+Kú€XŸJL
+N¬üN¬ò€€ú›Ÿ^HH
+
+HOàÿÿ[]J
+N¬ò€€ú›[€ùŸ^HH
+]HHŸ^J
+JHOà]Kú€XŸJ N¬ò€€ú›[€ù›\ùH
+]HHŸ^J
+JHOà	€[€ùŸ^J]J_KLX¬ò€€ú›€X[ê›\úô[òﬁHHò[YHOà›ö[ô ò[YH	… Kùö[J
+N¬ò€€ú››\úô[òﬁS‹[€ú»HŸ[X›YOà’TîëSê“QTÀõX\
+»Oà‹[€âÿ»OOHŸ[X›Y»	»Ÿ[X›Y	»à	…ﬂOâÿﬂO€‹[€èò
+Köõ⁄[ä	… N¬Çôù[ò›[€àõ‹õX[^ôT›]Jò] H¬à€€ú›[ú]Hò]»ﬂN¬à€€ú›ô^HÿöôX›ò\‹⁄Y€ä€€ôJQêUS
+K[ú]
+N¬àô^ùô\ú⁄[€àHëTî“S”é¬àô^úŸ][ô‹»HÿöôX›ò\‹⁄Y€äﬂKQêUSúŸ][ô‹À[ú]úŸ][ô‹»ﬂJN¬àô^úŸ][ô‹Àúò]\»HÿöôX›ò\‹⁄Y€äﬂKQêUSúŸ][ô‹Àúò]\À[ú]úŸ][ô‹œÀúò]\»ﬂJN¬àô^úŸ][ô‹Àòò\ŸHH’TîëSê“QTÀö[ò€Y\ ô^úŸ][ô‹Àòò\ŸJH»ô^úŸ][ô‹Àòò\ŸHà	”UîâŒ¬àô^úŸ][ô‹Àõ\››\úô[òﬁHH’TîëSê“QTÀö[ò€Y\ ô^úŸ][ô‹Àõ\››\úô[òﬁJH»ô^úŸ][ô‹Àõ\››\úô[òﬁHàô^úŸ][ô‹Àòò\ŸN¬àô^õY[Xô\àHÿöôX›ò\‹⁄Y€äﬂKQêUSõY[Xô\ã[ú]õY[Xô\àﬂJN¬àô^úŸ][ô‹ÀôXù›ò]YﬁHH…ÿ]ò[[ò⁄IÀ	‹€õ›ÿò[	◊Kö[ò€Y\ ô^úŸ][ô‹ÀôXù›ò]YﬁJH»ô^úŸ][ô‹ÀôXù›ò]YﬁHà	ÿ]ò[[ò⁄IŒ¬àõ‹à
+€€ú›Ÿ^HŸà…‹[‹IÀ	›ò[úÿX›[€ú…À	Ÿ€ÿ[…À	ŸXù…À	ÿ\‹Ÿ]…À	ÿXÿ€›[ù…À	‹ôX›\úö[ô…À	ÿ€€ùöXù][€ú…À	‹€ò\⁄›…À	ÿ⁄X⁄›\…À	‹⁄[ö⁄[ô—ù[ô…À	›ŸYZ€Tô]öY]‹…◊JH¬àô^⁄Ÿ^WHH\úò^Kö\–\úò^Jô^⁄Ÿ^WJH»ô^⁄Ÿ^WHà◊N¬àBàô^úöXŸ\»Hô^úöXŸ\»	âà\[Ÿàô^úöXŸ\»OOH	€ÿöôX›	»»ô^úöXŸ\»àﬂN¬à€€ú›€›\òŸPùYŸ]»H[ú]òùYŸ]»	âà\[Ÿà[ú]òùYŸ]»OOH	€ÿöôX›	»»[ú]òùYŸ]»àQêUSòùYŸ]Œ¬àô^òùYŸ]»HÿöôX›ôúõ€Q[ùöY\ ÿöôX›ô[ùöY\ €›\òŸPùYŸ] KõX\
+
+ÿÿ]Y€‹ûKò[YWJHOà¬àÿ]Y€‹ûKà\[Ÿàò[YHOOH	€ÿöôX›	¬à»»[[›[ùàù[Xô\äò[YKò[[›[ù
+H›\úô[òﬁNà€X[ê›\úô[òﬁJò[YKò›\úô[òﬁJHô^úŸ][ô‹Àòò\ŸHBàà»[[›[ùàù[Xô\äò[YJH›\úô[òﬁNàô^úŸ][ô‹Àòò\ŸHBàJJN¬àô]\õàô^¬üBÇò€€ú›TêPìW––P“W—àH	€›\óŸ[óŸ\òXõWÿÿX⁄W›åIŒ¬ò€€ú›TêPìW––P“W‘’‘ëHH	⁄›\ŸZ€‹›]\…Œ¬ò€€ú›––S––P“W”SRUHWÕLÃ¬Çôù[ò›[€à‹[ë\òXõPÿX⁄J
+H¬àYà
+J	⁄[ô^Yâ»[à⁄[ô› JHô]\õàõ€Z\ŸKúô\€€ôJù[
+N¬àô]\õàô]»õ€Z\ŸJô\€€ôHOà¬àûH¬à€€ú›ô\]Y\›H[ô^Yãõ‹[äTêPìW––P“W—ãJN¬àô\]Y\›õ€ù\‹òY[ôYYYH
+
+HOà¬àYà
+\ô\]Y\›úô\›[õÿöôX››‹ôSò[Y\Àò€€ùZ[ú TêPìW––P“W‘’‘ëJJHô\]Y\›úô\›[ò‹ôX]SÿöôX››‹ôJTêPìW––P“W‘’‘ëJN¬àN¬àô\]Y\›õ€ú›XÿŸ\‹»H
+
+HOàô\€€ôJô\]Y\›úô\›[
+N¬àô\]Y\›õ€ô\úõ‹àH
+
+HOàô\€€ôJù[
+N¬àHÿ]⁄
+Ÿ\úõ‹äH»ô\€€ôJù[
+N»BàJN¬üBÇò\ﬁ[ò»ù[ò›[€à\òXõPÿX⁄QŸ]
+Ÿ^JH¬à€€ú›]Xò\ŸHH]ÿZ]‹[ë\òXõPÿX⁄J
+N¬àYà
+Y]Xò\ŸJHô]\õà	…Œ¬à€€ú››‹ôYH]ÿZ]ô]»õ€Z\ŸJô\€€ôHOà¬àûH¬à€€ú›ô\]Y\›H]Xò\ŸKùò[úÿX›[€äTêPìW––P“W‘’‘ëK	‹ôXY€õI KõÿöôX››‹ôJTêPìW––P“W‘’‘ëJKôŸ]
+Ÿ^JN¬àô\]Y\›õ€ú›XÿŸ\‹»H
+
+HOà»]Xò\ŸKò€‹ŸJ
+N»ô\€€ôJô\]Y\›úô\›[	… N»N¬àô\]Y\›õ€ô\úõ‹àH
+
+HOà»]Xò\ŸKò€‹ŸJ
+N»ô\€€ôJ	… N»N¬àHÿ]⁄
+Ÿ\úõ‹äH»]Xò\ŸKò€‹ŸJ
+N»ô\€€ôJ	… N»BàJN¬àYà
+\[Ÿà›‹ôYOOH	‹›ö[ô… Hô]\õà›‹ôY¬àYà
+›‹ôYÀôõ‹õX]OOH	Ÿﬁö\Zú€€â»J›‹ôYòû]\»[ú›[òŸ[Ÿà\úò^PùYôô\äHJ	—X€€\ô\‹⁄[€î›ôX[I»[à⁄[ô› JHô]\õà	…Œ¬àûH¬à€€ú››ôX[HHô]»õÿä‹›‹ôYòû]\◊JKú›ôX[J
+Kú\Uõ›Y⁄
+ô]»X€€\ô\‹⁄[€î›ôX[J	Ÿﬁö\	 JN¬àô]\õà]ÿZ]ô]»ô\‹€úŸJ›ôX[JKù^
+
+N¬àHÿ]⁄
+Ÿ\úõ‹äH»ô]\õà	…Œ»BüBÇò\ﬁ[ò»ù[ò›[€à\òXõPÿX⁄TŸ]
+Ÿ^Kò[YJH¬à€€ú›]Xò\ŸHH]ÿZ]‹[ë\òXõPÿX⁄J
+N¬àYà
+Y]Xò\ŸJHô]\õé¬à]›‹ôYHò[YN¬àYà
+\[Ÿàò[YHOOH	‹›ö[ô…»	âàò[YKõ[ô›àMà	âà	–€€\ô\‹⁄[€î›ôX[I»[à⁄[ô› H¬àûH¬à€€ú››ôX[HHô]»õÿä›ò[YWJKú›ôX[J
+Kú\Uõ›Y⁄
+ô]»€€\ô\‹⁄[€î›ôX[J	Ÿﬁö\	 JN¬à›‹ôYH»õ‹õX]à	Ÿﬁö\Zú€€âÀû]\Œà]ÿZ]ô]»ô\‹€úŸJ›ôX[JKò\úò^PùYôô\ä
+HN¬àHÿ]⁄
+Ÿ\úõ‹äH»›‹ôYHò[YN»BàBà]ÿZ]ô]»õ€Z\ŸJô\€€ôHOà¬àûH¬à€€ú›ò[úÿX›[€àH]Xò\ŸKùò[úÿX›[€äTêPìW––P“W‘’‘ëK	‹ôXY‹ö]I N¬àò[úÿX›[€ãõÿöôX››‹ôJTêPìW––P“W‘’‘ëJKú]
+›‹ôYŸ^JN¬àò[úÿX›[€ãõ€ò€€\]HHô\€€ôN¬àò[úÿX›[€ãõ€ô\úõ‹àHô\€€ôN¬àò[úÿX›[€ãõ€òXõ‹ùHô\€€ôN¬àHÿ]⁄
+Ÿ\úõ‹äH»ô\€€ôJ
+N»BàJN¬à]Xò\ŸKò€‹ŸJ
+N¬üBÇôù[ò›[€àÿX⁄J
+H¬àYà
+\›]RŸ^JHô]\õé¬à€€ú›Ÿ^HH›]RŸ^N¬à€€ú›Ÿ\öX[^ôYHî””ãú›ö[ô⁄YûJ›]JN¬àûH¬àYà
+Ÿ\öX[^ôYõ[ô›H––S––P“W”SRU
+Hÿÿ[›‹òYŸKúŸ]][JŸ^KŸ\öX[^ôY
+N¬à[ŸHÿÿ[›‹òYŸKúô[[›ôR][JŸ^JN¬àHÿ]⁄
+Ÿ\úõ‹äH¬àûH»ÿÿ[›‹òYŸKúô[[›ôR][JŸ^JN»Hÿ]⁄
+⁄Y€õ‹ôY
+H» à›\Xò\ŸHô[XZ[ú»H€›\òŸHŸàù]à
+ã»BàBà€X\ï[Y[›]
+\òXõPÿX⁄U[Y\äN¬à\òXõPÿX⁄U[Y\àHŸ][Y[›]
+
+
+HOà\òXõPÿX⁄TŸ]
+Ÿ^KŸ\öX[^ôY
+KN
+N¬üBÇò\ﬁ[ò»ù[ò›[€àÿYÿ€‹Y›]J
+H¬à›]RŸ^HH›\óŸ[ó›éNâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYX¬à[ô[ô“Ÿ^HH›\óŸ[ó‹[ô[ô◊›éNâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYX¬à›][Y[ù[XZ[Ÿ^HH›\óŸ[ó‹›][Y[ùŸ[XZ[›åNâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYX¬à€€ú›YÿXﬁT›]RŸ^\»H¬à›\óÿùYŸ]›éâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXà›\óÿùYŸ]›çŒâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXà›\óÿùYŸ]›çéâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXà›\óÿùYŸ]›çNâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXà	€›\óÿùYŸ]›ç	À	€›\óÿùYŸ]›å…À	€›\óÿùYŸ]›åâ¬àN¬à€€ú›YÿXﬁT[ô[ô“Ÿ^\»H¬à›\óÿùYŸ]‹[ô[ô◊›éâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXà›\óÿùYŸ]‹[ô[ô◊›çŒâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXà›\óÿùYŸ]‹[ô[ô◊›çéâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXà›\óÿùYŸ]‹[ô[ô◊›çNâ⁄›\ŸZ€YNâÿ›\úô[ù\Ÿ\ãöYXàN¬à]ò]»HÿYôT\úŸJ›‹òYŸQŸ]
+›]RŸ^JJN¬àYà
+\ò] Hò]»HÿYôT\úŸJ]ÿZ]\òXõPÿX⁄QŸ]
+›]RŸ^JJN¬àYà
+\ò] H¬àõ‹à
+€€ú›Ÿ^HŸàYÿXﬁT›]RŸ^\ H¬àò]»HÿYôT\úŸJ›‹òYŸQŸ]
+Ÿ^JJN¬àYà
+ò] HúôXZŒ¬àBàBà]]Y]YYHÿYôT\úŸJ›‹òYŸQŸ]
+[ô[ô“Ÿ^JJN¬àYà
+P\úò^Kö\–\úò^J]Y]YY
+JH]Y]YYHÿYôT\úŸJ]ÿZ]\òXõPÿX⁄QŸ]
+	‹[ô[ô“Ÿ^_Nú]Y]YX
+JN¬àYà
+P\úò^Kö\–\úò^J]Y]YY
+JH¬àõ‹à
+€€ú›Ÿ^HŸàYÿXﬁT[ô[ô“Ÿ^\ H¬à€€ú›YÿXﬁT]Y]YYHÿYôT\úŸJ›‹òYŸQŸ]
+Ÿ^JJN¬àYà
+\úò^Kö\–\úò^JYÿXﬁT]Y]YY
+H	âàYÿXﬁT]Y]YYõ[ô›
+H»]Y]YYHYÿXﬁT]Y]YY»úôXZŒ»BàBàBà[ô[ô”‹\ò][€ú”Y[[‹ûHH\úò^Kö\–\úò^J]Y]YY
+H»]Y]YYà◊N¬àÿ]ôT[ô[ô [ô[ô”‹\ò][€ú”Y[[‹ûJN¬à€€ú›[XZ[]Y]YHHÿYôT\úŸJ›‹òYŸQŸ]
+›][Y[ù[XZ[Ÿ^JJHÿYôT\úŸJ]ÿZ]\òXõPÿX⁄QŸ]
+	‹›][Y[ù[XZ[Ÿ^_Nú]Y]YX
+JN¬à›][Y[ù[XZ[]Y]YSY[[‹ûHH\úò^Kö\–\úò^J[XZ[]Y]YJH»[XZ[]Y]YKú€XŸJLç
+Hà◊N¬àÿ]ôT[ô[ô‘›][Y[ù[XZ[ ›][Y[ù[XZ[]Y]YSY[[‹ûJN¬à›]HHõ‹õX[^ôT›]Jò] N¬àÿX⁄J
+N¬üBÇôù[ò›[€à[ô[ô 
+H¬àYà
+\[ô[ô“Ÿ^JHô]\õà◊N¬àûH¬à€€ú››‹ôYHÿYôT\úŸJÿÿ[›‹òYŸKôŸ]][J[ô[ô“Ÿ^JJN¬àYà
+\úò^Kö\–\úò^J›‹ôY
+JH[ô[ô”‹\ò][€ú”Y[[‹ûHH›‹ôY¬àHÿ]⁄
+Ÿ\úõ‹äH» àŸY\H\òXõH[ã[Y[[‹ûH€‹Kà
+ã»Bàô]\õà[ô[ô”‹\ò][€ú”Y[[‹ûN¬üBôù[ò›[€àÿ]ôT[ô[ô ][\ H¬àYà
+\[ô[ô“Ÿ^JHô]\õé¬à[ô[ô”‹\ò][€ú”Y[[‹ûHHÀããö][\◊N¬à€€ú›Ÿ\öX[^ôYHî””ãú›ö[ô⁄YûJ[ô[ô”‹\ò][€ú”Y[[‹ûJN¬à\òXõPÿX⁄TŸ]
+	‹[ô[ô“Ÿ^_Nú]Y]YXŸ\öX[^ôY
+N¬àûH¬àYà
+][\Àõ[ô›
+Hÿÿ[›‹òYŸKúŸ]][J[ô[ô“Ÿ^KŸ\öX[^ôY
+N¬à[ŸHÿÿ[›‹òYŸKúô[[›ôR][J[ô[ô“Ÿ^JN¬àHÿ]⁄
+Ÿ\úõ‹äH¬àûH¬àÿÿ[›‹òYŸKúô[[›ôR][J›]RŸ^JN¬àYà
+][\Àõ[ô›
+Hÿÿ[›‹òYŸKúŸ]][J[ô[ô“Ÿ^KŸ\öX[^ôY
+N¬à[ŸHÿÿ[›‹òYŸKúô[[›ôR][J[ô[ô“Ÿ^JN¬àHÿ]⁄
+⁄Y€õ‹ôY
+H» à[ô^Yà›[€»HŸôõ[ôH]Y]YKà
+ã»BàBà\]Tﬁ[ò‘›]\ 
+N¬üBÇôù[ò›[€à[ô[ô‘›][Y[ù[XZ[ 
+H¬àYà
+\›][Y[ù[XZ[Ÿ^JHô]\õà◊N¬àûH¬à€€ú››‹ôYHÿYôT\úŸJÿÿ[›‹òYŸKôŸ]][J›][Y[ù[XZ[Ÿ^JJN¬àYà
+\úò^Kö\–\úò^J›‹ôY
+JH›][Y[ù[XZ[]Y]YSY[[‹ûHH›‹ôY¬àHÿ]⁄
+Ÿ\úõ‹äH» àŸY\H\òXõH[ã[Y[[‹ûH€‹Kà
+ã»Bàô]\õà›][Y[ù[XZ[]Y]YSY[[‹ûN¬üBÇôù[ò›[€àÿ]ôT[ô[ô‘›][Y[ù[XZ[ ][\ H¬àYà
+\›][Y[ù[XZ[Ÿ^JHô]\õé¬à›][Y[ù[XZ[]Y]YSY[[‹ûHH][\Àú€XŸJLç
+N¬à€€ú›Ÿ\öX[^ôYHî””ãú›ö[ô⁄YûJ›][Y[ù[XZ[]Y]YSY[[‹ûJN¬à\òXõPÿX⁄TŸ]
+	‹›][Y[ù[XZ[Ÿ^_Nú]Y]YXŸ\öX[^ôY
+N¬àûH¬àYà
+›][Y[ù[XZ[]Y]YSY[[‹ûKõ[ô›
+Hÿÿ[›‹òYŸKúŸ]][J›][Y[ù[XZ[Ÿ^KŸ\öX[^ôY
+N¬à[ŸHÿÿ[›‹òYŸKúô[[›ôR][J›][Y[ù[XZ[Ÿ^JN¬àHÿ]⁄
+Ÿ\úõ‹äH» àö[ò[òŸHﬁ[ò»ô[XZ[ú»[ô\[ô[ùŸà[XZ[[]ô\ûKà
+ã»BüBÇò\ﬁ[ò»ù[ò›[€àôYúô\⁄›][Y[ù[XZ[›]\ 
+H¬àYà
+YàX›\úô[ù\Ÿ\àZ›\ŸZ€Y[ò]öYÿ]‹ãõ€ì[ôJHô]\õé¬à€€ú›»]K\úõ‹àHH]ÿZ]ãôù[ò›[€úÀö[ùõ⁄ŸJ	Ÿ[XZ[[[€ùK\›][Y[ù	À»õŸNà»X›[€éà	‹›]\…»HJN¬àYà
+\úõ‹à]OÀô\úõ‹äH¬à›][Y[ù[XZ[õ›öY\îôXYHHò[ŸN¬à›][Y[ù[XZ[ôX⁄\Y[ùôXYHHò[ŸN¬à›][Y[ù[XZ[\››]\»H	—[XZ[Ÿ\ùöXŸH\»õ›ôXYHY]âŒ¬àH[ŸH¬à›][Y[ù[XZ[õ›öY\îôXYHH]Kúõ›öY\îôXYHOOHùYN¬à›][Y[ù[XZ[ôX⁄\Y[ùôXYHH]KúôX⁄\Y[ùôXYHOOHùYN¬à›][Y[ù[XZ[ôX⁄\Y[ùH]KúôX⁄\Y[ù	…Œ¬à›][Y[ù[XZ[\››]\»H›][Y[ù[XZ[õ›öY\îôXYH	âà›][Y[ù[XZ[ôX⁄\Y[ùôXYH»	‘ŸX›\ôH[]ô\ûH\»ôXYKâ¬àà]KúôX\€€àOOH	Ÿ^\õò[Ÿ[XZ[€õ›ÿ]]‹ö^ôY	»»	—^\õò[[XZ[ô[^H\»õ›]]‹ö\ŸYâ»à	”€ôK][YH[XZ[€€õôX›[€à›[ôYYYâŒ¬àBàô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+N¬üBÇò\ﬁ[ò»ù[ò›[€àõ\⁄›][Y[ù[XZ[]Y]YJ⁄[[ùHò[ŸJH¬àYà
+YàZ›\ŸZ€Y[ò]öYÿ]‹ãõ€ì[ôH\›]KúŸ][ô‹Àô[XZ[›][Y[ù Hô]\õàò[ŸN¬à€€ú›][\»H[ô[ô‘›][Y[ù[XZ[ 
+N¬à⁄[H
+][\Àõ[ô›
+H¬à€€ú›][HH][\÷ÃN¬à€€ú›»]K\úõ‹àHH]ÿZ]ãôù[ò›[€úÀö[ùõ⁄ŸJ	Ÿ[XZ[[[€ùK\›][Y[ù	À¬àõŸNà»X›[€éà	Ÿ[]ô\âÀò[úÿX›[€íYà][Kùò[úÿX›[€íYBàJN¬àYà
+\úõ‹à]OÀô\úõ‹äH¬à›][Y[ù[XZ[\››]\»H	‘›][Y[ù\»ÿZ][ôŒ»[›\à[€ô^HôX€‹ô»\ôHÿYôKâŒ¬àYà
+\⁄[[ù
+Hÿ\›
+	‘›][Y[ù[XZ[\»ÿZ][ôÀà[›\àôX€‹ô»\ôH[ôXYHÿ]ôYâ N¬àô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+N¬àô]\õàò[ŸN¬àBàYà
+]OÀú›]\»OOH	‹Ÿ]\‹ô\]Z\ôY	 H¬à›][Y[ù[XZ[õ›öY\îôXYHHò[ŸN¬à›][Y[ù[XZ[\››]\»H	”€ôK][YH[XZ[€€õôX›[€à›[ôYYYâŒ¬àYà
+\⁄[[ù
+Hÿ\›
+	‘›][Y[ùÿ]ôYàö[ö\⁄[XZ[Ÿ]\€òŸH»Ÿ[ô]]]€X]Xÿ[Kâ N¬àô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+N¬àô]\õàò[ŸN¬àBàYà
+…Ÿ\ÿXõY	À	⁄Y€õ‹ôY	◊Kö[ò€Y\ ]OÀú›]\ JH¬à][\Àú⁄Yù
+
+N¬àÿ]ôT[ô[ô‘›][Y[ù[XZ[ ][\ N¬à€€ù[ùYN¬àBàYà
+…‹Ÿ[ù	À	ÿ[ôXYW‹Ÿ[ù	◊Kö[ò€Y\ ]OÀú›]\ JH¬à›][Y[ù[XZ[õ›öY\îôXYHHùYN¬à›][Y[ù[XZ[ôX⁄\Y[ùôXYHHùYN¬à›][Y[ù[XZ[ôX⁄\Y[ùH]KúôX⁄\Y[ù›][Y[ù[XZ[ôX⁄\Y[ù¬à›][Y[ù[XZ[\››]\»H]Kú›]\»OOH	‹Ÿ[ù	»»	”\›[€ùH›][Y[ùŸ[ù8ß$…»à	’\»[€ù8†&\»›][Y[ùÿ\»[ôXYHŸ[ù8ß$…Œ¬à][\Àú⁄Yù
+
+N¬àÿ]ôT[ô[ô‘›][Y[ù[XZ[ ][\ N¬àYà
+\⁄[[ù	âà]Kú›]\»OOH	‹Ÿ[ù	 Hÿ\›
+	‘ô]ö[›\»[€ù8†&\»›][Y[ù[XZ[Y8ß$… N¬à€€ù[ùYN¬àBà›][Y[ù[XZ[\››]\»H	‘›][Y[ù[]ô\ûH\»õÿŸ\‹⁄[ôÀâŒ¬àô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+N¬àô]\õàò[ŸN¬àBàô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+N¬àô]\õàùYN¬üBÇôù[ò›[€àô]ö[›\”[€ùò[ôŸQõ‹ë]Jò[YHHŸ^J
+JH¬à€€ú››\úô[ù›\ùH	‘›ö[ô ò[YHŸ^J
+JKú€XŸJ _KLX¬àô]\õà»úõ€NàY[€ù ›\úô[ù›\ùLJKŒàY^\ ›\úô[ù›\ùLJHN¬üBÇôù[ò›[€à›][Y[ù][Tò[ôŸJ][JH¬àYà
+][OÀú\ö[Ÿ›\ù	âà][OÀú\ö[Ÿ[ô
+Hô]\õà»úõ€Nà][Kú\ö[Ÿ›\ùŒà][Kú\ö[Ÿ[ôN¬à€€ú›ÿ[\ûHH›]Kùò[úÿX›[€úÀôö[ô
+ò[úÿX›[€àOàò[úÿX›[€ãöYOOH][OÀùò[úÿX›[€íY
+N¬àô]\õàô]ö[›\”[€ùò[ôŸQõ‹ë]Jÿ[\ûOÀô]H][OÀúÿ[\ûQ]HŸ^J
+JN¬üBÇôù[ò›[€à]\›ô\\ôY›][Y[ù
+[ò€YR[ôYHùYJH¬àô]\õà[ô[ô‘›][Y[ù[XZ[ 
+BàõX\
+][HOàÿöôX›ò\‹⁄Y€äﬂK][K›][Y[ù][Tò[ôŸJ][JJJBàôö[\ä][HOà[ò€YR[ôYZ][Kö[ôY]
+Bàú€‹ù
+
+YùöY⁄
+HOà	‹öY⁄ú\ö[Ÿ›\ùöY⁄ôúõ€_I‹öY⁄ú]Y]YY]	…ﬂXõÿÿ[P€€\\ôJ	€Yùú\ö[Ÿ›\ùYùôúõ€_I€Yùú]Y]YY]	…ﬂX
+JVÃHù[¬üBÇôù[ò›[€à]Y]YTÿ[\ûT›][Y[ù
+ò[úÿX›[€äH¬àYà
+ò[úÿX›[€ãù\HOOH	⁄[ò€€YI»ò[úÿX›[€ãòÿ]Y€‹ûHOOH	‘ÿ[\ûI Hô]\õé¬à€€ú›ò[ôŸHHô]ö[›\”[€ùò[ôŸQõ‹ë]Jò[úÿX›[€ãô]JN¬à€€ú›][\»H[ô[ô‘›][Y[ù[XZ[ 
+N¬à]][HH][\Àôö[ô
+[ùûHOà[ùûKú\ö[Ÿ›\ùOOHò[ôŸKôúõ€H[ùûKùò[úÿX›[€íYOOHò[úÿX›[€ãöY
+N¬à€€ú›⁄›[õ€\HZ][N¬àYà
+Z][JH¬à][HH¬àò[úÿX›[€íYàò[úÿX›[€ãöYàÿ[\ûQ]Nàò[úÿX›[€ãô]Kà\ö[Ÿ›\ùàò[ôŸKôúõ€Kà\ö[Ÿ[ôàò[ôŸKùÀà]Y]YY]àô]»]J
+Kù“T”‘›ö[ô 
+Kàõ€\Y]à	…Àà[ôY]à	…¬àN¬à][\Àú\⁄
+][JN¬àH[ŸH¬àÿöôX›ò\‹⁄Y€ä][K»ò[úÿX›[€íYà][Kùò[úÿX›[€íYò[úÿX›[€ãöYÿ[\ûQ]Nàò[úÿX›[€ãô]K\ö[Ÿ›\ùàò[ôŸKôúõ€K\ö[Ÿ[ôàò[ôŸKù»JN¬àBàYà
+⁄›[õ€\
+H][Kúõ€\Y]Hô]»]J
+Kù“T”‘›ö[ô 
+N¬àÿ]ôT[ô[ô‘›][Y[ù[XZ[ ][\ N¬àô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+N¬àYà
+›]KúŸ][ô‹Àô[XZ[›][Y[ù Hõ\⁄›][Y[ù[XZ[]Y]YJò[ŸJN¬àYà
+⁄›[õ€\
+HŸ][Y[›]
+
+
+HOà‹[îô\\ôY[€ùT›][Y[ù
+ò[ôŸKôúõ€JKN
+N¬üBôù[ò›[€à[ú]Y]YJ‹\ò][€äH¬à€€ú›][\»H[ô[ô 
+N¬à][\Àú\⁄
+ÿöôX›ò\‹⁄Y€ä»]Y]YRYà‹û\Àúò[ô€UURQ
+
+K‹ôX]Y]àô]»]J
+Kù“T”‘›ö[ô 
+HK‹\ò][€äJN¬àÿ]ôT[ô[ô ][\ N¬üBÇôù[ò›[€à\]Tﬁ[ò‘›]\ Y\‹ÿYŸHH	… H¬àYà
+I
+	‹ﬁ[ò‘›]\… JHô]\õé¬à€€ú›€›[ùH[ô[ô“Ÿ^H»[ô[ô 
+Kõ[ô›à¬à	
+	‹ﬁ[ò‘›]\… Kù^€€ù[ùHY\‹ÿYŸH
+€›[ùà»	ÿ€›[ùH⁄[ôŸIÿ€›[ùOOHH»	…»à	‹…ﬂHÿZ][ô»»ﬁ[òÿàà›\úô[ù\Ÿ\à»	‘ﬁ[òŸYô]ŸY[àõ›€ô\…»à	”Ÿôõ[ôI N¬üBÇôù[ò›[€à\Ÿ
+ò[YK›\úô[òﬁJH¬à€€ú›ò]HHù[Xô\ä›]KúŸ][ô‹Àúò]\÷ÿ€X[ê›\úô[òﬁJ›\úô[òﬁJWJHN¬àô]\õàù[Xô\äò[YH
+H»ò]N¬üBôù[ò›[€àúõ€UT—
+ò[YK›\úô[òﬁJH¬à€€ú›ò]HHù[Xô\ä›]KúŸ][ô‹Àúò]\÷ÿ€X[ê›\úô[òﬁJ›\úô[òﬁJWJHN¬àô]\õàù[Xô\äò[YH
+H
+àò]N¬üBôù[ò›[€à[€ô^Jò[YK›\úô[òﬁHH›]KúŸ][ô‹Àòò\ŸJH¬àûH¬àô]\õàô]»[ùìù[Xô\ëõ‹õX]
+	Ÿ[ãUT…À»›[Nà	ÿ›\úô[òﬁIÀ›\úô[òﬁKX^[][QúòX›[€ëY⁄]ŒààJKôõ‹õX]
+ù[Xô\äò[YJH
+N¬àHÿ]⁄
+Ÿ\úõ‹äH¬àô]\õà	ÿ›\úô[òﬁ_H	 ù[Xô\äò[YJH
+Kù—ö^Y
+ä_X¬àBüBôù[ò›[€àò\ŸS[€ô^J\Ÿò[YJH»ô]\õà[€ô^Júõ€UT—
+\Ÿò[YK›]KúŸ][ô‹Àòò\ŸJK›]KúŸ][ô‹Àòò\ŸJN»Bôù[ò›[€àõ‹õX]]Jò[YK‹[€ú»H»^Nà	€ù[Y\öX…À[€ùà	‹⁄‹ù	ÀYX\éà	€ù[Y\öX…»JH¬àYà
+]ò[YJHô]\õà	…Œ¬àô]\õàô]»[ùë]U[YQõ‹õX]
+	Ÿ[âÀ‹[€ú Kôõ‹õX]
+ô]»]J	›ò[YKú€XŸJL
+_ULéåå
+JN¬üBôù[ò›[€àô[Y[Xô\ê›\úô[òﬁJ›\úô[òﬁJH¬àYà
+P’TîëSê“QTÀö[ò€Y\ ›\úô[òﬁJJHô]\õé¬à›]KúŸ][ô‹Àõ\››\úô[òﬁHH›\úô[òﬁN¬àÿX⁄J
+N¬üBôù[ò›[€àXÿ€›[ùò[YJY
+H»ô]\õà›]KòXÿ€›[ùÀôö[ô
+HOàKöYOOHY
+OÀõò[YH	…Œ»Bôù[ò›[€àX›]ôPXÿ€›[ù 
+H»ô]\õà›]KòXÿ€›[ùÀôö[\äHOàKòX›]ôHOOHò[ŸJN»Bôù[ò›[€àX›]ôQ€ÿ[ 
+H»ô]\õà›]Kô€ÿ[Àôö[\ä»OàÀòX›]ôHOOHò[ŸJN»Bôù[ò›[€àX›]ôQXù 
+H»ô]\õà›]KôXùÀôö[\äOàòX›]ôHOOHò[ŸHúô[XZ[ö[ô»à
+N»Bôù[ò›[€àX›]ôT⁄[ö⁄[ô—ù[ô 
+H»ô]\õà›]Kú⁄[ö⁄[ô—ù[ôÀôö[\äù[ôOàù[ôòX›]ôHOOHò[ŸH	âàù[ôúÿ]ôY
+»åHù[ôù\ôŸ]
+N»Bôù[ò›[€à›\ŸZ€[‹J
+H»ô]\õàÀããõô]»Ÿ]
+Àããú›]Kú[‹K›]KõY[Xô\ãô\‹^Sò[YWKõX\
+ò[YHOà›ö[ô ò[YH	… Kùö[J
+JKôö[\äõ€€X[äJWN»Bôù[ò›[€àYò][\ú€€ä
+H»ô]\õà›]KõY[Xô\ãô\‹^Sò[YH	‘⁄\ôY	Œ»Bôù[ò›[€à[‹S‹[€ú Ÿ[X›YHYò][\ú€€ä
+JH¬àô]\õàÀããõô]»Ÿ]
+Àããö›\ŸZ€[‹J
+K	‘⁄\ôY	ÀŸ[X›YKôö[\äõ€€X[äJWBàõX\
+ò[YHOà‹[€â€ò[YHOOHŸ[X›Y»	»Ÿ[X›Y	»à	…ﬂOâŸ\ÿ ò[YJ_O€‹[€èò
+Köõ⁄[ä	… N¬üBÇôù[ò›[€àÿ\›
+Y\‹ÿYŸJH¬à€€ú›[[Y[ùH	
+	›ÿ\›	 N¬àYà
+Y[[Y[ù
+Hô]\õé¬à€X\ï[Y[›]
+ÿ\›[Y\äN¬à[[Y[ùù^€€ù[ùHY\‹ÿYŸN¬à[[Y[ùò€\‹”\›úô[[›ôJ	⁄Y[â N¬àÿ\›[Y\àHŸ][Y[›]
+
+
+HOà[[Y[ùò€\‹”\›òY
+	⁄Y[â Kçå
+N¬üBôù[ò›[€àŸ[Xúò]J
+H¬àYà
+\›]KúŸ][ô‹Àôù[ì[ŸHX]⁄YYXJ	 ôYô\úÀ\ôYXŸY[[›[€éàôYXŸJI KõX]⁄\ Hô]\õé¬à€€ú›õ€›H	
+	ÿ€€ôô]I N¬à€€ú›€€‹ú»H…»ÃÃNò…À	»ŸåXéMâÀ	»ŸNMôXâÀ	»ÕMMŸòL…◊N¬àõ€›ö[õô\íSH\úò^Kôúõ€J»[ô›àçK
+ÀJHOàH›[OHõYùâÕH
+»X]úò[ô€J
+H
+àLINÿòX⁄Ÿ‹õ›[ôâÿ€€‹ú÷⁄H	H€€‹úÀõ[ô›_Nÿ[ö[X][€ãY[^Nâ”X]úò[ô€J
+H
+àåç_\ŒÀKYöYùâÀN
+»X]úò[ô€J
+H
+àMå\èè⁄Oò
+Köõ⁄[ä	… N¬àŸ][Y[›]
+
+
+HOà»õ€›ö[õô\íSH	…Œ»KMÃ
+N¬üBôù[ò›[€à\X 
+H»Yà
+ò]öYÿ]‹ãùöXúò]JHò]öYÿ]‹ãùöXúò]JN
+N»BÇôù[ò›[€à‹[ì[Ÿ[
+]K[
+H¬à	
+	€[Ÿ[]I Kù^€€ù[ùH]N¬à	
+	€[Ÿ[€€ù[ù	 Kö[õô\íSH[¬à	
+	€[Ÿ[	 Kò€\‹”\›úô[[›ôJ	⁄Y[â N¬à€€ú›õ‹õHH	
+	€[Ÿ[€€ù[ù	 Kú]Y\ûTŸ[X›‹ä	Ÿõ‹õI N¬à	
+	€[Ÿ[	 Kò€\‹”\›ùŸŸ€J	Ÿõ›”[Ÿ[	ÀHYõ‹õJN¬àô\\ôR[õ[ôP€€ùõ€ 	
+	€[Ÿ[€€ù[ù	 JN¬àYà
+õ‹õJHŸ]\õ‹õQõ› õ‹õJN¬àÿ›[Y[ùòõŸKú›[Kõ›ô\ôõ›»H	⁄Y[âŒ¬àŸ][Y[›]
+
+
+HOà	
+	€[Ÿ[€€ù[ù	 Kú]Y\ûTŸ[X›‹ä	Àôõ›‘›\òX›]ôH[ú]õõ›
+›\OHöY[àóJKôõ›‘›\òX›]ôH^\ôXK[ú]õõ›
+›\OHöY[àóJK^\ôXKù]€â OÀôõÿ›\ 
+K
+N¬üBôù[ò›[€à€‹ŸS[Ÿ[
+
+H¬à	
+	€[Ÿ[	 Kò€\‹”\›òY
+	⁄Y[â N¬à	
+	€[Ÿ[	 Kò€\‹”\›úô[[›ôJ	Ÿõ›”[Ÿ[	 N¬à	
+	€[Ÿ[€€ù[ù	 Kö[õô\íSH	…Œ¬àÿ›[Y[ùòõŸKú›[Kõ›ô\ôõ›»H	…Œ¬üBÇôù[ò›[€àÿZ⁄U›\î›‹òYŸRŸ^J
+H¬àô]\õà›\óŸ[ó‹ÿZ⁄W‹òX›XŸW›åNâÿ›\úô[ù\Ÿ\èÀöY	›\À\€ôIﬂX¬üBÇôù[ò›[€àÿZ⁄U›\ê€€\]Y
+
+H¬àûH»ô]\õàH\ÿYôT\úŸJÿÿ[›‹òYŸKôŸ]][JÿZ⁄U›\î›‹òYŸRŸ^J
+JJOÀò€€\]Y]»Bàÿ]⁄
+Ÿ\úõ‹äH»ô]\õàò[ŸN»BüBÇôù[ò›[€à\]TÿZ⁄U›\ì][ò⁄\ä
+H¬à€€ú›][ò⁄\àH	
+	‹ÿZ⁄U›\ì][ò⁄\â N¬àYà
+[][ò⁄\äHô]\õé¬à€€ú›€€\]YHÿZ⁄U›\ê€€\]Y
+
+N¬à][ò⁄\ãò€\‹”\›ùŸŸ€J	ÿ€€\]Y	À€€\]Y
+N¬à	
+	‹ÿZ⁄U›\ì][ò⁄\ï]I Kù^€€ù[ùH€€\]Y»	‘ô\^HÿZ⁄HòX›XŸI»à	‘ÿZ⁄HòX›XŸIŒ¬à	
+	‹ÿZ⁄U›\ì][ò⁄\ï^	 Kù^€€ù[ùH€€\]Yà»	‘òX›\ŸHYÿZ[à[û][YH0≠»ÿ[\H]H€õI¬àà	”X\õà›\àSà[àH^Yù[Z[ù]\»0≠»ÿ[\H]H€õIŒ¬à	
+	‹ÿZ⁄U›\ì][ò⁄\êX›[€â Kù^€€ù[ùH€€\]Y»	‘ô\^I»à	‘›\ù	Œ¬à][ò⁄\ãú]Y\ûTŸ[X›‹ä	ÀúÿZ⁄U›\î^I Kù^€€ù[ùH€€\]Y»	¯°Æ…»à	¯•≠âŒ¬üBÇôù[ò›[€àúô\⁄ÿZ⁄TòX›XŸJ
+H¬àô]\õà»X›[€éà	…ÀX›[€ê€‹úôX›àò[ŸKôX€‹ô›YŸNàô]€‹ù[ú›Ÿ\éàô]€‹ù€‹úôX›àò[ŸKùX⁄Ÿ]Œà◊Kõ›][ôNà◊HN¬üBÇôù[ò›[€à‹[îÿZ⁄U›\ä
+H¬àÿZ⁄U›\îô]\õëõÿ›\»Hÿ›[Y[ùòX›]ôQ[[Y[ù¬àÿZ⁄U›\î›\H¬àÿZ⁄U›\êŸ[Xúò]YHò[ŸN¬àÿZ⁄TòX›XŸHHúô\⁄ÿZ⁄TòX›XŸJ
+N¬à	
+	‹ÿZ⁄U›\ì[Ÿ[	 Kò€\‹”\›úô[[›ôJ	⁄Y[â N¬àÿ›[Y[ùòõŸKú›[Kõ›ô\ôõ›»H	⁄Y[âŒ¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€à€‹ŸTÿZ⁄U›\ä
+H¬à	
+	‹ÿZ⁄U›\ì[Ÿ[	 Kò€\‹”\›òY
+	⁄Y[â N¬à	
+	‹ÿZ⁄U›\ê€€ù[ù	 Kö[õô\íSH	…Œ¬àÿ›[Y[ùòõŸKú›[Kõ›ô\ôõ›»H	
+	€[Ÿ[	 Kò€\‹”\›ò€€ùZ[ú 	⁄Y[â H»	…»à	⁄Y[âŒ¬à€€ú›ô]\õëõÿ›\»HÿZ⁄U›\îô]\õëõÿ›\Œ¬àÿZ⁄U›\îô]\õëõÿ›\»Hù[¬àYà
+ô]\õëõÿ›\œÀö\–€€õôX›Y
+HŸ][Y[›]
+
+
+HOàô]\õëõÿ›\Àôõÿ›\ 
+K
+N¬üBÇôù[ò›[€àÿZ⁄U›\ëõ€›\ä[òXõYHùYKXô[H	–€€ù[ùYI H¬àô]\õàõ€›\à€\‹œHúÿZ⁄U›\ëõ€›\àèÇà	‹ÿZ⁄U›\î›\à»	œù]€à€\‹œHúÿZ⁄U›\êòX⁄»à\OHòù]€àà€ò€X⁄œHúÿZ⁄U›\êòX⁄ 
+HèêòX⁄œÿù]€èâ»à	…ﬂBàù]€à€\‹œHúÿZ⁄U›\ê€€ù[ùYHà\OHòù]€àà€ò€X⁄œHúÿZ⁄U›\ìô^
+
+HâŸ[òXõY»	…»à	»\ÿXõY	ﬂOâ€Xô[Oÿù]€èÇàŸõ€›\èò¬üBÇôù[ò›[€àÿZ⁄U›\ïŸ[€€YR[
+
+H¬àô]\õàŸX›[€à€\‹œHúÿZ⁄U›\î›\èÇà‹[à€\‹œHúÿZ⁄U›\ë^YXúõ›»èìPTìàñHTSëœ‹‹[èÇàèì[€ô^HòX›XŸK⁄]›]H€‹úûKè⁄èÇà€\‹œHúÿZ⁄U›\ìXYèêH⁄‹ù›ZYYÿ[YHõ‹àÿZ⁄Kà]\Ÿ\»ô][ô[€ô^H[ôXX⁄\»Hô]»X›[€ú»]X]\à[‹›è‹Çà€\‹œHúÿZ⁄U›\ìX\ò]Hà[ôœHõ\àè∏).x)/à8)*¯)%x)cx))8).8),8)/∏)-H8)!∏).x)aÀà8))8)`x)+∏)&∏)a»8)%∏),8)a»8)*∏)b8).8)a»8)%x)/¯) ∏)-x)/à8)*8)b¯) ∏))∏)`8)+8))∏),∏)(¯)/∏),8)*8)/∏).x)`8))è‹Çà]à€\‹œHúÿZ⁄U›\í\õ–\ùà\öXKZY[èHùùYHèèH€\‹œHúÿZ⁄U›\î‹\ö»€ôHèè⁄Oè]à€\‹œHúÿZ⁄U›\ê€⁄[àè∏†ÆOŸ]èèH€\‹œHúÿZ⁄U›\î‹\ö»€»èè⁄OèŸ]èÇà‹[à€\‹œHúÿZ⁄U›\îÿYô]HèîòX›XŸH€õH0≠»õ›[ô»\»ÿ]ôY‹‹[èÇà	‹ÿZ⁄U›\ëõ€›\äùYK	‘›\ùòX›XŸI _Bà‹ŸX›[€èò¬üBÇôù[ò›[€àÿZ⁄U›\êX›[€í[
+
+H¬à€€ú›‹[€ú»H¬à…‹‹[ô	À	¯¢$âÀ	–Y‹[ô	À	”[€ô^HYù[àXÿ€›[ù	◊Kà…⁄[ò€€YIÀ	˚Ô"…À	–Y[ò€€YIÀ	”[€ô^H\úö]ôY	◊Kà…›ò[úŸô\âÀ	¯°·	À	’ò[úŸô\âÀ	”[€ô^H[›ôYô]ŸY[à›\àXÿ€›[ù…◊BàN¬à€€ú›ôYYòX⁄»H\ÿZ⁄TòX›XŸKòX›[€à»	…»àÿZ⁄TòX›XŸKòX›[€ê€‹úôX›à»	œ]à€\‹œHúÿZ⁄U›\ëôYYòX⁄»€‹úôX›èèèë^X›Kèÿèà‹õÿŸ\öY\»ôYXŸHHò[[òŸHŸàHXÿ€›[ù]ZYèŸ]èâ¬àà	œ]à€\‹œHúÿZ⁄U›\ëôYYòX⁄»èèèê[[‹›èÿèàH[€ô^HYù[àXÿ€›[ù€»ûHY‹[ôèŸ]èâŒ¬àô]\õàŸX›[€à€\‹œHúÿZ⁄U›\î›\èÇà‹[à€\‹œHúÿZ⁄U›\ë^YXúõ›»èìT‘””àH0≠»P“»HP’S”è‹‹[èÇàèïŸHZYUîàçLõ‹à‹õÿŸ\öY\Àè⁄èÇà€\‹œHúÿZ⁄U›\ìXYèï⁄X⁄ù]€à⁄›[ÿZ⁄H\ŸOœ‹Çà€\‹œHúÿZ⁄U›\ìX\ò]Hà[ôœHõ\àè∏)%x)/¯),8)/∏)(¯)/à8)%∏),8)a¯))∏)`8).8)/∏)(8)`8)+¯)b¯)%¯)cx)+»8)*∏),8)cx)+¯)/∏)+»8)*8)/¯)-x)(x)/ãè‹Çà]à€\‹œHúÿZ⁄U›\ì‹[€ú»èâ€‹[€úÀõX\
+
+›ò[YKX€€ã]Kõ›WJHOà¬à€€ú›Ÿ[X›YHÿZ⁄TòX›XŸKòX›[€àOOHò[YN¬à€€ú›€\‹”ò[YHHŸ[X›Y»
+ò[YHOOH	‹‹[ô	»»	»€‹úôX›	»à	»Ÿ[X›Y	 Hà	…Œ¬àô]\õàù]€à€\‹œHúÿZ⁄U›\ì‹[€âÿ€\‹”ò[Y_Hà\OHòù]€àà\öXK\ô\‹ŸYHâ‹Ÿ[X›YHà€ò€X⁄œHò⁄€‹ŸTÿZ⁄U›\êX›[€ä	…›ò[Y_I Hèè‹[èâ⁄X€€üO‹‹[èè‹[èèèâ›]_Oÿèè€X[â€õ›_O‹€X[è‹‹[èèOâ›ò[YHOOH	‹‹[ô	»	âàŸ[X›Y»	¯ß$…»à	…ﬂO⁄Oèÿù]€èò¬àJKöõ⁄[ä	… _OŸ]èÇà	ŸôYYòX⁄ﬂBà	‹ÿZ⁄U›\ëõ€›\äÿZ⁄TòX›XŸKòX›[€ê€‹úôX›
+_Bà‹ŸX›[€èò¬üBÇôù[ò›[€àÿZ⁄U›\îôX€‹ô[
+
+H¬à€€ú›õ›‹»H¬à…—]K[[›[ù[ô›\úô[òﬁIÀ	’Ÿ^H0≠»UîàçL	À	”€⁄‹»öY⁄	◊Kà…‘ZYúõ€IÀ	”XZ[àXÿ€›[ù	À	–⁄€‹ŸI◊Kà…’⁄]ÿ\»]õ‹è…À	—õ€Ÿ	À	–⁄€‹ŸI◊Kà…’⁄»ZY…À	‘ÿZ⁄IÀ	–⁄€‹ŸI◊Kà…”õ›IÀ	—‹õÿŸ\öY\…À	’\ŸHõ›I◊BàN¬à€€ú›õ›“[Hõ›‹ÀõX\
+
+€Xô[ò[YKX›[€óK[ô^
+HOà¬àYà
+[ô^ÿZ⁄TòX›XŸKúôX€‹ô›YŸJHô]\õà]à€\‹œHúÿZ⁄TòX›XŸTõ›»€ôHèè‹[èâ€Xô[O‹‹[èèè∏ß$»	›ò[Y_OÿèèŸ]èò¬àYà
+[ô^OOHÿZ⁄TòX›XŸKúôX€‹ô›YŸJHô]\õà]à€\‹œHúÿZ⁄TòX›XŸTõ›»X›]ôHèè‹[èâ€Xô[O‹‹[èèù]€à\OHòù]€àà€ò€X⁄œHòYò[òŸTÿZ⁄TòX›XŸJ
+HèâÿX›[€üNà	›ò[Y_Oÿù]€èèŸ]èò¬àô]\õà]à€\‹œHúÿZ⁄TòX›XŸTõ›»èè‹[èâ€Xô[O‹‹[èèè∏†%ÿèèŸ]èò¬àJKöõ⁄[ä	… N¬àô]\õàŸX›[€à€\‹œHúÿZ⁄U›\î›\èÇà‹[à€\‹œHúÿZ⁄U›\ë^YXúõ›»èìT‘””àà0≠»ëRPTî—HH‘Së‹‹[èÇàèì€ôH€X[›\]H[YKè⁄èÇà€\‹œHúÿZ⁄U›\ìXYèï\HY⁄Y⁄Yõ›Àà\»õ€›‹»Hÿ[YH‹ô\à\»HôX[Y‹[ôÿ‹ôY[ãè‹Çà€\‹œHúÿZ⁄U›\ìX\ò]Hà[ôœHõ\àè∏)#¯)%x)/∏)-x)a¯),¯)`8)#¯)%H8)*∏)/∏)+¯),8)`8)*∏)`∏),8)cx)(»8)%x),8)/ãà8).x)/à8).8),8)/∏)-H8)%∏),x)cx)+¯)/à8)%∏)/∏))8)cx)+¯)/∏))8)'8))8)*8).x)b¯)(¯)/∏),8)*8)/∏).x)`è‹Çà]à€\‹œHúÿZ⁄TòX›XŸPÿ\ôèÇà]à€\‹œHúÿZ⁄TòX›XŸP[[›[ùèè]èè‹[èîòX›XŸH[[›[ù‹‹[èèèìUîàçLÿèèŸ]èèOîÿ[\O⁄OèŸ]èÇà]à€\‹œHúÿZ⁄TòX›XŸTõ›‹»èâ‹õ›“[OŸ]èÇàŸ]èÇà	‹ÿZ⁄TòX›XŸKúôX€‹ô›YŸHèHõ›‹Àõ[ô›»	œ]à€\‹œHúÿZ⁄TòX›XŸTô\›[èè‹[èìXZ[àXÿ€›[ù⁄[ôŸ\»ûO‹‹[èèè∏¢$àUîàçLÿèèŸ]èâ»à	…ﬂBà	‹ÿZ⁄U›\ëõ€›\äÿZ⁄TòX›XŸKúôX€‹ô›YŸHèHõ›‹Àõ[ô›
+_Bà‹ŸX›[€èò¬üBÇôù[ò›[€àÿZ⁄U›\ï€‹ù[
+
+H¬à€€ú›[ú›Ÿ\ú»HÕçLLMLNLN¬à€€ú›ôYYòX⁄»H\ÿZ⁄TòX›XŸKõô]€‹ù[ú›Ÿ\à»	…»àÿZ⁄TòX›XŸKõô]€‹ù€‹úôX›à»	œ]à€\‹œHúÿZ⁄U›\ëôYYòX⁄»€‹úôX›èèèï]\»]èÿèàUîàL
+»UîàK8¢$àUîàÀLHUîàLKLèŸ]èâ¬àà	œ]à€\‹œHúÿZ⁄U›\ëôYYòX⁄»èèèïûH€òŸH[‹ôKèÿèàXù\»›XùòX›Yõ›YYèŸ]èâŒ¬àô]\õàŸX›[€à€\‹œHúÿZ⁄U›\î›\èÇà‹[à€\‹œHúÿZ⁄U›\ë^YXúõ›»èìT‘””à»0≠»ëPQHS”ëVHQ—O‹‹[èÇàèï⁄]\»›\àô]€‹ùœ⁄èÇà€\‹œHúÿZ⁄U›\ìXYèêXÿ€›[ù»[ô\‹Ÿ]»[]‹õ›ÀàXù[»]›€ãè‹Çà€\‹œHúÿZ⁄U›\ìX\ò]Hà[ôœHõ\àè∏)%∏)/∏))8)`
+»8)+∏)/∏),∏)+∏))8)cx))8)/à8¢$à8)%x),8)cx)'H8)*8)/¯)-x)cx)-x),»8).8) ∏)*∏))8)cx))8)`è‹Çà]à€\‹œHúÿZ⁄U€‹ù\]X][€àèÇà]à€\‹œHúÿZ⁄U€‹ù\õHèè‹[èêXÿ€›[ùœ‹‹[èèèìUîàLÿèèŸ]èèH€\‹œHúÿZ⁄U€‹ùﬁ[Xõ€èäœ⁄OÇà]à€\‹œHúÿZ⁄U€‹ù\õH\‹Ÿ]èè‹[èê\‹Ÿ]œ‹‹[èèèìUîàKÿèèŸ]èèH€\‹œHúÿZ⁄U€‹ùﬁ[Xõ€è∏¢$è⁄OÇà]à€\‹œHúÿZ⁄U€‹ù\õHXùèè‹[èëXù‹‹[èèèìUîàÀLÿèèŸ]èÇàŸ]èÇà]à€\‹œHúÿZ⁄U€‹ù[ú›Ÿ\ë‹öYèâÿ[ú›Ÿ\úÀõX\
+ò[YHOà¬à€€ú›Ÿ[X›YHÿZ⁄TòX›XŸKõô]€‹ù[ú›Ÿ\àOOHò[YN¬à€€ú›€\‹”ò[YHHŸ[X›Y»
+ò[YHOOHLML»	»€‹úôX›	»à	»Ÿ[X›Y	 Hà	…Œ¬àô]\õàù]€à€\‹œHúÿZ⁄U€‹ù[ú›Ÿ\âÿ€\‹”ò[Y_Hà\OHòù]€àà€ò€X⁄œHò⁄€‹ŸTÿZ⁄Sô]€‹ù
+	›ò[Y_JHèìUîà	›ò[YKù”ÿÿ[T›ö[ô 	Ÿ[ãUT… _Oÿù]€èò¬àJKöõ⁄[ä	… _OŸ]èÇà	ŸôYYòX⁄ﬂBà	‹ÿZ⁄U›\ëõ€›\äÿZ⁄TòX›XŸKõô]€‹ù€‹úôX›
+_Bà‹ŸX›[€èò¬üBÇôù[ò›[€àÿZ⁄U›\êùX⁄Ÿ]“[
+
+H¬à€€ú›ùX⁄Ÿ]»H¬à…€ôYY…À	Õ	IÀ	”ôYY…À	“€YKõ€Ÿö[»[ôò[ú‹‹ù	◊Kà…ŸXù	À	ÃÃ	IÀ	—Xù	À	–€X\à^[ú⁄]ôHXùò\›\â◊Kà…Ÿù]\ôIÀ	Ãå	IÀ	—ù]\ôIÀ	—[Y\ôŸ[òﬁHù[ô€ÿ[»[ô[ùô\›[ô…◊Kà…›ÿ[ù…À	ÃL	IÀ	’ÿ[ù…À	—[öõﬁ[Y[ùYù\àH[\‹ù[ùõÿú…◊BàN¬à€€ú›[ŸY[àHÿZ⁄TòX›XŸKòùX⁄Ÿ]Àõ[ô›OOHùX⁄Ÿ]Àõ[ô›¬àô]\õàŸX›[€à€\‹œHúÿZ⁄U›\î›\èÇà‹[à€\‹œHúÿZ⁄U›\ë^YXúõ›»èìT‘””à0≠»“UëHS”ëVHHì–è‹‹[èÇàèï\[õ›\à€€›\úÀè⁄èÇà€\‹œHúÿZ⁄U›\ìXYèïH\òŸ[ùYŸ\»\ôH›ZY\Àà[ù\ŸY[€ô^Hÿ[à[ÿ^\»€»»Xù‹àHù]\ôKè‹Çà€\‹œHúÿZ⁄U›\ìX\ò]Hà[ôœHõ\àè∏)j∏)iâH8)%¯),8)'8)/ã8)jx)iâH8)%x),8)cx)'8)j8)iâH8)+x)-x)/¯)-¯)cx)+À8)i¯)iâH8)!¯)&∏)cx)&¯)/ãè‹Çà]à€\‹œHúÿZ⁄PùX⁄Ÿ]‹öYèâÿùX⁄Ÿ]ÀõX\
+
+⁄Ÿ^K›]Kõ›WJHOàù]€à€\‹œHúÿZ⁄PùX⁄Ÿ]	‹ÿZ⁄TòX›XŸKòùX⁄Ÿ]Àö[ò€Y\ Ÿ^JH»	»ô]ôX[Y	»à	…ﬂHà\OHòù]€àà\öXK\ô\‹ŸYHâ‹ÿZ⁄TòX›XŸKòùX⁄Ÿ]Àö[ò€Y\ Ÿ^J_Hà€ò€X⁄œHúô]ôX[ÿZ⁄PùX⁄Ÿ]
+	…⁄Ÿ^_I Hèè›õ€ôœâ‹›O‹›õ€ôœèèâ›]_Oÿèè€X[â€õ›_O‹€X[èÿù]€èò
+Köõ⁄[ä	… _OŸ]èÇà	ÿ[ŸY[à»	œ]à€\‹œHúÿZ⁄U›\ëôYYòX⁄»€‹úôX›èèèëõ›\àõÿúÀ€ôH[ãèÿèàH\\õú»ÿ[\ûH[ù»\ŸH\ôŸ]»]]€X]Xÿ[KèŸ]èâ»à	…ﬂBà	‹ÿZ⁄U›\ëõ€›\ä[ŸY[ä_Bà‹ŸX›[€èò¬üBÇôù[ò›[€àÿZ⁄U›\îõ›][ôR[
+
+H¬à€€ú›][\»H¬à…ŸZ[IÀ	¯ß#{Ó#…À	—Z[IÀ	‘ôX€‹ô[€ô^H⁄[à][›ô\…◊Kà…›ŸYZ€IÀ	¯•‚IÀ	’ŸYZ€IÀ	–⁄X⁄»ò[[òŸ\Àò]\»[ô€ôHô^[›ôI◊Kà…€[€ùIÀ	¯ß$…À	”[€ùIÀ	’\ŸHH[à[ô€‹ŸHH[€ùŸŸ]\â◊BàN¬à€€ú›€€\]HHÿZ⁄TòX›XŸKúõ›][ôKõ[ô›OOH][\Àõ[ô›¬àô]\õàŸX›[€à€\‹œHúÿZ⁄U›\î›\èÇà‹[à€\‹œHúÿZ⁄U›\ë^YXúõ›»èìT‘””àH0≠»—QTUPT÷O‹‹[èÇàèïôYH[ûH[€ô^HXö]Àè⁄èÇà€\‹œHúÿZ⁄U›\ìXYèï\XX⁄€ôH»XZŸHHõ›][ôH]õ›Ÿà[›Hÿ[àô[Y[Xô\ãè‹Çà€\‹œHúÿZ⁄U›\ìX\ò]Hà[ôœHõ\àè∏),8)b¯)'8)*8)b¯) ∏))ã8)!∏)(8)-x)(x)cx)+¯)/∏))8)`∏)*8))8)*∏)/∏).8)(¯)`8)+∏).x)/¯)*8)cx)+¯)/∏))8)`∏)*8)+¯)b¯)'8)*8)/ãè‹Çà]à€\‹œHúÿZ⁄Tõ›][ôHèâ⁄][\ÀõX\
+
+⁄Ÿ^KX€€ã]Kõ›WJHOà¬à€€ú›€ôHHÿZ⁄TòX›XŸKúõ›][ôKö[ò€Y\ Ÿ^JN¬àô]\õàù]€à€\‹œHúÿZ⁄Tõ›][ôR][IŸ€ôH»	»€ôI»à	…ﬂHà\OHòù]€àà\öXK\ô\‹ŸYHâŸ€ô_Hà€ò€X⁄œHò€€\]TÿZ⁄Tõ›][ôJ	…⁄Ÿ^_I Hèè‹[èâ⁄X€€üO‹‹[èè‹[èèèâ›]_Oÿèè€X[â€õ›_O‹€X[è‹‹[èèH€\‹œHúÿZ⁄Tõ›][ôP⁄X⁄»è∏ß$œ⁄Oèÿù]€èò¬àJKöõ⁄[ä	… _OŸ]èÇà	ÿ€€\]H»	œ]à€\‹œHúÿZ⁄U›\ëôYYòX⁄»€‹úôX›èèèî\ôôX›èÿèà€ô\›€X[\]\»ôX]€€\Xÿ]Yö[ò[òŸHﬁ\›[\ÀèŸ]èâ»à	…ﬂBà	‹ÿZ⁄U›\ëõ€›\ä€€\]K	—ö[ö\⁄òX›XŸI _Bà‹ŸX›[€èò¬üBÇôù[ò›[€àÿZ⁄U›\ë€ôR[
+
+H¬àô]\õàŸX›[€à€\‹œHúÿZ⁄U›\î›\ÿZ⁄U›\ë€ôHèÇà]à€\‹œHúÿZ⁄U›\ë€ôSX\ö»è∏ß$œŸ]èÇà‹[à€\‹œHúÿZ⁄U›\ë^YXúõ›»èîêP’P—H””TUO‹‹[èÇàèîÿZ⁄H\»ôXYKè⁄èÇà€\‹œHúÿZ⁄U›\ìXYèñ[›HòX›\ŸYHù[ö]NàôX€‹ô⁄][›ôY[ô\ú›[ôHöY»X›\ôK[ôõ€›»H[àŸŸ]\ãè‹Çà€\‹œHúÿZ⁄U›\ìX\ò]Hà[ôœHõ\àè∏)&¯)/∏)*H8)!∏))8)/à›\àSà8)-x)/∏)*∏),8)(¯)a»8).8)b¯)*∏)a»8).x)b¯)"8),ãà8).8),8)/∏)-x)/∏))8)`8),à8)%x)b¯)(¯))8)`8).x)`8)+∏)/∏).x)/¯))8)`8)'8))8)*8)'x)/∏),∏)a¯),∏)`8)*8)/∏).x)`è‹Çà]à€\‹œHúÿZ⁄U›\ë€ôPX›[€ú»èèù]€à€\‹œHúö[X\ûHà\OHòù]€àà€ò€X⁄œHõ‹[îôX[‹[ôúõ€U›\ä
+HèïûHHôX[‹[ôÿù]€èèù]€à€\‹œHúŸX€€ô\ûHà\OHòù]€àà€ò€X⁄œHò€‹ŸTÿZ⁄U›\ä
+Hèë€ôHõ‹àõ›œÿù]€èèŸ]èÇà‹ŸX›[€èò¬üBÇôù[ò›[€àô[ô\îÿZ⁄U›\ä
+H¬àYà
+\ÿZ⁄TòX›XŸJHÿZ⁄TòX›XŸHHúô\⁄ÿZ⁄TòX›XŸJ
+N¬à€€ú›ÿ‹ôY[ú»H‹ÿZ⁄U›\ïŸ[€€YR[ÿZ⁄U›\êX›[€í[ÿZ⁄U›\îôX€‹ô[ÿZ⁄U›\ï€‹ù[ÿZ⁄U›\êùX⁄Ÿ]“[ÿZ⁄U›\îõ›][ôR[ÿZ⁄U›\ë€ôR[N¬à€€ú›õŸ‹ô\‹»HX]õZ[äLX]õX^
+ÿZ⁄U›\î›\
+àå
+JN¬à	
+	‹ÿZ⁄U›\ê€›[ù\â Kù^€€ù[ùHÿZ⁄U›\î›\OOH»	‘ÿZ⁄HòX›XŸI»àÿZ⁄U›\î›\OOHà»	‘òX›XŸH€€\]I»à\‹€€à	‹ÿZ⁄U›\î›\HŸàX¬à	
+	‹ÿZ⁄U›\îõŸ‹ô\‹–ò\â Kú›[Kù⁄YH	‹õŸ‹ô\‹ﬂIX¬à	
+	‹ÿZ⁄U›\îõŸ‹ô\‹–ò\â Kú\ô[ù[[Y[ùúŸ]]öXù]J	ÿ\öXK]ò[Y[õ›…À›ö[ô õŸ‹ô\‹ JN¬à	
+	‹ÿZ⁄U›\ê€€ù[ù	 Kö[õô\íSHÿ‹ôY[ú÷‹ÿZ⁄U›\î›\J
+N¬à	
+	‹ÿZ⁄U›\ê€€ù[ù	 Kúÿ‹õ€‹H¬àô\]Y\›[ö[X][€ëúò[YJ
+
+HOà	
+	‹ÿZ⁄U›\ê€€ù[ù	 Kú]Y\ûTŸ[X›‹ä	ÿù]€â OÀôõÿ›\ »ô]ô[ùÿ‹õ€àùYHJJN¬üBÇôù[ò›[€àÿZ⁄U›\ìô^
+
+H¬àYà
+ÿZ⁄U›\î›\OOHH	âà\ÿZ⁄TòX›XŸKòX›[€ê€‹úôX›
+Hô]\õé¬àYà
+ÿZ⁄U›\î›\OOHà	âàÿZ⁄TòX›XŸKúôX€‹ô›YŸHJHô]\õé¬àYà
+ÿZ⁄U›\î›\OOH»	âà\ÿZ⁄TòX›XŸKõô]€‹ù€‹úôX›
+Hô]\õé¬àYà
+ÿZ⁄U›\î›\OOH	âàÿZ⁄TòX›XŸKòùX⁄Ÿ]Àõ[ô›
+Hô]\õé¬àYà
+ÿZ⁄U›\î›\OOHH	âàÿZ⁄TòX›XŸKúõ›][ôKõ[ô› Hô]\õé¬àYà
+ÿZ⁄U›\î›\OOHJH»ö[ö\⁄ÿZ⁄U›\ä
+N»ô]\õé»BàÿZ⁄U›\î›\HX]õZ[äãÿZ⁄U›\î›\
+»JN¬à\X 
+N¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€àÿZ⁄U›\êòX⁄ 
+H¬àÿZ⁄U›\î›\HX]õX^
+ÿZ⁄U›\î›\HJN¬à\X 
+N¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€à⁄€‹ŸTÿZ⁄U›\êX›[€äò[YJH¬àÿZ⁄TòX›XŸKòX›[€àHò[YN¬àÿZ⁄TòX›XŸKòX›[€ê€‹úôX›Hò[YHOOH	‹‹[ô	Œ¬àYà
+ÿZ⁄TòX›XŸKòX›[€ê€‹úôX›
+H\X 
+N¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€àYò[òŸTÿZ⁄TòX›XŸJ
+H¬àÿZ⁄TòX›XŸKúôX€‹ô›YŸHHX]õZ[äKÿZ⁄TòX›XŸKúôX€‹ô›YŸH
+»JN¬à\X 
+N¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€à⁄€‹ŸTÿZ⁄Sô]€‹ù
+ò[YJH¬àÿZ⁄TòX›XŸKõô]€‹ù[ú›Ÿ\àHò[YN¬àÿZ⁄TòX›XŸKõô]€‹ù€‹úôX›Hò[YHOOHLML¬àYà
+ÿZ⁄TòX›XŸKõô]€‹ù€‹úôX›
+H\X 
+N¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€àô]ôX[ÿZ⁄PùX⁄Ÿ]
+Ÿ^JH¬àYà
+\ÿZ⁄TòX›XŸKòùX⁄Ÿ]Àö[ò€Y\ Ÿ^JJHÿZ⁄TòX›XŸKòùX⁄Ÿ]Àú\⁄
+Ÿ^JN¬à\X 
+N¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€à€€\]TÿZ⁄Tõ›][ôJŸ^JH¬àYà
+\ÿZ⁄TòX›XŸKúõ›][ôKö[ò€Y\ Ÿ^JJHÿZ⁄TòX›XŸKúõ›][ôKú\⁄
+Ÿ^JN¬à\X 
+N¬àô[ô\îÿZ⁄U›\ä
+N¬üBÇôù[ò›[€àö[ö\⁄ÿZ⁄U›\ä
+H¬àûH»ÿÿ[›‹òYŸKúŸ]][JÿZ⁄U›\î›‹òYŸRŸ^J
+Kî””ãú›ö[ô⁄YûJ»€€\]Y]àô]»]J
+Kù“T”‘›ö[ô 
+HJJN»Bàÿ]⁄
+Ÿ\úõ‹äH» àH›\à›[€‹ö‹»Yàö]ò]H›‹òYŸH\»[ò]òZ[XõKà
+ã»BàÿZ⁄U›\î›\Hé¬à\]TÿZ⁄U›\ì][ò⁄\ä
+N¬àô[ô\îÿZ⁄U›\ä
+N¬àYà
+\ÿZ⁄U›\êŸ[Xúò]Y
+H»ÿZ⁄U›\êŸ[Xúò]YHùYN»Ÿ[Xúò]J
+N»\X 
+N»BüBÇôù[ò›[€à‹[îôX[‹[ôúõ€U›\ä
+H¬à€‹ŸTÿZ⁄U›\ä
+N¬à‹[î]ZX⁄—^[úŸJ
+N¬üBÇôù[ò›[€àù[Xô\îôX⁄\⁄[€ä[ú]
+H¬à€€ú››\H[ú]ôŸ]]öXù]J	‹›\	 N¬àYà
+\›\›\OOH	ÿ[ûI Hô]\õà¬à€€ú›X]⁄H›ö[ô ›\
+KõX]⁄
+◊ä
+ K N¬àô]\õàX]õZ[äX]⁄»X]⁄ÃWKõ[ô›à
+N¬üBÇôù[ò›[€àõ‹õX]⁄Y[ù[Xô\ä[ú]ò[YJH¬àYà
+Sù[Xô\ãö\—ö[ö]Jò[YJJHô]\õà	¯†%	Œ¬à€€ú›ôX⁄\⁄[€àHù[Xô\îôX⁄\⁄[€ä[ú]
+N¬àô]\õàô]»[ùìù[Xô\ëõ‹õX]
+	Ÿ[ãUT…À»Z[ö[][QúòX›[€ëY⁄]ŒàôX⁄\⁄[€ãX^[][QúòX›[€ëY⁄]ŒàôX⁄\⁄[€àJKôõ‹õX]
+ò[YJN¬üBÇôù[ò›[€àùYŸR[õ[ôSù[Xô\ä[ú]\ôX›[€ã[ö]»HJH¬àYà
+[ú]ô\ÿXõY
+Hô]\õé¬à€€ú››\H[ú]ú›\	âà[ú]ú›\OOH	ÿ[ûI»»ù[Xô\ä[ú]ú›\
+HàN¬à€€ú›Z[àH[ú]ö\–]öXù]J	€Z[â H»ù[Xô\ä[ú]õZ[äHàR[ôö[ö]N¬à€€ú›X^H[ú]ö\–]öXù]J	€X^	 H»ù[Xô\ä[ú]õX^
+Hà[ôö[ö]N¬à]ò[YHH[ú]ùò[YHOOH	…»»
+ù[Xô\ãö\—ö[ö]JZ[äH»Z[àà
+Hàù[Xô\ä[ú]ùò[YJN¬àò[YH
+œH\ôX›[€à
+à›\
+à[ö]Œ¬àò[YHHX]õX^
+Z[ãX]õZ[äX^ò[YJJN¬à[ú]ùò[YHHù[Xô\îôX⁄\⁄[€ä[ú]
+H»ò[YKù—ö^Y
+ù[Xô\îôX⁄\⁄[€ä[ú]
+JHà›ö[ô X]úõ›[ô
+ò[YJJN¬à[ú]ô\‹]⁄]ô[ù
+ô]»]ô[ù
+	⁄[ú]	À»ùXòõ\ŒàùYHJJN¬à[ú]ô\‹]⁄]ô[ù
+ô]»]ô[ù
+	ÿ⁄[ôŸIÀ»ùXòõ\ŒàùYHJJN¬à\]R[õ[ôSù[Xô\ä[ú]
+N¬à\X 
+N¬üBÇôù[ò›[€à\]R[õ[ôSù[Xô\ä[ú]
+H¬à€€ú›⁄[H[ú]ò€‹Ÿ\›
+	Àö[õ[ôSù[Xô\ï⁄Y[	 N¬àYà
+\⁄[
+Hô]\õé¬à€€ú››\H[ú]ú›\	âà[ú]ú›\OOH	ÿ[ûI»»ù[Xô\ä[ú]ú›\
+HàN¬à€€ú›Z[àH[ú]ö\–]öXù]J	€Z[â H»ù[Xô\ä[ú]õZ[äHàR[ôö[ö]N¬à€€ú›X^H[ú]ö\–]öXù]J	€X^	 H»ù[Xô\ä[ú]õX^
+Hà[ôö[ö]N¬à€€ú›ò[YHH[ú]ùò[YHOOH	…»»
+ù[Xô\ãö\—ö[ö]JZ[äH»Z[àà
+Hàù[Xô\ä[ú]ùò[YJN¬à€€ú›ôYõ‹ôHHò[YHH›\¬à€€ú›Yù\àHò[YH
+»›\¬à⁄[ú]Y\ûTŸ[X›‹ä	Àõù[Xô\êôYõ‹ôI Kù^€€ù[ùHôYõ‹ôHZ[à»	¯†%	»àõ‹õX]⁄Y[ù[Xô\ä[ú]ôYõ‹ôJN¬à⁄[ú]Y\ûTŸ[X›‹ä	Àõù[Xô\êYù\â Kù^€€ù[ùHYù\ààX^»	¯†%	»àõ‹õX]⁄Y[ù[Xô\ä[ú]Yù\äN¬üBÇôù[ò›[€à[ö[òŸSù[Xô\í[ú]
+[ú]
+H¬àYà
+[ú]ô]\Ÿ]ö[õ[ôU⁄Y[ôXYJHô]\õé¬à[ú]ô]\Ÿ]ö[õ[ôU⁄Y[ôXYHH	›ùYIŒ¬à[ú]ò€\‹”\›òY
+	⁄[õ[ôSù[Xô\í[ú]	 N¬à[ú]ö[ú][ŸHHù[Xô\îôX⁄\⁄[€ä[ú]
+H»	ŸX⁄[X[	»à	€ù[Y\öX…Œ¬à€€ú›⁄[Hÿ›[Y[ùò‹ôX]Q[[Y[ù
+	Ÿ]â N¬à⁄[ò€\‹”ò[YHH	⁄[õ[ôSù[Xô\ï⁄Y[	Œ¬à[ú]ú\ô[ùõŸKö[úŸ\ùôYõ‹ôJ⁄[[ú]
+N¬à⁄[ö[õô\íSH	œ]à€\‹œHõù[Xô\ìùYŸHù[Xô\êYù\ààõ€OHòù]€ààXö[ô^Håà\öXK[Xô[Hí[ò‹ôX\ŸHèèŸ]èâŒ¬à⁄[ò\[ô⁄[
+[ú]
+N¬à⁄[ö[úŸ\ùYòXŸ[ùS
+	ÿôYõ‹ôY[ô	À	œ]à€\‹œHõù[Xô\ìùYŸHù[Xô\êôYõ‹ôHàõ€OHòù]€ààXö[ô^Håà\öXK[Xô[HëX‹ôX\ŸHèèŸ]èè€X[î›⁄\Hô\ùXÿ[H‹à\HŸ[ùôHù[Xô\à»\HH^X›ò[YKè‹€X[â N¬à⁄[ú]Y\ûTŸ[X›‹ä	Àõù[Xô\êYù\â Kõ€ò€X⁄»H
+
+HOàùYŸR[õ[ôSù[Xô\ä[ú]JN¬à⁄[ú]Y\ûTŸ[X›‹ä	Àõù[Xô\êôYõ‹ôI Kõ€ò€X⁄»H
+
+HOàùYŸR[õ[ôSù[Xô\ä[ú]LJN¬à⁄[ú]Y\ûTŸ[X›‹ê[
+	Àõù[Xô\ìùYŸI Kôõ‹ëXX⁄
+€€ùõ€Oà€€ùõ€õ€öŸ^Y›€àH]ô[ùOà¬àYà
+V…—[ù\âÀ	»	◊Kö[ò€Y\ ]ô[ùöŸ^JJHô]\õé¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ùõ€ò€X⁄ 
+N¬àJN¬à]›\ùHHù[¬à⁄[òY]ô[ù\›[ô\ä	‹⁄[ù\ô›€âÀ]ô[ùOà»Yà
+]ô[ùù\ôŸ]OOH[ú]
+Hô]\õé»›\ùHH]ô[ùò€Y[ùN»JN¬à⁄[òY]ô[ù\›[ô\ä	‹⁄[ù\ù\	À]ô[ùOà¬àYà
+›\ùHOHù[]ô[ùù\ôŸ]OOH[ú]
+H»›\ùHHù[»ô]\õé»Bà€€ú›\›[òŸHH›\ùHH]ô[ùò€Y[ùN¬àYà
+X]òXú \›[òŸJHàN
+HùYŸR[õ[ôSù[Xô\ä[ú]\›[òŸHà»HàLKX]õX^
+KX]úõ›[ô
+X]òXú \›[òŸJH»ÕJJJN¬à›\ùHHù[¬àJN¬à⁄[òY]ô[ù\›[ô\ä	›⁄Y[	À]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬àùYŸR[õ[ôSù[Xô\ä[ú]]ô[ùô[VH»HàLJN¬àK»\‹⁄]ôNàò[ŸHJN¬à[ú]òY]ô[ù\›[ô\ä	⁄[ú]	À
+
+HOà\]R[õ[ôSù[Xô\ä[ú]
+JN¬à\]R[õ[ôSù[Xô\ä[ú]
+N¬üBÇôù[ò›[€àﬁ[ò“[õ[ôS‹[€ï⁄Y[
+Ÿ[X›ÿ‹õ€HùYJH¬à€€ú›òZ[HŸ[X›ú\ô[ù[[Y[ùÀú]Y\ûTŸ[X›‹ä	Œúÿ€‹Hàö[õ[ôS‹[€îòZ[	 N¬àYà
+\òZ[
+Hô]\õé¬àòZ[ò€\‹”\›ùŸŸ€J	Ÿ\ÿXõY	ÀŸ[X›ô\ÿXõY
+N¬à€€ú›[ô^HX]õX^
+Ÿ[X›úŸ[X›Y[ô^
+N¬àòZ[ú]Y\ûTŸ[X›‹ê[
+	Àö[õ[ôS‹[€í][I Kôõ‹ëXX⁄
+
+][K][R[ô^
+HOà¬à][Kò€\‹”\›ùŸŸ€J	ÿX›]ôIÀ][R[ô^OOH[ô^
+N¬à][KúŸ]]öXù]J	ÿ\öXK\Ÿ[X›Y	À][R[ô^OOH[ô^»	›ùYI»à	Ÿò[ŸI N¬àJN¬àYà
+ÿ‹õ€
+Hô\]Y\›[ö[X][€ëúò[YJ
+
+HOàòZ[úÿ‹õ€ »‹à[ô^
+àôZ]ö[‹éà	‹€[€›	»JJN¬üBÇôù[ò›[€àùZ[[õ[ôS‹[€ï⁄Y[
+Ÿ[X›
+H¬àŸ[X›ú\ô[ù[[Y[ùÀú]Y\ûTŸ[X›‹ä	Œúÿ€‹Hàö[õ[ôS‹[€îòZ[	 OÀúô[[›ôJ
+N¬à€€ú›òZ[Hÿ›[Y[ùò‹ôX]Q[[Y[ù
+	Ÿ]â N¬àòZ[ò€\‹”ò[YHH	⁄[õ[ôS‹[€îòZ[	Œ¬àòZ[ùXí[ô^H¬àòZ[úŸ]]öXù]J	‹õ€IÀ	€\›õﬁ	 N¬àòZ[úŸ]]öXù]J	ÿ\öXK[Xô[	ÀŸ[X›ôŸ]]öXù]J	ÿ\öXK[Xô[	 H	–⁄€‹ŸH[à‹[€â N¬àòZ[ö[õô\íSHÀããúŸ[X›õ‹[€ú◊KõX\
+
+‹[€ã[ô^
+HOàù]€à\OHòù]€àà€\‹œHö[õ[ôS‹[€í][I⁄[ô^OOHŸ[X›úŸ[X›Y[ô^»	»X›]ôI»à	…ﬂHà]K[‹[€ãZ[ô^Hâ⁄[ô^Hàõ€OHõ‹[€àà\öXK\Ÿ[X›YHâ⁄[ô^OOHŸ[X›úŸ[X›Y[ô^HèâŸ\ÿ ‹[€ãù^€€ù[ù
+_Oÿù]€èò
+Köõ⁄[ä	… N¬àŸ[X›ö[úŸ\ùYòXŸ[ù[[Y[ù
+	ÿYù\ô[ô	ÀòZ[
+N¬à€€ú›⁄€‹ŸHH
+[ô^\Ÿ\í[ö]X]YHùYJHOà¬àYà
+Ÿ[X›ô\ÿXõY
+Hô]\õé¬à€€ú›õ›[ôYHX]õX^
+X]õZ[äŸ[X›õ‹[€úÀõ[ô›HK[ô^
+JN¬àYà
+Ÿ[X›úŸ[X›Y[ô^OOHõ›[ôY
+H¬àŸ[X›úŸ[X›Y[ô^Hõ›[ôY¬àYà
+\Ÿ\í[ö]X]Y
+H¬àŸ[X›ô\‹]⁄]ô[ù
+ô]»]ô[ù
+	⁄[ú]	À»ùXòõ\ŒàùYHJJN¬àŸ[X›ô\‹]⁄]ô[ù
+ô]»]ô[ù
+	ÿ⁄[ôŸIÀ»ùXòõ\ŒàùYHJJN¬à\X 
+N¬àBàBàﬁ[ò“[õ[ôS‹[€ï⁄Y[
+Ÿ[X›ò[ŸJN¬à]Y]YSZX‹õ›\⁄ 
+
+HOàﬁ[ò–[[õ[ôP€€ùõ€ 
+JN¬àN¬àòZ[õ€ò€X⁄»H]ô[ùOà¬à€€ú›][HH]ô[ùù\ôŸ]ò€‹Ÿ\›
+	Àö[õ[ôS‹[€í][I N¬àYà
+Z][JHô]\õé¬à€€ú›[ô^Hù[Xô\ä][Kô]\Ÿ]õ‹[€í[ô^
+N¬à⁄€‹ŸJ[ô^
+N¬àòZ[úÿ‹õ€ »‹à[ô^
+àôZ]ö[‹éà	‹€[€›	»JN¬àN¬à]Ÿ]U[Y\é¬àòZ[òY]ô[ù\›[ô\ä	‹ÿ‹õ€	À
+
+HOà¬à€X\ï[Y[›]
+Ÿ]U[Y\äN¬àŸ]U[Y\àHŸ][Y[›]
+
+
+HOà⁄€‹ŸJX]úõ›[ô
+òZ[úÿ‹õ€‹»
+JKL
+N¬àK»\‹⁄]ôNàùYHJN¬àòZ[õ€öŸ^Y›€àH]ô[ùOà¬àYà
+V…–\úõ›’\	À	–\úõ›—›€â◊Kö[ò€Y\ ]ô[ùöŸ^JJHô]\õé¬à]ô[ùúô]ô[ùYò][
+
+N¬à⁄€‹ŸJŸ[X›úŸ[X›Y[ô^
+»
+]ô[ùöŸ^HOOH	–\úõ›—›€â»»HàLJJN¬àﬁ[ò“[õ[ôS‹[€ï⁄Y[
+Ÿ[X›
+N¬àN¬àô\]Y\›[ö[X][€ëúò[YJ
+
+HOà¬àòZ[úÿ‹õ€‹HX]õX^
+Ÿ[X›úŸ[X›Y[ô^
+H
+à¬àﬁ[ò“[õ[ôS‹[€ï⁄Y[
+Ÿ[X›ò[ŸJN¬àJN¬üBÇôù[ò›[€à[ö[òŸTŸ[X›
+Ÿ[X›
+H¬àYà
+Ÿ[X›ô]\Ÿ]ö[õ[ôU⁄Y[ôXYJHô]\õé¬àŸ[X›ô]\Ÿ]ö[õ[ôU⁄Y[ôXYHH	›ùYIŒ¬àŸ[X›ò€\‹”\›òY
+	⁄[õ[ôTŸ[X›€›\òŸI N¬àùZ[[õ[ôS‹[€ï⁄Y[
+Ÿ[X›
+N¬àŸ[X›òY]ô[ù\›[ô\ä	ÿ⁄[ôŸIÀ
+
+HOàﬁ[ò“[õ[ôS‹[€ï⁄Y[
+Ÿ[X›
+JN¬àô]»]]][€ìÿúŸ\ùô\ä
+
+HOàùZ[[õ[ôS‹[€ï⁄Y[
+Ÿ[X›
+JKõÿúŸ\ùôJŸ[X›»⁄[\›àùYK›XùôYNàùYHJN¬àŸ][Y[›]
+
+
+HOàﬁ[ò“[õ[ôS‹[€ï⁄Y[
+Ÿ[X›
+K
+N¬üBÇôù[ò›[€àô\\ôR[õ[ôP€€ùõ€ õ€›Hÿ›[Y[ù
+H¬à€€ú›ù[Xô\ú»HÀããäõ€›õX]⁄\œÀä	⁄[ú]›\OHõù[Xô\àóI H»‹õ€›Hà◊JKããäõ€›ú]Y\ûTŸ[X›‹ê[Àä	⁄[ú]›\OHõù[Xô\àóI H◊JWN¬à€€ú›Ÿ[X›»HÀããäõ€›õX]⁄\œÀä	‹Ÿ[X›	 H»‹õ€›Hà◊JKããäõ€›ú]Y\ûTŸ[X›‹ê[Àä	‹Ÿ[X›	 H◊JWN¬àù[Xô\úÀôõ‹ëXX⁄
+[ö[òŸSù[Xô\í[ú]
+N¬àŸ[X›Àôõ‹ëXX⁄
+[ö[òŸTŸ[X›
+N¬üBÇôù[ò›[€àﬁ[ò–[[õ[ôP€€ùõ€ õ€›Hÿ›[Y[ù
+H¬àõ€›ú]Y\ûTŸ[X›‹ê[Àä	⁄[ú]›\OHõù[Xô\àóI Kôõ‹ëXX⁄
+\]R[õ[ôSù[Xô\äN¬àõ€›ú]Y\ûTŸ[X›‹ê[Àä	‹Ÿ[X›	 Kôõ‹ëXX⁄
+Ÿ[X›Oàﬁ[ò“[õ[ôS‹[€ï⁄Y[
+Ÿ[X›H\Ÿ[X›ò€‹Ÿ\›
+	Àôõ›‘›\òX›]ôI JJN¬üBÇôù[ò›[€àõ›‘›\\–]òZ[XõJ›\
+H¬àô]\õàÀããú›\ò⁄[ô[óKú€€YJ⁄[OàX⁄[õX]⁄\ 	Àôõ›‘›\XYôõ›–X›[€ú… H	âàX⁄[ò€\‹”\›ò€€ùZ[ú 	⁄Y[â JN¬üBÇôù[ò›[€à⁄›—õ‹õT›\
+õ‹õKô\]Y\›Y[ô^
+H¬à€€ú›]òZ[XõHHÀããôõ‹õKú]Y\ûTŸ[X›‹ê[
+	Œúÿ€‹Hàôõ›‘›\	 WKôö[\äõ›‘›\\–]òZ[XõJN¬àYà
+X]òZ[XõKõ[ô›
+Hô]\õé¬à€€ú›[ô^HX]õX^
+X]õZ[ä]òZ[XõKõ[ô›HKô\]Y\›Y[ô^
+JN¬àõ‹õKô]\Ÿ]ôõ›“[ô^H›ö[ô [ô^
+N¬àõ‹õKú]Y\ûTŸ[X›‹ê[
+	Œúÿ€‹Hàôõ›‘›\	 Kôõ‹ëXX⁄
+›\Oà›\ò€\‹”\›ùŸŸ€J	ÿX›]ôIÀ›\OOH]òZ[XõV⁄[ô^JJN¬à]òZ[XõKôõ‹ëXX⁄
+
+›\›\[ô^
+HOà¬à€€ú›XYH›\ú]Y\ûTŸ[X›‹ä	Œúÿ€‹Hàôõ›‘›\XY	 N¬à€€ú›]HH›\ô]\Ÿ]ôõ›’]H›\ú]Y\ûTŸ[X›‹ä	€Xô[	 OÀò⁄[õŸ\÷ÃOÀù^€€ù[ùÀùö[J
+H	”ô^]Z[	Œ¬àYà
+XY
+HXYö[õô\íSH‹[èî›\	‹›\[ô^
+»_HŸà	ÿ]òZ[XõKõ[ô›O‹‹[èèèâŸ\ÿ ]J_OÿèèH›[OHãKYõ›À\õŸ‹ô\‹Œâ ›\[ô^
+»JH»]òZ[XõKõ[ô›
+àLIHèè⁄Oò¬àJN¬àô\]Y\›[ö[X][€ëúò[YJ
+
+HOà¬àﬁ[ò–[[õ[ôP€€ùõ€ ]òZ[XõV⁄[ô^JN¬à]òZ[XõV⁄[ô^Kú]Y\ûTŸ[X›‹ä	⁄[ú]õõ›
+›\OHöY[àóJK^\ôXKö[õ[ôS‹[€îòZ[	 OÀôõÿ›\ »ô]ô[ùÿ‹õ€àùYHJN¬àJN¬üBÇôù[ò›[€àò[Y]Qõ›‘›\
+›\
+H¬à€€ú›€€ùõ€»HÀããú›\ú]Y\ûTŸ[X›‹ê[
+	⁄[ú]Ÿ[X›^\ôXI WKôö[\ä€€ùõ€OàX€€ùõ€ô\ÿXõY	âàX€€ùõ€ò€‹Ÿ\›
+	ÀöY[â JN¬àõ‹à
+€€ú›€€ùõ€Ÿà€€ùõ€ H¬àYà
+€€ùõ€ò⁄X⁄’ò[Y]J
+JH€€ù[ùYN¬à€€ùõ€úô\‹ùò[Y]J
+N¬àô]\õàò[ŸN¬àBàô]\õàùYN¬üBÇôù[ò›[€àŸ]\õ‹õQõ› õ‹õJH¬àYà
+õ‹õKô]\Ÿ]ôõ›‘ôXYJHô]\õé¬àõ‹õKô]\Ÿ]ôõ›‘ôXYHH	›ùYIŒ¬à]›\»HÀããôõ‹õKú]Y\ûTŸ[X›‹ê[
+	Œúÿ€‹Hàôõ›‘›\	 WN¬à€€ú››XõZ]HÀããôõ‹õKò⁄[ô[óKôö[ô
+⁄[Oà⁄[õX]⁄\œÀä	ÿù]€ñ›\OHú›XõZ]óI JN¬àYà
+\›\Àõ[ô›
+H¬à€€ú›⁄[ô[àHÀããôõ‹õKò⁄[ô[óKôö[\ä⁄[Oà⁄[OOH›XõZ]
+N¬à][ô[ô”õ›\»H◊N¬à⁄[ô[ãôõ‹ëXX⁄
+⁄[Oà¬àYà
+⁄[õX]⁄\ 	ÀôúöY[ôSõ›Kùÿ\õö[ô”õ›I H	âàX⁄[ú]Y\ûTŸ[X›‹ä	⁄[ú]Ÿ[X›^\ôXI JH»[ô[ô”õ›\Àú\⁄
+⁄[
+N»ô]\õé»Bà€€ú››\Hÿ›[Y[ùò‹ôX]Q[[Y[ù
+	‹ŸX›[€â N¬à›\ò€\‹”ò[YHH	Ÿõ›‘›\	Œ¬à[ô[ô”õ›\Àôõ‹ëXX⁄
+õ›HOà›\ò\[ô⁄[
+õ›JJN¬à[ô[ô”õ›\»H◊N¬à›\ò\[ô⁄[
+⁄[
+N¬àõ‹õKò\[ô⁄[
+›\
+N¬à›\Àú\⁄
+›\
+N¬àJN¬àYà
+[ô[ô”õ›\Àõ[ô›	âà›\Àõ[ô›
+H[ô[ô”õ›\Àôõ‹ëXX⁄
+õ›HOà›\÷ÃKúô\[ô
+õ›JJN¬àYà
+›XõZ]	âà›\Àõ[ô›
+H›\Àò]
+LJKò\[ô⁄[
+›XõZ]
+N¬àBàYà
+›\Àõ[ô›äH»›\÷ÃOÀò€\‹”\›òY
+	ÿX›]ôI N»ô]\õé»Bà›\Àôõ‹ëXX⁄
+
+›\[ô^
+HOà¬à›\ö[úŸ\ùYòXŸ[ùS
+	ÿYù\òôY⁄[âÀ	œ]à€\‹œHôõ›‘›\XYèèŸ]èâ N¬à€€ú›X›[€ú»Hÿ›[Y[ùò‹ôX]Q[[Y[ù
+	Ÿ]â N¬àX›[€úÀò€\‹”ò[YHH	Ÿõ›–X›[€ú…Œ¬àYà
+[ô^à
+HX›[€úÀö[õô\íS
+œH	œù]€à\OHòù]€àà€\‹œHôõ›–òX⁄»èêòX⁄œÿù]€èâŒ¬àYà
+[ô^›\Àõ[ô›HJHX›[€úÀö[õô\íS
+œH	œù]€à\OHòù]€àà€\‹œHúö[X\ûHõ›”ô^èê€€ù[ùYOÿù]€èâŒ¬à›\ò\[ô⁄[
+X›[€ú N¬àX›[€úÀú]Y\ûTŸ[X›‹ä	Àôõ›–òX⁄… OÀòY]ô[ù\›[ô\ä	ÿ€X⁄…À
+
+HOà⁄›—õ‹õT›\
+õ‹õKù[Xô\äõ‹õKô]\Ÿ]ôõ›“[ô^
+HHJJN¬àX›[€úÀú]Y\ûTŸ[X›‹ä	Àôõ›”ô^	 OÀòY]ô[ù\›[ô\ä	ÿ€X⁄…À
+
+HOà¬àYà
+ò[Y]Qõ›‘›\
+›\
+JH⁄›—õ‹õT›\
+õ‹õKù[Xô\äõ‹õKô]\Ÿ]ôõ›“[ô^
+H
+»JN¬àJN¬àJN¬àõ‹õKòY]ô[ù\›[ô\ä	‹›XõZ]	À]ô[ùOà¬à€€ú›]òZ[XõHHÀããôõ‹õKú]Y\ûTŸ[X›‹ê[
+	Œúÿ€‹Hàôõ›‘›\	 WKôö[\äõ›‘›\\–]òZ[XõJN¬à€€ú›[ô^Hù[Xô\äõ‹õKô]\Ÿ]ôõ›“[ô^
+N¬àYà
+[ô^èH]òZ[XõKõ[ô›HJHô]\õé¬à]ô[ùúô]ô[ùYò][
+
+N¬à]ô[ùú›‹[[YYX]Tõ‹Yÿ][€ä
+N¬àYà
+ò[Y]Qõ›‘›\
+]òZ[XõV⁄[ô^JJH⁄›—õ‹õT›\
+õ‹õK[ô^
+»JN¬àKùYJN¬à⁄›—õ‹õT›\
+õ‹õK
+N¬üBÇò\ﬁ[ò»ù[ò›[€àù[ì‹\ò][€ä‹\ò][€äH¬àYà
+‹\ò][€ãòX›[€àOOH	Ÿ[]I H¬àô]\õàãôúõ€J‹\ò][€ãùXõJKô[]J
+Kô\J	⁄Y	À‹\ò][€ãöY
+Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+N¬àBàYà
+‹\ò][€ãòX›[€àOOH	ÿùYŸ]	 H¬àô]\õàãôúõ€J	ÿùYŸ]… Kù\Ÿ\ù
+‹\ò][€ãúõ›‹À»€ê€€ôõX›à	⁄›\ŸZ€⁄Yÿ]Y€‹ûI»JN¬àBàYà
+‹\ò][€ãòX›[€àOOH	‹€ò\⁄›	 H¬àô]\õàãôúõ€J	€ô]›€‹ù‹€ò\⁄›… Kù\Ÿ\ù
+‹\ò][€ãúõ›À»€ê€€ôõX›à	⁄›\ŸZ€⁄Y€ò\⁄›Ÿ]I»JN¬àBàYà
+‹\ò][€ãòX›[€àOOH	‹Ÿ][ô‹… H¬àô]\õàãôúõ€J	⁄›\ŸZ€‹Ÿ][ô‹… Kù\Ÿ\ù
+‹\ò][€ãúõ›À»€ê€€ôõX›à	⁄›\ŸZ€⁄Y	»JN¬àBàYà
+‹\ò][€ãòX›[€àOOH	ÿ⁄X⁄›\	 H¬àô]\õàãôúõ€J	€[€ùWÿ⁄X⁄›\… Kù\Ÿ\ù
+‹\ò][€ãúõ›À»€ê€€ôõX›à	⁄›\ŸZ€⁄Y[€ù	»JN¬àBàYà
+‹\ò][€ãòX›[€àOOH	€[€ô^Q]I H¬àô]\õàãôúõ€J	›ŸYZ€W€[€ô^WŸ]\… Kù\Ÿ\ù
+‹\ò][€ãúõ›À»€ê€€ôõX›à	⁄›\ŸZ€⁄YŸYZ◊‹›\ù	»JN¬àBàYà
+‹\ò][€ãòX›[€àOOH	ÿù[’\Ÿ\ù	 H¬àô]\õàãôúõ€J‹\ò][€ãùXõJKù\Ÿ\ù
+‹\ò][€ãúõ›‹À‹\ò][€ãõ€ê€€ôõX›»»€ê€€ôõX›à‹\ò][€ãõ€ê€€ôõX›Hà[ôYö[ôY
+N¬àBàô]\õàãôúõ€J‹\ò][€ãùXõJKù\Ÿ\ù
+‹\ò][€ãúõ› N¬üBÇò\ﬁ[ò»ù[ò›[€àõ\⁄[ô[ô 
+H¬àYà
+YàZ›\ŸZ€Y[ò]öYÿ]‹ãõ€ì[ôJHô]\õàò[ŸN¬à]][\»H[ô[ô 
+N¬àYà
+Z][\Àõ[ô›
+H»\]Tﬁ[ò‘›]\ 
+N»ô]\õàùYN»Bà\]Tﬁ[ò‘›]\ 	‘ﬁ[ò⁄[ô»ÿ]ôY⁄[ôŸ\¯†)â N¬à⁄[H
+][\Àõ[ô›
+H¬à€€ú›‹\ò][€àH][\÷ÃN¬àûH¬à€€ú›»\úõ‹àHH]ÿZ]ù[ì‹\ò][€ä‹\ò][€äN¬àYà
+\úõ‹äHõ›»\úõ‹é¬à][\Àú⁄Yù
+
+N¬àÿ]ôT[ô[ô ][\ N¬àHÿ]⁄
+\úõ‹äH¬àYà
+\úõ‹èÀò€ŸHOOH	ÃåÕLI»	âà‹\ò][€ãúõ›œÀúôX›\úö[ô◊⁄][W⁄Y
+H¬à][\Àú⁄Yù
+
+N¬àÿ]ôT[ô[ô ][\ N¬àÿ\›
+	’\»ôX›\úö[ô»][Hÿ\»[ôXYH€€ôö\õYY\»[€ùâ N¬à€€ù[ùYN¬àBà\]Tﬁ[ò‘›]\ 	⁄][\Àõ[ô›H⁄[ôŸI⁄][\Àõ[ô›OOHH»	…»à	‹…ﬂHÿZ][ô»0≠»	Ÿ\úõ‹èÀõY\‹ÿYŸH	€Ÿôõ[ôIﬂX
+N¬àô]\õàò[ŸN¬àBàBà\]Tﬁ[ò‘›]\ 
+N¬àô]\õàùYN¬üBÇò\ﬁ[ò»ù[ò›[€àÿ]ôS‹\ò][€ä‹\ò][€ã‹[€ú»HﬂJH¬à[ú]Y]YJ‹\ò][€äN¬àÿX⁄J
+N¬àô[ô\ä
+N¬àYà
+‹[€úÀò€‹ŸHOOHò[ŸJH€‹ŸS[Ÿ[
+
+N¬àYà
+‹[€úÀõY\‹ÿYŸJHÿ\›
+‹[€úÀõY\‹ÿYŸJN¬àYà
+‹[€úÀòŸ[Xúò]JHŸ[Xúò]J
+N¬à\X 
+N¬àYà
+]ÿZ]õ\⁄[ô[ô 
+JH]ÿZ]ÿYô[[›J
+N¬üBÇò\ﬁ[ò»ù[ò›[€àÿ]ôS‹\ò][€ú ‹\ò][€úÀ‹[€ú»HﬂJH¬à‹\ò][€úÀôõ‹ëXX⁄
+[ú]Y]YJN¬àÿX⁄J
+N¬àô[ô\ä
+N¬àYà
+‹[€úÀò€‹ŸHOOHò[ŸJH€‹ŸS[Ÿ[
+
+N¬àYà
+‹[€úÀõY\‹ÿYŸJHÿ\›
+‹[€úÀõY\‹ÿYŸJN¬àYà
+‹[€úÀòŸ[Xúò]JHŸ[Xúò]J
+N¬à\X 
+N¬àYà
+]ÿZ]õ\⁄[ô[ô 
+JH]ÿZ]ÿYô[[›J
+N¬üBÇù⁄[ô›ÀòY]ô[ù\›[ô\ä	€€õ[ôIÀ\ﬁ[ò»
+
+HOà¬àYà
+]ÿZ]õ\⁄[ô[ô 
+JH]ÿZ]ÿYô[[›J
+N¬àYà
+›]KúŸ][ô‹Àô[XZ[›][Y[ù H]ÿZ]õ\⁄›][Y[ù[XZ[]Y]YJùYJN¬üJN¬Çôù[ò›[€à⁄›‘YŸJò[YJH¬à›\úô[ùYŸHHò[YN¬àÿ›[Y[ùú]Y\ûTŸ[X›‹ê[
+	ÀúYŸI Kôõ‹ëXX⁄
+YŸHOàYŸKò€\‹”\›òY
+	⁄Y[â JN¬à	
+YŸKI€ò[Y_X
+OÀò€\‹”\›úô[[›ôJ	⁄Y[â N¬àÿ›[Y[ùú]Y\ûTŸ[X›‹ê[
+	Àòõ›€Sò]àù]€â Kôõ‹ëXX⁄
+ù]€àOàù]€ãò€\‹”\›ùŸŸ€J	ÿX›]ôIÀù]€ãô]\Ÿ]úYŸHOOHò[YJJN¬à⁄[ô›Àúÿ‹õ€ »‹àôZ]ö[‹éà	‹€[€›	»JN¬àô[ô\ä
+N¬àYà
+ò[YHOOH	€[€ô^I HôYúô\⁄öXŸ\ ò[ŸJN¬üBÇò\ﬁ[ò»ù[ò›[€àõ€›
+
+H¬à€€ú›€€ôöY»H⁄[ô›Àî’TPêT—W–””ëíQ»ﬂN¬àYà
+X€€ôöYÀù\õX€€ôöYÀò[õ€íŸ^JH¬à	
+	ÿ]]Y\‹ÿYŸI Kù^€€ù[ùH	‘›\Xò\ŸH€€ôöY›\ò][€à\»Z\‹⁄[ôÀâŒ¬àô]\õé¬àBààH⁄[ô›Àú›\Xò\ŸKò‹ôX]P€Y[ù
+€€ôöYÀù\õ€€ôöYÀò[õ€íŸ^JN¬à€€ú›»]Nà»Ÿ\‹⁄[€àHHH]ÿZ]ãò]]ôŸ]Ÿ\‹⁄[€ä
+N¬àYà
+Ÿ\‹⁄[€äH]ÿZ]⁄Y€ôY[äŸ\‹⁄[€ãù\Ÿ\äN¬à[ŸH⁄›–]]
+
+N¬àãò]]õ€ê]]›]P⁄[ôŸJ
+Ÿ]ô[ùô^Ÿ\‹⁄[€äHOà¬àŸ][Y[›]
+
+
+HOà¬àYà
+ô^Ÿ\‹⁄[€äH⁄Y€ôY[äô^Ÿ\‹⁄[€ãù\Ÿ\äN¬à[ŸH⁄›–]]
+
+N¬àK
+N¬àJN¬üBÇôù[ò›[€à⁄›–]]
+
+H¬àYà
+ôX[[YP⁄[õô[	âàäHãúô[[›ôP⁄[õô[
+ôX[[YP⁄[õô[
+N¬à›\úô[ù\Ÿ\àHù[¬à›\ŸZ€YHù[¬à›]RŸ^HH	…Œ¬à[ô[ô“Ÿ^HH	…Œ¬à›][Y[ù[XZ[Ÿ^HH	…Œ¬à[ô[ô”‹\ò][€ú”Y[[‹ûHH◊N¬à›][Y[ù[XZ[]Y]YSY[[‹ûHH◊N¬à›][Y[ù[XZ[õ›öY\îôXYHHù[¬à›][Y[ù[XZ[ôX⁄\Y[ùôXYHHò[ŸN¬à›][Y[ù[XZ[ôX⁄\Y[ùH	…Œ¬à›][Y[ù[XZ[\››]\»H	…Œ¬à›]HH€€ôJQêUS
+N¬à	
+	ÿ]]ÿ‹ôY[â Kò€\‹”\›úô[[›ôJ	⁄Y[â N¬à	
+	ÿ\	 Kò€\‹”\›òY
+	⁄Y[â N¬üBÇâ
+	ÿ]]õ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à	
+	ÿ]]Y\‹ÿYŸI Kù^€€ù[ùH	‘⁄Y€ö[ô»[∏†)âŒ¬à€€ú›»\úõ‹àHH]ÿZ]ãò]]ú⁄Y€í[ï⁄]\‹›€‹ô
+»[XZ[à	
+	ÿ]][XZ[	 Kùò[YK\‹›€‹ôà	
+	ÿ]]\‹›€‹ô	 Kùò[YHJN¬à	
+	ÿ]]Y\‹ÿYŸI Kù^€€ù[ùH\úõ‹à»\úõ‹ãõY\‹ÿYŸHà	…Œ¬üN¬Çò\ﬁ[ò»ù[ò›[€à⁄Y€ôY[ä\Ÿ\äH¬àYà
+›\úô[ù\Ÿ\èÀöYOOH\Ÿ\ãöY	âà›\ŸZ€Y
+Hô]\õé¬à›\úô[ù\Ÿ\àH\Ÿ\é¬à	
+	ÿ]]ÿ‹ôY[â Kò€\‹”\›òY
+	⁄Y[â N¬à	
+	ÿ\	 Kò€\‹”\›úô[[›ôJ	⁄Y[â N¬à\]Tﬁ[ò‘›]\ 	—ö[ô[ô»[›\à›\ŸZ€8†)â N¬à€€ú›»]NàY[Xô\ã\úõ‹àHH]ÿZ]ãôúõ€J	⁄›\ŸZ€€Y[Xô\ú… BàúŸ[X›
+	⁄›\ŸZ€⁄Y\‹^W€ò[YKõ€I Kô\J	›\Ÿ\ó⁄Y	À\Ÿ\ãöY
+Kõ[Z]
+JKõX^XôT⁄[ô€J
+N¬àYà
+\úõ‹à[Y[Xô\äH¬à\]Tﬁ[ò‘›]\ 	“›\ŸZ€õ›õ›[ô	 N¬àÿ\›
+	’\»Ÿ⁄[à\»õ›]X⁄Y»H›\ŸZ€â N¬àô]\õé¬àBà›\ŸZ€YHY[Xô\ãö›\ŸZ€⁄Y¬à]ÿZ]ÿYÿ€‹Y›]J
+N¬à›]KõY[Xô\àH»\‹^Sò[YNàY[Xô\ãô\‹^W€ò[YH	—úöY[ô	Àõ€NàY[Xô\ãúõ€H	€Y[Xô\â»N¬àÿX⁄J
+N¬à]ÿZ]õ\⁄[ô[ô 
+N¬à]ÿZ]ÿYô[[›J
+N¬àYà
+›]KúŸ][ô‹Àô[XZ[›][Y[ù H¬à]ÿZ]ôYúô\⁄›][Y[ù[XZ[›]\ 
+N¬à]ÿZ]õ\⁄›][Y[ù[XZ[]Y]YJùYJN¬àBà›Xúÿ‹öXôTôX[[YJ
+N¬à⁄›‘YŸJ›\úô[ùYŸJN¬à]ÿZ]ôYúô\⁄öXŸ\ ò[ŸJN¬à]ÿZ][ú›\ôUŸ^T€ò\⁄›
+
+N¬à[ôT]ZX⁄–X›[€ä
+N¬üBÇò\ﬁ[ò»ù[ò›[€àô]⁄[›\ŸZ€õ›‹ XõK€€[[ú»H	 â H¬à€€ú›õ›‹»H◊N¬à€€ú›YŸT⁄^ôHHL¬à]›\ú€‹àH	…Œ¬à⁄[H
+ùYJH¬à]]Y\ûHHãôúõ€JXõJKúŸ[X›
+€€[[ú Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Bàõ‹ô\ä	⁄Y	À»\ÿŸ[ô[ôŒàùYHJKõ[Z]
+YŸT⁄^ôJN¬àYà
+›\ú€‹äH]Y\ûHH]Y\ûKô›
+	⁄Y	À›\ú€‹äN¬à€€ú›»]K\úõ‹àHH]ÿZ]]Y\ûN¬àYà
+\úõ‹äHô]\õà»]Nàù[\úõ‹àN¬à€€ú›ò]⁄H]H◊N¬àõ›‹Àú\⁄
+ããòò]⁄
+N¬àYà
+ò]⁄õ[ô›YŸT⁄^ôJHô]\õà»]Nàõ›‹À\úõ‹éàù[N¬à›\ú€‹àHò]⁄ò]
+LJOÀöY	…Œ¬àYà
+X›\ú€‹äHô]\õà»]Nàõ›‹À\úõ‹éàù[N¬àBüBÇò\ﬁ[ò»ù[ò›[€àÿYô[[›J
+H¬àYà
+YàZ›\ŸZ€Y
+Hô]\õé¬à€€ú›ô\›[»H]ÿZ]õ€Z\ŸKò[
+¬àô]⁄[›\ŸZ€õ›‹ 	›ò[úÿX›[€ú… Kàãôúõ€J	ÿùYŸ]… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Kàãôúõ€J	Ÿ€ÿ[… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Kàãôúõ€J	ŸXù… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Kàãôúõ€J	ÿ\‹Ÿ]… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Kàãôúõ€J	ÿXÿ€›[ù… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Kàãôúõ€J	‹ôX›\úö[ô◊⁄][\… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Kàô]⁄[›\ŸZ€õ›‹ 	Ÿ€ÿ[ÿ€€ùöXù][€ú… Kàô]⁄[›\ŸZ€õ›‹ 	€ô]›€‹ù‹€ò\⁄›… Kàô]⁄[›\ŸZ€õ›‹ 	€[€ùWÿ⁄X⁄›\… Kàãôúõ€J	‹⁄[ö⁄[ô◊Ÿù[ô… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+Kõ‹ô\ä	ŸYWŸ]I Kàô]⁄[›\ŸZ€õ›‹ 	›ŸYZ€W€[€ô^WŸ]\… Kàãôúõ€J	⁄›\ŸZ€‹Ÿ][ô‹… KúŸ[X›
+	 â Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+KõX^XôT⁄[ô€J
+Kàãôúõ€J	⁄›\ŸZ€€Y[Xô\ú… KúŸ[X›
+	Ÿ\‹^W€ò[YI Kô\J	⁄›\ŸZ€⁄Y	À›\ŸZ€Y
+BàJN¬àYà
+ô\›[Àú€€YJô\›[Oàô\›[ô\úõ‹äJH¬à\]Tﬁ[ò‘›]\ 	–€›[õ›ôYúô\⁄0≠»ÿ]ôY]HŸ\	 N¬àô]\õé¬àBàYà
+[ô[ô 
+Kõ[ô›
+H»\]Tﬁ[ò‘›]\ 
+N»ô]\õé»Bà€€ú››ò[úÿX›[€úÀùYŸ]À€ÿ[ÀXùÀ\‹Ÿ]ÀXÿ€›[ùÀôX›\úö[ôÀ€€ùöXù][€úÀ€ò\⁄›À⁄X⁄›\À⁄[ö⁄[ô—ù[ôÀŸYZ€Tô]öY]‹ÀŸ][ô‹ÀY[Xô\ú◊HHô\›[ÀõX\
+àOàãô]JN¬à›]Kú[‹HHY[Xô\úÀõX\
+Y[Xô\àOàY[Xô\ãô\‹^W€ò[YJKôö[\äõ€€X[äN¬à›]Kùò[úÿX›[€ú»Hò[úÿX›[€úÀõX\
+õ›»Oà
+¬àYàõ›ÀöY\Nàõ›Àù\K[[›[ùà
+‹õ›Àò[[›[ù›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJKÿ]Y€‹ûNàõ›Àòÿ]Y€‹ûKàZYûNàõ›ÀúZYÿûKXÿ€›[ùYàõ›ÀòXÿ€›[ù⁄Y	…ÀXÿ€›[ùàõ›ÀòXÿ€›[ù	…À–Xÿ€›[ùYàõ›Àù◊ÿXÿ€›[ù⁄Y	…Àà–[[›[ùàõ›Àù◊ÿ[[›[ùOHù[»ù[à
+‹õ›Àù◊ÿ[[›[ùXùYàõ›ÀôXù⁄Y	…ÀàXùö[ò⁄\[àõ›ÀôXù‹ö[ò⁄\[OHù[»ù[à
+‹õ›ÀôXù‹ö[ò⁄\[àXù[ù\ô\›àõ›ÀôXù⁄[ù\ô\›OHù[»à
+‹õ›ÀôXù⁄[ù\ô\›àôX›\úö[ô“][RYàõ›ÀúôX›\úö[ô◊⁄][W⁄Y	…ÀôX›\úö[ô”[€ùàõ›ÀúôX›\úö[ô◊€[€ù	…Àà]Nàõ›Àô]Kõ›Nàõ›Àõõ›H	…À‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…¬àJJN¬à›]KòùYŸ]»HÿöôX›ôúõ€Q[ùöY\ ùYŸ]ÀõX\
+õ›»Oà‹õ›Àòÿ]Y€‹ûK»[[›[ùà
+‹õ›Àò[[›[ù›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJHWJJN¬à›]Kô€ÿ[»H€ÿ[ÀõX\
+õ›»Oà
+»Yàõ›ÀöYò[YNàõ›Àõò[YK\ôŸ]à
+‹õ›Àù\ôŸ]ÿ]ôYà
+‹õ›Àúÿ]ôY›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJKYNàõ›ÀôYWŸ]H	…ÀX›]ôNàõ›ÀòX›]ôHOOHò[ŸK‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJN¬à›]KôXù»HXùÀõX\
+õ›»Oà
+»Yàõ›ÀöYò[YNàõ›Àõò[YK‹öY⁄[ò[à
+‹õ›Àõ‹öY⁄[ò[ÿ[[›[ùô[XZ[ö[ôŒà
+‹õ›Àúô[XZ[ö[ô◊ÿ[[›[ù›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJKYNàõ›ÀôYWŸ]H	…À\éà
+ õ›Àò[õùX[⁄[ù\ô\›‹ò]H
+KZ[ö[][Nà
+ õ›ÀõZ[ö[][W‹^[Y[ù
+K^[Y[ù^Nàõ›Àú^[Y[ùŸ^Hù[X›]ôNàõ›ÀòX›]ôHOOHò[ŸK‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJN¬à›]Kò\‹Ÿ]»H\‹Ÿ]ÀõX\
+õ›»Oà
+»Yàõ›ÀöYò[YNàõ›Àõò[YK\Nàõ›Àò\‹Ÿ]›\Kﬁ[Xõ€àõ›Àúﬁ[Xõ€	…À]X[ù]Nà
+‹õ›Àú]X[ù]K›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJKX[ùX[ò[YNàõ›ÀõX[ùX[›ò[YHOHù[»ù[à
+‹õ›ÀõX[ùX[›ò[YKõ›\Œàõ›Àõõ›\»	…À‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJN¬à›]KòXÿ€›[ù»HXÿ€›[ùÀõX\
+õ›»Oà
+»Yàõ›ÀöYò[YNàõ›Àõò[YK\Nàõ›ÀòXÿ€›[ù›\K›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJK‹[ö[ô–ò[[òŸNà
+‹õ›Àõ‹[ö[ô◊ÿò[[òŸK‹[ö[ô—]Nàõ›Àõ‹[ö[ô◊Ÿ]Kõ›\Œàõ›Àõõ›\»	…ÀX›]ôNàõ›ÀòX›]ôHOOHò[ŸK‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJN¬à›]KúôX›\úö[ô»HôX›\úö[ôÀõX\
+õ›»Oà
+»Yàõ›ÀöYò[YNàõ›Àõò[YK⁄[ôàõ›Àö⁄[ô[[›[ùà
+‹õ›Àò[[›[ù›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJKÿ]Y€‹ûNàõ›Àòÿ]Y€‹ûKZYûNàõ›ÀúZYÿûKXÿ€›[ùYàõ›ÀòXÿ€›[ù⁄Y	…À^Nàõ›Àô^W€Ÿó€[€ùõ›Nàõ›Àõõ›H	…ÀX›]ôNàõ›ÀòX›]ôHOOHò[ŸK‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJN¬à›]Kò€€ùöXù][€ú»H€€ùöXù][€úÀõX\
+õ›»Oà
+»Yàõ›ÀöY€ÿ[Yàõ›Àô€ÿ[⁄YXÿ€›[ùYàõ›ÀòXÿ€›[ù⁄Y	…À[[›[ùà
+‹õ›Àò[[›[ù›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJK]Nàõ›Àô]Kõ›Nàõ›Àõõ›H	…À‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJN¬à›]Kú€ò\⁄›»H€ò\⁄›ÀõX\
+õ›»Oà
+»Yàõ›ÀöY]Nàõ›Àú€ò\⁄›Ÿ]Kÿ\⁄T—à
+‹õ›Àòÿ\⁄›\Ÿ\‹Ÿ]’T—à
+‹õ›Àò\‹Ÿ]◊›\ŸXùT—à
+‹õ›ÀôXù›\Ÿô]€‹ùT—à
+‹õ›Àõô]›€‹ù›\ŸJJKú€‹ù
+
+KäHOàKô]Kõÿÿ[P€€\\ôJãô]JJN¬à›]Kò⁄X⁄›\»H⁄X⁄›\ÀõX\
+õ›»Oà
+»Yàõ›ÀöY[€ùàõ›Àõ[€ùXÿ€›[ù€›[ùà
+‹õ›ÀòXÿ€›[ùÿ€›[ùYù\›Y[ùT—à
+‹õ›ÀòYù\›Y[ù››[›\Ÿõ›Nàõ›Àõõ›H	…Àõÿ›\Œàõ›Àôõÿ›\»	…À€‹ŸY]àõ›Àò€‹ŸYÿ]	…Àò[[òŸ\–⁄X⁄ŸY]àõ›Àòò[[òŸ\◊ÿ⁄X⁄ŸYÿ]	…À€€\]YûNàõ›Àò€€\]YÿûH	…À€€\]Y]àõ›Àò€€\]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJKú€‹ù
+
+KäHOàKõ[€ùõÿÿ[P€€\\ôJãõ[€ù
+JN¬à›]Kú⁄[ö⁄[ô—ù[ô»H⁄[ö⁄[ô—ù[ôÀõX\
+õ›»Oà
+»Yàõ›ÀöYò[YNàõ›Àõò[YK\ôŸ]à
+‹õ›Àù\ôŸ]ÿ[[›[ùÿ]ôYà
+‹õ›Àúÿ]ôYÿ[[›[ù›\úô[òﬁNà€X[ê›\úô[òﬁJõ›Àò›\úô[òﬁJKYNàõ›ÀôYWŸ]H	…À\›ô\Ÿ\ùôY[€ùàõ›Àõ\›‹ô\Ÿ\ùôY€[€ù	…Àõ›Nàõ›Àõõ›H	…ÀX›]ôNàõ›ÀòX›]ôHOOHò[ŸK‹ôX]Y]àõ›Àò‹ôX]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJN¬à›]KùŸYZ€Tô]öY]‹»HŸYZ€Tô]öY]‹ÀõX\
+õ›»Oà
+»Yàõ›ÀöYŸYZ‘›\ùàõ›ÀùŸYZ◊‹›\ùô]öY]ŸYûNàõ›Àúô]öY]ŸYÿûH	…À⁄[éàõ›Àù⁄[à	…Àô^X›[€éàõ›Àõô^ÿX›[€à	…À€€\]Y]àõ›Àò€€\]Yÿ]	…À\]Y]àõ›Àù\]Yÿ]	…»JJKú€‹ù
+
+KäHOàKùŸYZ‘›\ùõÿÿ[P€€\\ôJãùŸYZ‘›\ù
+JN¬àYà
+Ÿ][ô‹ H¬à›]KúŸ][ô‹Àòò\ŸHH€X[ê›\úô[òﬁJŸ][ô‹Àòò\ŸWÿ›\úô[òﬁJH›]KúŸ][ô‹Àòò\ŸN¬à›]KúŸ][ô‹Àú^Y^Q^HHŸ][ô‹Àú^Y^WŸ^Hù[¬à›]KúŸ][ô‹Àôù[ì[ŸHHŸ][ô‹Àôù[ó€[ŸHOOHò[ŸN¬à›]KúŸ][ô‹ÀôXù›ò]YﬁHH…ÿ]ò[[ò⁄IÀ	‹€õ›ÿò[	◊Kö[ò€Y\ Ÿ][ô‹ÀôXù‹›ò]YﬁJH»Ÿ][ô‹ÀôXù‹›ò]YﬁHà	ÿ]ò[[ò⁄IŒ¬à›]KúŸ][ô‹Àô[XZ[›][Y[ù»HŸ][ô‹Àô[XZ[‹›][Y[ù◊Ÿ[òXõYOOHùYN¬à›]KúŸ][ô‹Àú›][Y[ùôX⁄\Y[ù\Ÿ\íYHŸ][ô‹Àú›][Y[ù‹ôX⁄\Y[ù›\Ÿ\ó⁄Y	…Œ¬à›]KúŸ][ô‹Àõ\›òX⁄›\]HŸ][ô‹Àõ\›‹‹ùXõWÿòX⁄›\ÿ]	…Œ¬à›]KúŸ][ô‹Àõ\›òX⁄›\\⁄HŸ][ô‹Àõ\›‹‹ùXõWÿòX⁄›\‹⁄LçMà	…Œ¬à›]KúŸ][ô‹Àúò]\»H¬àT—àKàQQà
+ Ÿ][ô‹Àù\Ÿ›◊ÿYY›]KúŸ][ô‹Àúò]\ÀêQQ
+KàUîéà
+ Ÿ][ô‹Àù\Ÿ›◊€]úà›]KúŸ][ô‹Àúò]\ÀìUîäKàSîéà
+ Ÿ][ô‹Àù\Ÿ›◊⁄[úà›]KúŸ][ô‹Àúò]\ÀíSîäBàN¬àBàÿX⁄J
+N¬àô[ô\ä
+N¬à\]Tﬁ[ò‘›]\ 
+N¬üBÇôù[ò›[€àÿ⁄Y[Tô[[›Tô[ÿY
+
+H¬àYà
+[ô[ô 
+Kõ[ô›
+Hô]\õé¬à€X\ï[Y[›]
+ôX[[YU[Y\äN¬àôX[[YU[Y\àHŸ][Y[›]
+
+
+HOàÿYô[[›J
+KÕL
+N¬üBÇôù[ò›[€à›Xúÿ‹öXôTôX[[YJ
+H¬àYà
+ôX[[YP⁄[õô[
+Hãúô[[›ôP⁄[õô[
+ôX[[YP⁄[õô[
+N¬àôX[[YP⁄[õô[Hãò⁄[õô[
+›\ŸZ€]éKI⁄›\ŸZ€YX
+N¬àõ‹à
+€€ú›XõHŸà…›ò[úÿX›[€ú…À	ÿùYŸ]…À	Ÿ€ÿ[…À	ŸXù…À	ÿ\‹Ÿ]…À	ÿXÿ€›[ù…À	‹ôX›\úö[ô◊⁄][\…À	Ÿ€ÿ[ÿ€€ùöXù][€ú…À	€ô]›€‹ù‹€ò\⁄›…À	€[€ùWÿ⁄X⁄›\…À	‹⁄[ö⁄[ô◊Ÿù[ô…À	›ŸYZ€W€[€ô^WŸ]\…À	⁄›\ŸZ€‹Ÿ][ô‹…◊JH¬àôX[[YP⁄[õô[õ€ä	‹‹›‹ô\◊ÿ⁄[ôŸ\…À»]ô[ùà	 âÀÿ⁄[XNà	‹XõX…ÀXõKö[\éà›\ŸZ€⁄YY\Kâ⁄›\ŸZ€YXKÿ⁄Y[Tô[[›Tô[ÿY
+N¬àBàôX[[YP⁄[õô[ú›Xúÿ‹öXôJ›]\»Oà¬àYà
+›]\»OOH	–“SìëS—Tîì‘â»›]\»OOH	’SQQ”’U	 H\]Tﬁ[ò‘›]\ 	‘ôX[[YHôX€€õôX›[ô¯†)â N¬àJN¬üBÇôù[ò›[€à[ôT]ZX⁄–X›[€ä
+H¬àYà
+\[ô[ô‘]ZX⁄–X›[€äHô]\õé¬à€€ú›X›[€àH[ô[ô‘]ZX⁄–X›[€é¬à[ô[ô‘]ZX⁄–X›[€àH	…Œ¬à\›‹ûKúô\XŸT›]JﬂK	…À	€ÿÿ][€ãú]ò[Y_I€ÿÿ][€ãö\⁄	…ﬂX
+N¬àYà
+X›[€àOOH	Ÿ^[úŸI H‹[î]ZX⁄—^[úŸJ
+N¬à[ŸHYà
+X›[€àOOH	⁄[ò€€YI H‹[î]ZX⁄“[ò€€YJ»ÿ]Y€‹ûNà	‘ÿ[\ûI»JN¬à[ŸHYà
+X›[€àOOH	›ò[úŸô\â H‹[ïò[úŸô\ä
+N¬üBÇôù[ò›[€àXÿ€›[ù[Sò]]ôJXÿ€›[ùò[úÿX›[€äH¬àYà
+ò[úÿX›[€ãù\HOOH	›ò[úŸô\â H¬àYà
+ò[úÿX›[€ãòXÿ€›[ùYOOHXÿ€›[ùöY
+Hô]\õàSù[Xô\äò[úÿX›[€ãò[[›[ù
+N¬àYà
+ò[úÿX›[€ãù–Xÿ€›[ùYOOHXÿ€›[ùöY
+Hô]\õàù[Xô\äò[úÿX›[€ãù–[[›[ù
+N¬àô]\õà¬àBàYà
+ò[úÿX›[€ãòXÿ€›[ùYOOHXÿ€›[ùöY
+Hô]\õà¬àô]\õà
+ò[úÿX›[€ãù\HOOH	⁄[ò€€YI»»HàLJH
+àù[Xô\äò[úÿX›[€ãò[[›[ù
+N¬üBÇôù[ò›[€àXÿ€›[ùò[[òŸSò]]ôJXÿ€›[ù
+H¬àô]\õàù[Xô\äXÿ€›[ùõ‹[ö[ô–ò[[òŸH
+H
+»›]Kùò[úÿX›[€ú¬àôö[\äò[úÿX›[€àOàò[úÿX›[€ãô]HèH
+Xÿ€›[ùõ‹[ö[ô—]H	ÃLL	 JBàúôYXŸJ
+›[Kò[úÿX›[€äHOà›[H
+»Xÿ€›[ù[Sò]]ôJXÿ€›[ùò[úÿX›[€äK
+N¬üBôù[ò›[€àXÿ€›[ùò[[òŸUT—
+Xÿ€›[ù
+H»ô]\õà\Ÿ
+Xÿ€›[ùò[[òŸSò]]ôJXÿ€›[ù
+KXÿ€›[ùò›\úô[òﬁJN»Bôù[ò›[€àXÿ€›[ù\SXô[
+\JH»ô]\õà\HOOH	ÿò[ö…»»	–ò[ö»Xÿ€›[ù	»à\HOOH	ÿÿ\⁄	»»	–ÿ\⁄	»à	”[ÿö[Hÿ[]	Œ»BÇôù[ò›[€à\‹Ÿ]T—
+\‹Ÿ]
+H¬àYà
+\‹Ÿ]ù\HOOH	ÿÿ\⁄	 Hô]\õà\Ÿ
+\‹Ÿ]ú]X[ù]K\‹Ÿ]ò›\úô[òﬁJN¬àYà
+\‹Ÿ]ù\HOOH	€X[ùX[	 Hô]\õà\Ÿ
+\‹Ÿ]õX[ùX[ò[YH\‹Ÿ]ò›\úô[òﬁJN¬à€€ú›öXŸHH›]KúöXŸ\÷ÿ\‹Ÿ]úﬁ[Xõ€OÀù\Ÿ¬àYà
+\öXŸJHô]\õà¬àYà
+\‹Ÿ]ù\HOOH	€Y][	 Hô]\õà
+ù[Xô\ä\‹Ÿ]ú]X[ù]JH»ÃKåLÕÕé
+H
+àöXŸN¬àYà
+\‹Ÿ]ù\HOOH	ÿ‹û\… Hô]\õàù[Xô\ä\‹Ÿ]ú]X[ù]JH
+àöXŸN¬àô]\õà¬üBÇôù[ò›[€àX\öŸ]Xô[
+\‹Ÿ]
+H¬àYà
+\‹Ÿ]ù\HOOH	€Y][	 Hô]\õà	”ù[Xô\ä\‹Ÿ]ú]X[ù]JKù”ÿÿ[T›ö[ô 
+_H»0≠»	ÿ\‹Ÿ]úﬁ[Xõ€X¬àYà
+\‹Ÿ]ù\HOOH	ÿ‹û\… Hô]\õà	”ù[Xô\ä\‹Ÿ]ú]X[ù]JKù”ÿÿ[T›ö[ô [ôYö[ôY»X^[][QúòX›[€ëY⁄]ŒàJ_H	ÿ\‹Ÿ]úﬁ[Xõ€X¬àYà
+\‹Ÿ]ù\HOOH	ÿÿ\⁄	 Hô]\õà[€ô^J\‹Ÿ]ú]X[ù]K\‹Ÿ]ò›\úô[òﬁJN¬àô]\õà[€ô^J\‹Ÿ]õX[ùX[ò[YH\‹Ÿ]ò›\úô[òﬁJN¬üBÇôù[ò›[€à[€ùò[úÿX›[€ú 
+H¬à€€ú››\úô[ù[€ùH[€ùŸ^J
+N¬àô]\õà›]Kùò[úÿX›[€úÀôö[\äò[úÿX›[€àOÇàò[úÿX›[€ãô]Kú›\ù’⁄]
+›\úô[ù[€ù
+H	âÇàò[úÿX›[€ãù\HOOH	›ò[úŸô\â»	âÇàò[úÿX›[€ãòÿ]Y€‹ûHOOH	–ò[[òŸHYù\›Y[ù	¬à
+N¬üBÇôù[ò›[€à[€ù[€ô^T›[[X\ûJ[€ùH[€ùŸ^J
+JH¬à€€ú›ò[úÿX›[€ú»H›]Kùò[úÿX›[€úÀôö[\äò[úÿX›[€àOÇàò[úÿX›[€ãô]OÀú›\ù’⁄]
+[€ù
+H	âÇà…⁄[ò€€YIÀ	Ÿ^[úŸI◊Kö[ò€Y\ ò[úÿX›[€ãù\JH	âÇàò[úÿX›[€ãòÿ]Y€‹ûHOOH	–ò[[òŸHYù\›Y[ù	¬à
+N¬à€€ú›[ò€€YUT—Hò[úÿX›[€úÀôö[\äò[úÿX›[€àOàò[úÿX›[€ãù\HOOH	⁄[ò€€YI BàúôYXŸJ
+›[Kò[úÿX›[€äHOà›[H
+»\Ÿ
+ò[úÿX›[€ãò[[›[ùò[úÿX›[€ãò›\úô[òﬁJK
+N¬à€€ú›‹[ùT—Hò[úÿX›[€úÀôö[\äò[úÿX›[€àOàò[úÿX›[€ãù\HOOH	Ÿ^[úŸI BàúôYXŸJ
+›[Kò[úÿX›[€äHOà›[H
+»\Ÿ
+ò[úÿX›[€ãò[[›[ùò[úÿX›[€ãò›\úô[òﬁJK
+N¬àô]\õà»[€ùò[úÿX›[€úÀ[ò€€YUT—‹[ùT—ò[[òŸUT—à[ò€€YUT—H‹[ùT—N¬üBÇôù[ò›[€àô]ö[›\”[€ù›[[X\ûJ
+H¬àô]\õà[€ù[€ô^T›[[X\ûJ[€ùŸ^JY[€ù [€ù›\ù
+
+KLJJJN¬üBÇôù[ò›[€àô]ö[›\”[€ù[ÿÿ][€ä
+H¬à€€ú››[[X\ûHHô]ö[›\”[€ù›[[X\ûJ
+N¬à€€ú››\ú\’T—HX]õX^
+›[[X\ûKòò[[òŸUT—
+N¬à€€ú›\—XùHX›]ôQXù 
+Kú€€YJXùOàXùúô[XZ[ö[ô»àåJN¬àô]\õà¬àããú›[[X\ûKàXô[àõ‹õX]]J	‹›[[X\ûKõ[€ùKLX»[€ùà	€€ô…ÀYX\éà	€ù[Y\öX…»JKà\—XùàXùT—à\—Xù»›\ú\’T—
+àçàààù]\ôUT—à\—Xù»›\ú\’T—
+àçà›\ú\’T—àN¬üBÇôù[ò›[€à[€ô^SY]öX‹ 
+H¬à€€ú›[€ùH[€ùò[úÿX›[€ú 
+N¬à€€ú›[ò€€YUT—H[€ùôö[\äOàù\HOOH	⁄[ò€€YI KúôYXŸJ
+›[K
+HOà›[H
+»\Ÿ
+ò[[›[ùò›\úô[òﬁJK
+N¬à€€ú›‹[ùT—H[€ùôö[\äOàù\HOOH	Ÿ^[úŸI KúôYXŸJ
+›[K
+HOà›[H
+»\Ÿ
+ò[[›[ùò›\úô[òﬁJK
+N¬à€€ú›Xÿ€›[ù›[T—HX›]ôPXÿ€›[ù 
+KúôYXŸJ
+›[KXÿ€›[ù
+HOà›[H
+»Xÿ€›[ùò[[òŸUT—
+Xÿ€›[ù
+K
+N¬à€€ú›[ò\‹⁄Y€ôYÿ\⁄T—H›]Kùò[úÿX›[€ú¬àôö[\äOà]òXÿ€›[ùY	âàù\HOOH	›ò[úŸô\â BàúôYXŸJ
+›[K
+HOà›[H
+»
+ù\HOOH	⁄[ò€€YI»»HàLJH
+à\Ÿ
+ò[[›[ùò›\úô[òﬁJK
+N¬à€€ú›ÿ\⁄T—HXÿ€›[ù›[T—
+»[ò\‹⁄Y€ôYÿ\⁄T—¬à€€ú›\‹Ÿ]’T—H›]Kò\‹Ÿ]ÀúôYXŸJ
+›[K\‹Ÿ]
+HOà›[H
+»\‹Ÿ]T—
+\‹Ÿ]
+K
+N¬à€€ú›XùT—H›]KôXùÀúôYXŸJ
+›[KXù
+HOà›[H
+»\Ÿ
+Xùúô[XZ[ö[ôÀXùò›\úô[òﬁJK
+N¬à€€ú›€ÿ[ÿ]ôYT—HX›]ôQ€ÿ[ 
+KúôYXŸJ
+›[K€ÿ[
+HOà›[H
+»\Ÿ
+€ÿ[úÿ]ôY€ÿ[ò›\úô[òﬁJK
+N¬à€€ú›€ÿ[\ôŸ]T—HX›]ôQ€ÿ[ 
+KúôYXŸJ
+›[K€ÿ[
+HOà›[H
+»\Ÿ
+€ÿ[ù\ôŸ]€ÿ[ò›\úô[òﬁJK
+N¬à€€ú›⁄[ö⁄[ô‘ÿ]ôYT—H›]Kú⁄[ö⁄[ô—ù[ôÀôö[\äù[ôOàù[ôòX›]ôHOOHò[ŸJKúôYXŸJ
+›[Kù[ô
+HOà›[H
+»\Ÿ
+ù[ôúÿ]ôYù[ôò›\úô[òﬁJK
+N¬à€€ú›⁄[ö⁄[ô’\ôŸ]T—H›]Kú⁄[ö⁄[ô—ù[ôÀôö[\äù[ôOàù[ôòX›]ôHOOHò[ŸJKúôYXŸJ
+›[Kù[ô
+HOà›[H
+»\Ÿ
+ù[ôù\ôŸ]ù[ôò›\úô[òﬁJK
+N¬à€€ú›ùYŸ]T—HÿöôX›ùò[Y\ ›]KòùYŸ] KúôYXŸJ
+›[KùYŸ]
+HOà›[H
+»\Ÿ
+ùYŸ]ò[[›[ùùYŸ]ò›\úô[òﬁJK
+N¬àô]\õà¬à[€ù[ò€€YUT—‹[ùT—Xÿ€›[ù›[T—[ò\‹⁄Y€ôYÿ\⁄T—ÿ\⁄T—\‹Ÿ]’T—XùT—à€ÿ[ÿ]ôYT—€ÿ[\ôŸ]T—⁄[ö⁄[ô‘ÿ]ôYT—⁄[ö⁄[ô’\ôŸ]T—ùYŸ]T—›\ú\’T—à[ò€€YUT—H‹[ùT—à‹[ôXõUT—àÿ\⁄T—H€ÿ[ÿ]ôYT—H⁄[ö⁄[ô‘ÿ]ôYT—ô]€‹ùT—àÿ\⁄T—
+»\‹Ÿ]’T—HXùT—àN¬üBÇôù[ò›[€à[ÿÿ][€êùX⁄Ÿ] Y]öX‹»H[€ô^SY]öX‹ 
+JH¬à€€ú›^[úŸQõ‹àHÿ]Y€‹öY\»OàY]öX‹Àõ[€ùàôö[\äOàù\HOOH	Ÿ^[úŸI»	âàÿ]Y€‹öY\Àö[ò€Y\ òÿ]Y€‹ûJJBàúôYXŸJ
+›[K
+HOà›[H
+»\Ÿ
+ò[[›[ùò›\úô[òﬁJK
+N¬à€€ú›ù]\ôP€€ùöXù][€ú’T—H›]Kò€€ùöXù][€ú¬àôö[\ä»OàÀô]Kú›\ù’⁄]
+[€ùŸ^J
+JJBàúôYXŸJ
+›[K HOà›[H
+»\Ÿ
+Àò[[›[ùÀò›\úô[òﬁJK
+N¬à€€ú›⁄[ö⁄[ô–€€ùöXù][€ú’T—H›]Kú⁄[ö⁄[ô—ù[ô¬àôö[\äù[ôOàù[ôõ\›ô\Ÿ\ùôY[€ùOOH[€ù›\ù
+
+JBàúôYXŸJ
+›[Kù[ô
+HOà›[H
+»X]õZ[ä⁄[ö⁄[ô”[€ùSôYYT—
+ù[ô
+K\Ÿ
+ù[ôúÿ]ôYù[ôò›\úô[òﬁJJK
+N¬àô]\õà¬à»Ÿ^Nà	Ÿ\‹Ÿ[ùX[	ÀXô[à	—\‹Ÿ[ùX[…À›à\ôŸ]àY]öX‹Àö[ò€€YUT—
+àçX›X[à^[úŸQõ‹äT‘—SïPS––UQ”‘íQT HKà»Ÿ^Nà	ŸXù	ÀXô[à	—XùúôYY€IÀ›àÃ\ôŸ]àY]öX‹Àö[ò€€YUT—
+àåÀX›X[à^[úŸQõ‹ä…—Xù	◊JHKà»Ÿ^Nà	Ÿù]\ôIÀXô[à	—ù]\ôIÀ›àå\ôŸ]àY]öX‹Àö[ò€€YUT—
+àåãX›X[à^[úŸQõ‹ä…‘ÿ]ö[ô‹…◊JH
+»ù]\ôP€€ùöXù][€ú’T—
+»⁄[ö⁄[ô–€€ùöXù][€ú’T—Kà»Ÿ^Nà	›ÿ[ù…ÀXô[à	—ù[à	àÿ[ù…À›àL\ôŸ]àY]öX‹Àö[ò€€YUT—
+àåKX›X[à^[úŸQõ‹ä–Sï––UQ”‘íQT HBàN¬üBÇôù[ò›[€àô^^Y^R[ôõ 
+H¬à€€ú›^HHù[Xô\ä›]KúŸ][ô‹Àú^Y^Q^JN¬àYà
+J^HèHH	âà^HHÃJJHô]\õàù[¬à€€ú›õ›»Hô]»]J	›Ÿ^J
+_ULéåå
+N¬à€€ú›XZŸT^Y^HH
+YX\ã[€ù
+HOà¬à€€ú›\›Hô]»]JYX\ã[€ù
+»K
+KôŸ]]J
+N¬àô]\õàô]»]JYX\ã[€ùX]õZ[ä^K\›
+KLäN¬àN¬à]]HHXZŸT^Y^Jõ›ÀôŸ]ù[YX\ä
+Kõ›ÀôŸ][€ù
+
+JN¬àYà
+]Hõ› H]HHXZŸT^Y^Jõ›ÀôŸ]ù[YX\ä
+Kõ›ÀôŸ][€ù
+
+H
+»JN¬à€€ú›^\»HX]õX^
+KX]úõ›[ô
+
+]HHõ› H»ç
+H
+»JN¬àô]\õà»]Nàÿÿ[]J]JK^\»N¬üBÇôù[ò›[€à]SÿöôX›
+ò[YJH»ô]\õàô]»]J	›ò[Y_ULéåå
+N»Bôù[ò›[€àY^\ ò[YK^\ H¬à€€ú›]HH]SÿöôX›
+ò[YJN¬à]KúŸ]]J]KôŸ]]J
+H
+»^\ N¬àô]\õàÿÿ[]J]JN¬üBôù[ò›[€àŸYZ‘›\ù
+ò[YHHŸ^J
+JH¬à€€ú›]HH]SÿöôX›
+ò[YJN¬à€€ú›^HH]KôŸ]^J
+N¬à]KúŸ]]J]KôŸ]]J
+HH
+^HOOH»àà^HHJJN¬àô]\õàÿÿ[]J]JN¬üBôù[ò›[€àY[€ù ò[YK[€ù H¬à€€ú›]HH]SÿöôX›
+ò[YKõ[ô›OOH»»	›ò[Y_KLXàò[YJN¬à]KúŸ][€ù
+]KôŸ][€ù
+
+H
+»[€ù N¬àô]\õàÿÿ[]J]JN¬üBôù[ò›[€à[€ù’[ù[
+ò[YJH¬àYà
+]ò[YHò[YHHŸ^J
+JHô]\õàN¬à€€ú›õ›»H]SÿöôX›
+[€ù›\ù
+
+JN¬à€€ú›YHH]SÿöôX›
+	€[€ùŸ^Jò[YJ_KLX
+N¬àô]\õàX]õX^
+K
+YKôŸ]ù[YX\ä
+HHõ›ÀôŸ]ù[YX\ä
+JH
+àLà
+»YKôŸ][€ù
+
+HHõ›ÀôŸ][€ù
+
+H
+»JN¬üBôù[ò›[€à⁄[ö⁄[ô”[€ùSôYYT—
+ù[ô
+H¬àô]\õà\Ÿ
+X]õX^
+ù[ôù\ôŸ]Hù[ôúÿ]ôY
+Kù[ôò›\úô[òﬁJH»[€ù’[ù[
+ù[ôôYJN¬üBôù[ò›[€à]Q\›[òŸJ›\ù[ô
+H»ô]\õàX]õX^
+X]úõ›[ô
+
+]SÿöôX›
+[ô
+HH]SÿöôX›
+›\ù
+JH»ç
+JN»Bôù[ò›[€à[€ù]\–ô]ŸY[ä›\ù[ô
+H¬à€€ú›ò[Y\»H◊N¬à€€ú››\ú€‹àH]SÿöôX›
+	€[€ùŸ^J›\ù
+_KLX
+N¬à€€ú›\›H]SÿöôX›
+	€[€ùŸ^J[ô
+_KLX
+N¬à⁄[H
+›\ú€‹àH\›
+H¬àò[Y\Àú\⁄
+ÿÿ[]J›\ú€‹äJN¬à›\ú€‹ãúŸ][€ù
+›\ú€‹ãôŸ][€ù
+
+H
+»JN¬àBàô]\õàò[Y\Œ¬üBôù[ò›[€à[€ùQ]J[€ù^JH¬à€€ú›ò\ŸHH]SÿöôX›
+[€ù
+N¬à€€ú›\›^HHô]»]Jò\ŸKôŸ]ù[YX\ä
+Kò\ŸKôŸ][€ù
+
+H
+»K
+KôŸ]]J
+N¬àô]\õà	€[€ùŸ^J[€ù
+_KI‘›ö[ô X]õZ[äù[Xô\ä^JHK\›^JJKúY›\ù
+ã	Ã	 _X¬üBôù[ò›[€àôX›\úö[ô–€€ôö\õYY
+][RYÿÿ›\úô[òŸQ]JH¬àô]\õà›]Kùò[úÿX›[€úÀú€€YJò[úÿX›[€àOÇàò[úÿX›[€ãúôX›\úö[ô“][RYOOH][RY	âàò[úÿX›[€ãúôX›\úö[ô”[€ùOOH[€ù›\ù
+ÿÿ›\úô[òŸQ]JBà
+N¬üBôù[ò›[€àôX›\úö[ô”ÿÿ›\úô[òŸ\ ›\ù[ôôYXÿ]HH
+
+HOàùYJH¬à€€ú›ÿÿ›\úô[òŸ\»H◊N¬àõ‹à
+€€ú›[€ùŸà[€ù]\–ô]ŸY[ä›\ù[ô
+JH¬à›]KúôX›\úö[ôÀôö[\ä][HOà][KòX›]ôHOOHò[ŸH	âàôYXÿ]J][JJKôõ‹ëXX⁄
+][HOà¬à€€ú›]HH[€ùQ]J[€ù][Kô^JN¬àYà
+]HèH›\ù	âà]HH[ô	âà\ôX›\úö[ô–€€ôö\õYY
+][KöY]JJHÿÿ›\úô[òŸ\Àú\⁄
+»][K]HJN¬àJN¬àBàô]\õàÿÿ›\úô[òŸ\Œ¬üBôù[ò›[€àXùZY[ì[€ùT—
+Xù[€ù
+H¬àô]\õà›]Kùò[úÿX›[€úÀôö[\äò[úÿX›[€àOàò[úÿX›[€ãôXùYOOHXùöY	âàò[úÿX›[€ãô]Kú›\ù’⁄]
+[€ùŸ^J[€ù
+JJBàúôYXŸJ
+›[Kò[úÿX›[€äHOà›[H
+»\Ÿ
+ù[Xô\äò[úÿX›[€ãôXùö[ò⁄\[
+H
+»ù[Xô\äò[úÿX›[€ãôXù[ù\ô\›
+KXùò›\úô[òﬁJK
+N¬üBôù[ò›[€à\€€Z[ô”ÿõYÿ][€ú ›\ù[ô
+H¬à€€ú›^[úŸSÿÿ›\úô[òŸ\»HôX›\úö[ô”ÿÿ›\úô[òŸ\ ›\ù[ô][HOà][Kö⁄[ôOOH	Ÿ^[úŸI N¬à€€ú›ö[’T—H^[úŸSÿÿ›\úô[òŸ\Àôö[\ä
+»][HJHOà][Kòÿ]Y€‹ûHOOH	—Xù	 BàúôYXŸJ
+›[K»][HJHOà›[H
+»\Ÿ
+][Kò[[›[ù][Kò›\úô[òﬁJK
+N¬à]XùT—H¬àõ‹à
+€€ú›[€ùŸà[€ù]\–ô]ŸY[ä›\ù[ô
+JH¬à€€ú›[€ù[ôH[€ùQ]J[€ùÃJN¬à€€ú›ò[ôŸT›\ùH[€ùŸ^J[€ù
+HOOH[€ùŸ^J›\ù
+H»›\ùà[€ù¬à€€ú›ò[ôŸQ[ôH[€ùŸ^J[€ù
+HOOH[€ùŸ^J[ô
+H»[ôà[€ù[ô¬à€€ú›ôX›\úö[ô—XùT—H^[úŸSÿÿ›\úô[òŸ\¬àôö[\ä
+»][K]HJHOà][Kòÿ]Y€‹ûHOOH	—Xù	»	âà]HèHò[ôŸT›\ù	âà]HHò[ôŸQ[ô
+BàúôYXŸJ
+›[K»][HJHOà›[H
+»\Ÿ
+][Kò[[›[ù][Kò›\úô[òﬁJK
+N¬à€€ú›Z[ö[][QXùT—HX›]ôQXù 
+KúôYXŸJ
+›[KXù
+HOà¬àYà
+JXùõZ[ö[][Hà
+JHô]\õà›[N¬à€€ú›YQ]HHXùú^[Y[ù^H»[€ùQ]J[€ùXùú^[Y[ù^JHàò[ôŸQ[ô¬àYà
+YQ]Hò[ôŸT›\ùYQ]Hàò[ôŸQ[ô
+Hô]\õà›[N¬àô]\õà›[H
+»X]õX^
+\Ÿ
+XùõZ[ö[][KXùò›\úô[òﬁJHHXùZY[ì[€ùT—
+Xù[€ù
+JN¬àK
+N¬àXùT—
+œHX]õX^
+ôX›\úö[ô—XùT—Z[ö[][QXùT—
+N¬àBàô]\õà»ö[’T—XùT—›[T—àö[’T—
+»XùT—ÿÿ›\úô[òŸ\Œà^[úŸSÿÿ›\úô[òŸ\»N¬üBÇôù[ò›[€àÿYôT‹[ô[äY]öX‹»H[€ô^SY]öX‹ 
+KùX⁄Ÿ]»H[ÿÿ][€êùX⁄Ÿ] Y]öX‹ JH¬à€€ú›^Y^HHô^^Y^R[ôõ 
+N¬àYà
+JY]öX‹Àö[ò€€YUT—à
+H\^Y^JHô]\õà»ôXYNàò[ŸKZ[UT—àŸYZ€UT—à^Y^Kõ›X›YT—àùYôô\ïT—àN¬à€€ú›ÿ[ù»HùX⁄Ÿ]Àôö[ô
+ùX⁄Ÿ]OàùX⁄Ÿ]öŸ^HOOH	›ÿ[ù… N¬à€€ú›ÿõYÿ][€ú»H\€€Z[ô”ÿõYÿ][€ú Ÿ^J
+K^Y^Kô]JN¬à€€ú›⁄[ö⁄[ô’T—HX›]ôT⁄[ö⁄[ô—ù[ô 
+Bàôö[\äù[ôOàù[ôõ\›ô\Ÿ\ùôY[€ùOOH[€ù›\ù
+
+JBàúôYXŸJ
+›[Kù[ô
+HOà›[H
+»⁄[ö⁄[ô”[€ùSôYYT—
+ù[ô
+K
+N¬à€€ú›\‹Ÿ[ùX[–ùYŸ]T—HÿöôX›ô[ùöY\ ›]KòùYŸ] Bàôö[\ä
+ÿÿ]Y€‹ûWJHOàT‘—SïPS––UQ”‘íQTÀö[ò€Y\ ÿ]Y€‹ûJJBàúôYXŸJ
+›[KÀùYŸ]JHOà›[H
+»\Ÿ
+ùYŸ]ò[[›[ùùYŸ]ò›\úô[òﬁJK
+N¬à€€ú›^\’\”[€ùHô]»]Jô]»]J
+KôŸ]ù[YX\ä
+Kô]»]J
+KôŸ][€ù
+
+H
+»K
+KôŸ]]J
+N¬à€€ú›ùYôô\ïT—H\‹Ÿ[ùX[–ùYŸ]T—à»\‹Ÿ[ùX[–ùYŸ]T—»^\’\”[€ù
+à»à¬à€€ú›ÿ[ù‘ô[XZ[ö[ô’T—HX]õX^
+ÿ[ùÀù\ôŸ]Hÿ[ùÀòX›X[
+N¬à€€ú›ÿ\⁄Yù\îõ›X›[€ïT—HX]õX^
+Y]öX‹Àú‹[ôXõUT—HÿõYÿ][€úÀù›[T—H⁄[ö⁄[ô’T—HùYôô\ïT—
+N¬à€€ú›ô[XZ[ö[ô’T—HX]õZ[äÿ[ù‘ô[XZ[ö[ô’T—ÿ\⁄Yù\îõ›X›[€ïT—
+N¬à€€ú›Z[UT—Hô[XZ[ö[ô’T—»^Y^Kô^\Œ¬àô]\õà¬àôXYNàùYKZ[UT—ŸYZ€UT—àZ[UT—
+àX]õZ[äÀ^Y^Kô^\ K^Y^Kô[XZ[ö[ô’T—àÿ[ù‘ô[XZ[ö[ô’T—õ›X›YT—àÿõYÿ][€úÀù›[T—
+»⁄[ö⁄[ô’T—ö[’T—àÿõYÿ][€úÀòö[’T—àXùT—àÿõYÿ][€úÀôXùT—⁄[ö⁄[ô’T—ùYôô\ïT—‹[ôXõPÿ\⁄T—àY]öX‹Àú‹[ôXõUT—à⁄‹ùò[T—àX]õX^
+ÿõYÿ][€úÀù›[T—
+»⁄[ö⁄[ô’T—
+»ùYôô\ïT—HY]öX‹Àú‹[ôXõUT—
+BàN¬üBÇôù[ò›[€à‹[îÿYôPúôXZŸ›€ä
+H¬à€€ú›Y]öX‹»H[€ô^SY]öX‹ 
+N¬à€€ú›ÿYôHHÿYôT‹[ô[äY]öX‹À[ÿÿ][€êùX⁄Ÿ] Y]öX‹ JN¬àYà
+\ÿYôKúôXYJH¬à‹[ì[Ÿ[
+	‘ÿYôK]À\‹[ô›ZYIÀ]à€\‹œHôõ‹õHèè]à€\‹œHôúöY[ôSõ›HèêY\»[€ù8†&\»ÿ[\ûH[ôŸ]Hÿ[\ûH^Hö\ú›àH\[àõ›X›»ôX[ÿ\⁄€ÿ[À\€€Z[ô»ö[ÀXùZ[ö[][\»[ôHôYKY^H\‹Ÿ[ùX[»ùYôô\ãèŸ]èèù]€à€\‹œHúö[X\ûHà€ò€X⁄œHò€‹ŸS[Ÿ[
+
+N€‹[î]ZX⁄“[ò€€YJÿÿ]Y€‹ûNâ‘ÿ[\ûIﬂJHèêYÿ[\ûOÿù]€èèŸ]èò
+N¬àô]\õé¬àBà‹[ì[Ÿ[
+	‘ÿYôK]À\‹[ô›ZYIÀ]à€\‹œHôõ‹õHèÇà]à€\‹œHôúöY[ôSõ›Hèï\»\»H›Ÿ\àŸà[›\àô[XZ[ö[ô»L	Hÿ[ù»[›ÿ[òŸH[ôHÿ\⁄]\»Ÿ[ùZ[ô[HúôYHYù\àõ›X›[€ãèŸ]èÇà]à€\‹œHú›][Y[ùèÇà]à€\‹œHú›][Y[ùõ›»èè[YOåO›[YOè]èèèî‹[ôXõHÿ\⁄ÿèè]à€\‹œHõY]HèêXÿ€›[ù»Z[ù\»[€ô^Hô\Ÿ\ùôYõ‹à€ÿ[»[ô⁄[ö⁄[ô»ù[ôœŸ]èèŸ]èè]à€\‹œHú›][Y[ùò[YHèè›õ€ôœâÿò\ŸS[€ô^JÿYôKú‹[ôXõPÿ\⁄T—
+_O‹›õ€ôœèŸ]èèŸ]èÇà]à€\‹œHú›][Y[ùõ›»èè[YOåè›[YOè]èèèï\€€Z[ô»ö[œÿèè]à€\‹œHõY]Hèï[ò€€ôö\õYYôY›[\à^[úŸ\»ôYõ‹ôH^Y^OŸ]èèŸ]èè]à€\‹œHú›][Y[ùò[YHèè›õ€ôœ∏¢$à	ÿò\ŸS[€ô^JÿYôKòö[’T—
+_O‹›õ€ôœèŸ]èèŸ]èÇà]à€\‹œHú›][Y[ùõ›»èè[YOåœ›[YOè]èèèëXùZ[ö[][\œÿèè]à€\‹œHõY]Hèî›[YHôYõ‹ôH^Y^OŸ]èèŸ]èè]à€\‹œHú›][Y[ùò[YHèè›õ€ôœ∏¢$à	ÿò\ŸS[€ô^JÿYôKôXùT—
+_O‹›õ€ôœèŸ]èèŸ]èÇà]à€\‹œHú›][Y[ùõ›»èè[YOç›[YOè]èèèî⁄[ö⁄[ô»ù[ôœÿèè]à€\‹œHõY]Hèï\»[€ù	‹»Ÿ]X\⁄Y\»õ›Y]ôX€‹ôYŸ]èèŸ]èè]à€\‹œHú›][Y[ùò[YHèè›õ€ôœ∏¢$à	ÿò\ŸSy€]8∂âûÀk∫wµÁX[[òŸHù\›ôYõ‹ôHòX⁄⁄[ô»ôY⁄[úÀà[öŸYÿ[\ûK‹[ô[ô»[ôò[úŸô\ú»\]H]Yù\à]âÿXÿ€›[ù»	»›\úô[òﬁH›^\»ö^Y€»€\àôX€‹ô»ŸY\Z\àYX[ö[ôÀâ»à	…ﬂOŸ]èÇàXô[ìò[YO[ú]YHòXÿ€›[ùò[YHàô\]Z\ôYX^[ô›Héàò[YOHâŸ\ÿ Xÿ€›[ùÀõò[YH	… _HàXŸZ€\èHìXZ[àò[ö»Xÿ€›[ùèè€Xô[Çà]à€\‹œHôöY[õ›»èèXô[ï\OŸ[X›YHòXÿ€›[ù\Hèè‹[€àò[YOHòò[ö»èêò[ö»Xÿ€›[ù€‹[€èè‹[€àò[YOHòÿ\⁄èêÿ\⁄€‹[€èè‹[€àò[YOHùÿ[]èì[ÿö[Hÿ[]€‹[€èè‹Ÿ[X›è€Xô[èXô[ê›\úô[òﬁOŸ[X›YHòXÿ€›[ù›\úô[òﬁHâÿXÿ€›[ù»	»\ÿXõY	»à	…ﬂOâÿ›\úô[òﬁS‹[€ú Xÿ€›[ùÀò›\úô[òﬁH›]KúŸ][ô‹Àõ\››\úô[òﬁJ_O‹Ÿ[X›è€Xô[èŸ]èÇà]à€\‹œHôöY[õ›»èèXô[î›\ù[ô»ò[[òŸO[ú]YHòXÿ€›[ù‹[ö[ô»à\OHõù[Xô\àà›\HååHàô\]Z\ôYò[YOHâÿXÿ€›[ùÀõ‹[ö[ô–ò[[òŸHœ»Hèè€Xô[èXô[ïòX⁄»úõ€O[ú]YHòXÿ€›[ù]Hà\OHô]Hàô\]Z\ôYò[YOHâÿXÿ€›[ùÀõ‹[ö[ô—]HŸ^J
+_Hèè€Xô[èŸ]èÇàXô[ìõ›\œ[ú]YHòXÿ€›[ùõ›\»àX^[ô›Hååàò[YOHâŸ\ÿ Xÿ€›[ùÀõõ›\»	… _HàXŸZ€\èHì‹[€ò[èè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èâÿXÿ€›[ù»	’\]HXÿ€›[ù	»à	–YXÿ€›[ù	ﬂOÿù]€èÇàŸõ‹õOò
+N¬à	
+	ÿXÿ€›[ù\I Kùò[YHHXÿ€›[ùÀù\H	ÿò[ö…Œ¬à	
+	ÿXÿ€›[ùõ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›ò[YHH	
+	ÿXÿ€›[ùò[YI Kùò[YKùö[J
+N¬àYà
+›]KòXÿ€›[ùÀú€€YJ][HOà][KöYOOHXÿ€›[ùÀöY	âà][Kõò[YKù”›Ÿ\êÿ\ŸJ
+HOOHò[YKù”›Ÿ\êÿ\ŸJ
+JJH¬àÿ\›
+	–[àXÿ€›[ù⁄]]ò[YH[ôXYH^\›Àâ N¬àô]\õé¬àBà€€ú›‹[ö[ô—]HH	
+	ÿXÿ€›[ù]I Kùò[YN¬à€€ú›X\õY\ì[öŸYHXÿ€›[ù	âà›]Kùò[úÿX›[€úÀú€€YJò[úÿX›[€àOÇà
+ò[úÿX›[€ãòXÿ€›[ùYOOHXÿ€›[ùöYò[úÿX›[€ãù–Xÿ€›[ùYOOHXÿ€›[ùöY
+H	âàò[úÿX›[€ãô]H‹[ö[ô—]Bà
+N¬àYà
+X\õY\ì[öŸY
+H»ÿ\›
+	’HòX⁄⁄[ô»]Hÿ[õõ›[›ôHYù\à[à^\›[ô»[öŸYôX€‹ôâ N»ô]\õé»Bà€€ú›][HH¬àYàXÿ€›[ùÀöY‹û\Àúò[ô€UURQ
+
+Kò[YK\Nà	
+	ÿXÿ€›[ù\I Kùò[YKà›\úô[òﬁNà	
+	ÿXÿ€›[ù›\úô[òﬁI Kùò[YK‹[ö[ô–ò[[òŸNà
+…
+	ÿXÿ€›[ù‹[ö[ô… Kùò[YKà‹[ö[ô—]Kõ›\Œà	
+	ÿXÿ€›[ùõ›\… Kùò[YKùö[J
+KX›]ôNàùYKà‹ôX]Y]àXÿ€›[ùÀò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàN¬àô[Y[Xô\ê›\úô[òﬁJ][Kò›\úô[òﬁJN¬à€€ú›[ô^H›]KòXÿ€›[ùÀôö[ô[ô^
+HOàKöYOOH][KöY
+N¬àYà
+[ô^èH
+H›]KòXÿ€›[ù÷⁄[ô^HH][N¬à[ŸH›]KòXÿ€›[ùÀú\⁄
+][JN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	ÿXÿ€›[ù…Àõ›Œà»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€Yò[YNà][Kõò[YKXÿ€›[ù›\Nà][Kù\K›\úô[òﬁNà][Kò›\úô[òﬁK‹[ö[ô◊ÿò[[òŸNà][Kõ‹[ö[ô–ò[[òŸK‹[ö[ô◊Ÿ]Nà][Kõ‹[ö[ô—]Kõ›\Œà][Kõõ›\»ù[X›]ôNàùYK\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HHK»Y\‹ÿYŸNà	–Xÿ€›[ùÿ]ôY8ß$…»JN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬àN¬üBÇôù[ò›[€à‹[êXÿ€›[ù›][Y[ù
+Y
+H¬à€€ú›Xÿ€›[ùH›]KòXÿ€›[ùÀôö[ô
+][HOà][KöYOOHY
+N¬àYà
+XXÿ€›[ù
+Hô]\õé¬à€€ú›ôX€‹ô»H›]Kùò[úÿX›[€ú¬àôö[\äò[úÿX›[€àOàò[úÿX›[€ãô]HèHXÿ€›[ùõ‹[ö[ô—]H	âà
+ò[úÿX›[€ãòXÿ€›[ùYOOHYò[úÿX›[€ãù–Xÿ€›[ùYOOHY
+JBàú€‹ù
+
+KäHOà
+Kô]H
+»Kò‹ôX]Y]
+Kõÿÿ[P€€\\ôJãô]H
+»ãò‹ôX]Y]
+JN¬à]ù[õö[ô»HXÿ€›[ùõ‹[ö[ô–ò[[òŸN¬à€€ú›õ›‹»Hﬁ»]NàXÿ€›[ùõ‹[ö[ô—]K]Nà	”‹[ö[ô»ò[[òŸIÀ[Nàù[ò[[òŸNàù[õö[ô»WN¬àôX€‹ôÀôõ‹ëXX⁄
+ò[úÿX›[€àOà¬à€€ú›[HHXÿ€›[ù[Sò]]ôJXÿ€›[ùò[úÿX›[€äN¬àù[õö[ô»
+œH[N¬àõ›‹Àú\⁄
+»]Nàò[úÿX›[€ãô]K]Nàò[úÿX›[€ãù\HOOH	›ò[úŸô\â»»
+[H»ò[úŸô\à»	ÿXÿ€›[ùò[YJò[úÿX›[€ãù–Xÿ€›[ùY
+_Xàò[úŸô\àúõ€H	ÿXÿ€›[ùò[YJò[úÿX›[€ãòXÿ€›[ùY
+_X
+Hàò[úÿX›[€ãòÿ]Y€‹ûK[Kò[[òŸNàù[õö[ô»JN¬àJN¬à‹[ì[Ÿ[
+	ÿXÿ€›[ùõò[Y_H›][Y[ù]à€\‹œHôúöY[ôSõ›Hèï\»ù[õö[ô»ò[[òŸH›\ù»úõ€H	Ÿõ‹õX]]JXÿ€›[ùõ‹[ö[ô—]J_H[ô\]\»úõ€H]ô\ûH[öŸY[ùûKèŸ]èè]à€\‹œHú›][Y[ùèâ‹õ›‹ÀõX\
+õ›»Oà]à€\‹œHú›][Y[ùõ›»èè[YOâŸ\ÿ õ›Àô]J_O›[YOè]èèèâŸ\ÿ õ›Àù]J_Oÿèâ‹õ›Àô[HOHù[»	…»à]à€\‹œHõY]Hèâ‹õ›Àô[HèH»	 …»à	¯¢$âﬂH	€[€ô^JX]òXú õ›Àô[JKXÿ€›[ùò›\úô[òﬁJ_OŸ]èòOŸ]èè]à€\‹œHú›][Y[ùò[YHèè›õ€ôœâ€[€ô^Jõ›Àòò[[òŸKXÿ€›[ùò›\úô[òﬁJ_O‹›õ€ôœè‹[èòò[[òŸO‹‹[èèŸ]èèŸ]èò
+Köõ⁄[ä	… _OŸ]èèù]€à€\‹œHúŸX€€ô\ûH⁄YHà€ò€X⁄œHò€‹ŸS[Ÿ[
+
+N‹ôX€€ò⁄[PXÿ€›[ù
+	…ÿXÿ€›[ùöYI Hèê€‹úôX›»Ÿ^x†&\»ò[[òŸOÿù]€èò
+N¬üBÇôù[ò›[€àôX€€ò⁄[PXÿ€›[ù
+Y
+H¬à€€ú›Xÿ€›[ùH›]KòXÿ€›[ùÀôö[ô
+][HOà][KöYOOHY
+N¬àYà
+XXÿ€›[ù
+Hô]\õé¬à€€ú››\úô[ùHXÿ€›[ùò[[òŸSò]]ôJXÿ€›[ù
+N¬à‹[ì[Ÿ[
+	–€‹úôX›Xÿ€›[ùò[[òŸIÀõ‹õH€\‹œHôõ‹õHàYHúôX€€ò⁄[Qõ‹õHèÇà]à€\‹œHôúöY[ôSõ›HèïH\⁄›‹»èâ€[€ô^J›\úô[ùXÿ€›[ùò›\úô[òﬁJ_Oÿèãà[ù\àHôX[ò[ö»‹àÿ[]ò[[òŸN»HYôô\ô[òŸH⁄[ôHŸ\\»H€X\àYù\›Y[ù[à\›‹ûKèŸ]èÇàXô[êX›X[ò[[òŸO[ú]YHòX›X[ò[[òŸHà\OHõù[Xô\àà›\HååHàô\]Z\ôYò[YOHâÿ›\úô[ùù—ö^Y
+ä_Hèè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èï\]Hò[[òŸOÿù]€èÇàŸõ‹õOò
+N¬à	
+	‹ôX€€ò⁄[Qõ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›X›X[H
+…
+	ÿX›X[ò[[òŸI Kùò[YN¬à€€ú›Yôô\ô[òŸHHX›X[H›\úô[ù¬àYà
+X]òXú Yôô\ô[òŸJHåJH»€‹ŸS[Ÿ[
+
+N»ÿ\›
+	–ò[[òŸH[ôXYHX]⁄\»8ß$… N»ô]\õé»Bà€€ú›ò[úÿX›[€àH¬àYà‹û\Àúò[ô€UURQ
+
+K\NàYôô\ô[òŸHà»	⁄[ò€€YI»à	Ÿ^[úŸIÀ[[›[ùàX]òXú Yôô\ô[òŸJKà›\úô[òﬁNàXÿ€›[ùò›\úô[òﬁKÿ]Y€‹ûNà	–ò[[òŸHYù\›Y[ù	ÀZYûNà	‘⁄\ôY	ÀXÿ€›[ùYàXÿ€›[ùöYàXÿ€›[ùàXÿ€›[ùõò[YK–Xÿ€›[ùYà	…À–[[›[ùàù[XùYà	…ÀXùö[ò⁄\[àù[Xù[ù\ô\›ààôX›\úö[ô“][RYà	…ÀôX›\úö[ô”[€ùà	…À]NàŸ^J
+Kõ›Nà	”X[ùX[Xÿ€›[ùò[[òŸH€‹úôX›[€âÀ‹ôX]Y]àô]»]J
+Kù“T”‘›ö[ô 
+BàN¬à›]Kùò[úÿX›[€úÀú\⁄
+ò[úÿX›[€äN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	›ò[úÿX›[€ú…Àõ›Œàò[úÿX›[€îõ› ò[úÿX›[€äHK»Y\‹ÿYŸNà	–ò[[òŸH€‹úôX›Y8ß$…»JN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬àN¬üBÇôù[ò›[€à›\úô[ù⁄X⁄›\
+
+H»ô]\õà›]Kò⁄X⁄›\Àôö[ô
+⁄X⁄›\Oà⁄X⁄›\õ[€ùOOH[€ù›\ù
+
+JN»BÇôù[ò›[€à[€ùP⁄X⁄›\[
+
+H¬à€€ú›⁄X⁄›\H›\úô[ù⁄X⁄›\
+
+N¬àYà
+⁄X⁄›\Àòò[[òŸ\–⁄X⁄ŸY]
+Hô]\õà]à€\‹œHò⁄X⁄›\‹èè]à€\‹œHò⁄X⁄›\X€€àè∏ß$œŸ]èè]èèœâŸõ‹õX]]J⁄X⁄›\õ[€ù»[€ùà	€€ô…ÀYX\éà	€ù[Y\öX…»J_H⁄X⁄ŸY⁄œèâÿ⁄X⁄›\òXÿ€›[ù€›[ùHXÿ€›[ù	ÿ⁄X⁄›\òXÿ€›[ù€›[ùOOHH»	…»à	‹…ﬂH€€ôö\õYY	”X]òXú ⁄X⁄›\òYù\›Y[ùT—
+HàåH»0≠»	ÿò\ŸS[€ô^JX]òXú ⁄X⁄›\òYù\›Y[ùT—
+J_H€‹úôX›Yà	»0≠»ò[[òŸ\»X]⁄Y	ﬂO‹èŸ]èèù]€à€\‹œHúŸX€€ô\ûH€€\X›à€ò€X⁄œHõ‹[ì[€ùP⁄X⁄›\
+
+Hèê⁄X⁄»YÿZ[èÿù]€èèŸ]èò¬àô]\õà]à€\‹œHò⁄X⁄›\‹èè]à€\‹œHò⁄X⁄›\X€€àè∏•„èŸ]èè]èèœì[€ùH[€ô^H⁄X⁄œ⁄œèê€€ôö\õHHôX[ò[[òŸ\»ŸŸ]\à[ôö[ö\⁄H[€ù⁄]€X[àù[Xô\úÀè‹èŸ]èèù]€à€\‹œHúö[X\ûH€€\X›à€ò€X⁄œHõ‹[ì[€ùP⁄X⁄›\
+
+Hèî›\ùÿù]€èèŸ]èò¬üBÇôù[ò›[€à‹[ì[€ùP⁄X⁄›\
+
+H¬à€€ú›Xÿ€›[ù»HX›]ôPXÿ€›[ù 
+N¬àYà
+XXÿ€›[ùÀõ[ô›
+H¬à‹[ì[Ÿ[
+	”[€ùH[€ô^H⁄X⁄…À	œ]à€\‹œHôõ‹õHèè]à€\‹œHôúöY[ôSõ›HèêY[›\àò[öÀÿ\⁄‹àÿ[]Xÿ€›[ùö\ú›àH⁄X⁄À]\€€\\ô\»H\⁄]HôX[ò[[òŸKèŸ]èèù]€à€\‹œHúö[X\ûHà€ò€X⁄œHò€‹ŸS[Ÿ[
+
+N€‹[êXÿ€›[ùõ‹õJ
+HèêYXÿ€›[ùÿù]€èèŸ]èâ N¬àô]\õé¬àBà€€ú›^\›[ô»H›\úô[ù⁄X⁄›\
+
+N¬à‹[ì[Ÿ[
+	”[€ùH[€ô^H⁄X⁄…Àõ‹õHYHõ[€ùP⁄X⁄›\õ‹õHà€\‹œHôõ‹õHèÇà]à€\‹œHôúöY[ôSõ›Hèì‹[àXX⁄ò[ö»‹àÿ[][ô[ù\àHò[[òŸH[›HŸYHõ›Àà[ûHYôô\ô[òŸHôX€€Y\»Hö\⁄XõHò[[òŸHYù\›Y[ù8†%õ›[ô»\»⁄[[ùH⁄[ôŸYèŸ]èÇà]à€\‹œHò⁄X⁄›\[ú]»èâÿXÿ€›[ùÀõX\
+
+Xÿ€›[ù[ô^
+HOàXô[€\‹œHò⁄X⁄›\Xÿ€›[ùèè]èèèâŸ\ÿ Xÿ€›[ùõò[YJ_Oÿèè‹[èê\⁄›‹»	€[€ô^JXÿ€›[ùò[[òŸSò]]ôJXÿ€›[ù
+KXÿ€›[ùò›\úô[òﬁJ_O‹‹[èèŸ]èè[ú]YHò⁄X⁄›\ò[[òŸI⁄[ô^Hà\OHõù[Xô\àà›\HååHàô\]Z\ôYò[YOHâÿXÿ€›[ùò[[òŸSò]]ôJXÿ€›[ù
+Kù—ö^Y
+ä_Hà\öXK[Xô[HêX›X[ò[[òŸHõ‹à	Ÿ\ÿ Xÿ€›[ùõò[YJ_Hèè€Xô[ò
+Köõ⁄[ä	… _OŸ]èÇàXô[ì€ôHõ›Hõ‹à\»[€ù^\ôXHYHò⁄X⁄›\õ›HàX^[ô›HåÃàXŸZ€\èHï⁄]Ÿ[ùŸ[‹àôYY»][ù[€è»èâŸ\ÿ ^\›[ôœÀõõ›H	… _O›^\ôXOè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èëö[ö\⁄[€ùH⁄X⁄œÿù]€èÇàŸõ‹õOò
+N¬à	
+	€[€ùP⁄X⁄›\õ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›‹\ò][€ú»H◊N¬à]Yù\›Y[ùT—H¬àXÿ€›[ùÀôõ‹ëXX⁄
+
+Xÿ€›[ù[ô^
+HOà¬à€€ú››\úô[ùHXÿ€›[ùò[[òŸSò]]ôJXÿ€›[ù
+N¬à€€ú›X›X[H
+…
+⁄X⁄›\ò[[òŸI⁄[ô^X
+Kùò[YN¬à€€ú›Yôô\ô[òŸHHX›X[H›\úô[ù¬àYà
+X]òXú Yôô\ô[òŸJHåJHô]\õé¬àYù\›Y[ùT—
+œHX]òXú \Ÿ
+Yôô\ô[òŸKXÿ€›[ùò›\úô[òﬁJJN¬à€€ú›ò[úÿX›[€àH¬àYà‹û\Àúò[ô€UURQ
+
+K\NàYôô\ô[òŸHà»	⁄[ò€€YI»à	Ÿ^[úŸIÀ[[›[ùàX]òXú Yôô\ô[òŸJKà›\úô[òﬁNàXÿ€›[ùò›\úô[òﬁKÿ]Y€‹ûNà	–ò[[òŸHYù\›Y[ù	ÀZYûNàYò][\ú€€ä
+KXÿ€›[ùYàXÿ€›[ùöYàXÿ€›[ùàXÿ€›[ùõò[YK–Xÿ€›[ùYà	…À–[[›[ùàù[XùYà	…ÀXùö[ò⁄\[àù[Xù[ù\ô\›ààôX›\úö[ô“][RYà	…ÀôX›\úö[ô”[€ùà	…À]NàŸ^J
+Kõ›Nà[€ùH⁄X⁄»0≠»	€[€ùŸ^J
+_X‹ôX]Y]àô]»]J
+Kù“T”‘›ö[ô 
+BàN¬à›]Kùò[úÿX›[€úÀú\⁄
+ò[úÿX›[€äN¬à‹\ò][€úÀú\⁄
+»X›[€éà	›\Ÿ\ù	ÀXõNà	›ò[úÿX›[€ú…Àõ›Œàò[úÿX›[€îõ› ò[úÿX›[€äHJN¬àJN¬à€€ú›⁄X⁄›\H¬àYà^\›[ôœÀöY‹û\Àúò[ô€UURQ
+
+K[€ùà[€ù›\ù
+
+KXÿ€›[ù€›[ùàXÿ€›[ùÀõ[ô›àYù\›Y[ùT—õ›Nà	
+	ÿ⁄X⁄›\õ›I Kùò[YKùö[J
+K€€\]YûNà›\úô[ù\Ÿ\ãöYàõÿ›\Œà^\›[ôœÀôõÿ›\»	…À€‹ŸY]à^\›[ôœÀò€‹ŸY]	…Àò[[òŸ\–⁄X⁄ŸY]àô]»]J
+Kù“T”‘›ö[ô 
+Kà€€\]Y]àô]»]J
+Kù“T”‘›ö[ô 
+K\]Y]àô]»]J
+Kù“T”‘›ö[ô 
+BàN¬à€€ú›[ô^H›]Kò⁄X⁄›\Àôö[ô[ô^
+][HOà][KöYOOH⁄X⁄›\öY
+N¬àYà
+[ô^èH
+H›]Kò⁄X⁄›\÷⁄[ô^HH⁄X⁄›\¬à[ŸH›]Kò⁄X⁄›\Àú\⁄
+⁄X⁄›\
+N¬à‹\ò][€úÀú\⁄
+»X›[€éà	ÿ⁄X⁄›\	Àõ›Œà¬àYà⁄X⁄›\öY›\ŸZ€⁄Yà›\ŸZ€Y[€ùà⁄X⁄›\õ[€ù€€\]YÿûNà›\úô[ù\Ÿ\ãöYàXÿ€›[ùÿ€›[ùà⁄X⁄›\òXÿ€›[ù€›[ùYù\›Y[ù››[›\Ÿà⁄X⁄›\òYù\›Y[ùT—àõ›Nà⁄X⁄›\õõ›Hù[õÿ›\Œà⁄X⁄›\ôõÿ›\»ù[€‹ŸYÿ]à⁄X⁄›\ò€‹ŸY]ù[ò[[òŸ\◊ÿ⁄X⁄ŸYÿ]à⁄X⁄›\òò[[òŸ\–⁄X⁄ŸY]à€€\]Yÿ]à⁄X⁄›\ò€€\]Y]\]Yÿ]à⁄X⁄›\ù\]Y]àHJN¬à]ÿZ]ÿ]ôS‹\ò][€ú ‹\ò][€úÀ»Y\‹ÿYŸNà	”[€ùH⁄X⁄»€€\]H8ß$…ÀŸ[Xúò]NàùYHJN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬àN¬üBÇò\ﬁ[ò»ù[ò›[€à\ò⁄]ôPXÿ€›[ù
+Y
+H¬à€€ú›Xÿ€›[ùH›]KòXÿ€›[ùÀôö[ô
+][HOà][KöYOOHY
+N¬àYà
+XXÿ€›[ù
+Hô]\õé¬àYà
+X]òXú Xÿ€›[ùò[[òŸSò]]ôJXÿ€›[ù
+JHèHåJH¬àÿ\›
+	’ò[úŸô\à‹à€‹úôX›\»Xÿ€›[ù»ô\õ»ôYõ‹ôH\ò⁄]ö[ôÀâ N¬àô]\õé¬àBàYà
+X€€ôö\õJ\ò⁄]ôH	ÿXÿ€›[ùõò[Y_O»]»\›‹ûH⁄[›^H]òZ[XõH[à[Y[[ôKò
+JHô]\õé¬àXÿ€›[ùòX›]ôHHò[ŸN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	ÿXÿ€›[ù…Àõ›Œà»YàXÿ€›[ùöY›\ŸZ€⁄Yà›\ŸZ€Yò[YNàXÿ€›[ùõò[YKXÿ€›[ù›\NàXÿ€›[ùù\K›\úô[òﬁNàXÿ€›[ùò›\úô[òﬁK‹[ö[ô◊ÿò[[òŸNàXÿ€›[ùõ‹[ö[ô–ò[[òŸK‹[ö[ô◊Ÿ]NàXÿ€›[ùõ‹[ö[ô—]Kõ›\ŒàXÿ€›[ùõõ›\»ù[X›]ôNàò[ŸK\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HHK»€‹ŸNàò[ŸKY\‹ÿYŸNà	–Xÿ€›[ù\ò⁄]ôY	»JN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬üBÇôù[ò›[€à‹[ê\‹Ÿ]õ‹õJYHù[
+H¬à€€ú›\‹Ÿ]HY»›]Kò\‹Ÿ]Àôö[ô
+][HOà][KöYOOHY
+Hàù[¬à‹[ì[Ÿ[
+\‹Ÿ]»	—Y]\‹Ÿ]	»à	–Y›\à\‹Ÿ]	Àõ‹õH€\‹œHôõ‹õHàYHò\‹Ÿ]õ‹õHèÇà]à€\‹œHôúöY[ôSõ›Hèï\ŸH\»õ‹à€€[ùô\›Y[ùÀ‹û\»‹àõ‹\ùKàò[ö»[ôÿ\⁄ò[[òŸ\»ô[€ô»[àXÿ€›[ù»€»^H\ôHô]ô\à€›[ùY⁄XŸKèŸ]èÇàXô[ìò[YO[ú]YHò\‹Ÿ]ò[YHàô\]Z\ôYX^[ô›HåLàò[YOHâŸ\ÿ \‹Ÿ]Àõò[YH	… _HàXŸZ€\èHë€€ô]Ÿ[\ûH»[ùô\›Y[ù»õ‹\ùHèè€Xô[ÇàXô[ï\OŸ[X›YHò\‹Ÿ]\Hèâÿ\‹Ÿ]Àù\HOOH	ÿÿ\⁄	»»	œ‹[€àò[YOHòÿ\⁄èìYÿXﬁHÿ\⁄ò[[òŸO€‹[€èâ»à	…ﬂO‹[€àò[YOHõX[ùX[èì›\à\‹Ÿ]»[ùô\›Y[ù€‹[€èè‹[€àò[YOHõY][èîôX⁄[›\»Y][€‹[€èè‹[€àò[YOHò‹û\»èê‹û\œ€‹[€èè‹Ÿ[X›è€Xô[Çà]àYHò\‹Ÿ]ﬁ[Xõ€‹ò\à€\‹œHöY[àèèXô[ê\‹Ÿ]Ÿ[X›YHò\‹Ÿ]ﬁ[Xõ€èè‹Ÿ[X›è€Xô[èŸ]èÇàXô[YHò\‹Ÿ]]X[ù]SXô[èê[[›[ù»]X[ù]O[ú]YHò\‹Ÿ]]X[ù]Hà\OHõù[Xô\àà›\HååHàZ[èHåàò[YOHâÿ\‹Ÿ]Àú]X[ù]Hœ»	…ﬂHèè€Xô[ÇàXô[YHò\‹Ÿ]›\úô[òﬁU‹ò\èê›\úô[òﬁOŸ[X›YHò\‹Ÿ]›\úô[òﬁHèâÿ›\úô[òﬁS‹[€ú \‹Ÿ]Àò›\úô[òﬁH›]KúŸ][ô‹Àõ\››\úô[òﬁJ_O‹Ÿ[X›è€Xô[ÇàXô[YHò\‹Ÿ]X[ùX[‹ò\à€\‹œHöY[àèê›\úô[ù›[ò[YO[ú]YHò\‹Ÿ]X[ùX[ò[YHà\OHõù[Xô\àà›\HååHàZ[èHåàò[YOHâÿ\‹Ÿ]ÀõX[ùX[ò[YHœ»	…ﬂHèè€Xô[ÇàXô[ìõ›\œ[ú]YHò\‹Ÿ]õ›\»àX^[ô›Hååàò[YOHâŸ\ÿ \‹Ÿ]Àõõ›\»	… _HàXŸZ€\èHì‹[€ò[èè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èîÿ]ôH\‹Ÿ]ÿù]€èÇàŸõ‹õOò
+N¬à	
+	ÿ\‹Ÿ]\I Kùò[YHH\‹Ÿ]Àù\H	€X[ùX[	Œ¬à	
+	ÿ\‹Ÿ]\I Kõ€ò⁄[ôŸHH
+
+HOà€€ôöY›\ôP\‹Ÿ]õ‹õJ
+N¬à€€ôöY›\ôP\‹Ÿ]õ‹õJ\‹Ÿ]Àúﬁ[Xõ€	… N¬à	
+	ÿ\‹Ÿ]õ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›\HH	
+	ÿ\‹Ÿ]\I Kùò[YN¬à€€ú›][HH¬àYà\‹Ÿ]ÀöY‹û\Àúò[ô€UURQ
+
+Kò[YNà	
+	ÿ\‹Ÿ]ò[YI Kùò[YKùö[J
+K\Kàﬁ[Xõ€à…€Y][	À	ÿ‹û\…◊Kö[ò€Y\ \JH»	
+	ÿ\‹Ÿ]ﬁ[Xõ€	 Kùò[YHà	…Àà]X[ù]Nà
+…
+	ÿ\‹Ÿ]]X[ù]I Kùò[YH›\úô[òﬁNà…€Y][	À	ÿ‹û\…◊Kö[ò€Y\ \JH»	’T—	»à	
+	ÿ\‹Ÿ]›\úô[òﬁI Kùò[YKàX[ùX[ò[YNà\HOOH	€X[ùX[	»»
+…
+	ÿ\‹Ÿ]X[ùX[ò[YI Kùò[YHàù[àõ›\Œà	
+	ÿ\‹Ÿ]õ›\… Kùò[YKùö[J
+K‹ôX]Y]à\‹Ÿ]Àò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàN¬àYà
+\HOOH	€X[ùX[	»	âàJ][Kú]X[ù]Hà
+JH»ÿ\›
+	—[ù\à[à[[›[ù‹à]X[ù]H‹ôX]\à[àô\õÀâ N»ô]\õé»BàYà
+\HOOH	€X[ùX[	»	âàJ][KõX[ùX[ò[YHèH
+JH»ÿ\›
+	—[ù\àH›\úô[ùò[YKâ N»ô]\õé»BàYà
+V…€Y][	À	ÿ‹û\…◊Kö[ò€Y\ \JJHô[Y[Xô\ê›\úô[òﬁJ][Kò›\úô[òﬁJN¬à€€ú›[ô^H›]Kò\‹Ÿ]Àôö[ô[ô^
+HOàKöYOOH][KöY
+N¬àYà
+[ô^èH
+H›]Kò\‹Ÿ]÷⁄[ô^HH][N¬à[ŸH›]Kò\‹Ÿ]Àú\⁄
+][JN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	ÿ\‹Ÿ]…Àõ›Œà»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€Y\Ÿ\ó⁄Yà›\úô[ù\Ÿ\ãöYò[YNà][Kõò[YK\‹Ÿ]›\Nà][Kù\Kﬁ[Xõ€à][Kúﬁ[Xõ€ù[]X[ù]Nà][Kú]X[ù]K›\úô[òﬁNà][Kò›\úô[òﬁKX[ùX[›ò[YNà][KõX[ùX[ò[YKõ›\Œà][Kõõ›\»ù[\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HHK»Y\‹ÿYŸNà	–\‹Ÿ]ÿ]ôY8ß$…»JN¬à]ÿZ]ôYúô\⁄öXŸ\ ùYJN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬àN¬üBÇôù[ò›[€à€€ôöY›\ôP\‹Ÿ]õ‹õJŸ[X›YH	… H¬à€€ú›\HH	
+	ÿ\‹Ÿ]\I Kùò[YN¬à€€ú›X\öŸ]H…€Y][	À	ÿ‹û\…◊Kö[ò€Y\ \JN¬à	
+	ÿ\‹Ÿ]ﬁ[Xõ€‹ò\	 Kò€\‹”\›ùŸŸ€J	⁄Y[âÀ[X\öŸ]
+N¬à	
+	ÿ\‹Ÿ]›\úô[òﬁU‹ò\	 Kò€\‹”\›ùŸŸ€J	⁄Y[âÀX\öŸ]
+N¬à	
+	ÿ\‹Ÿ]X[ùX[‹ò\	 Kò€\‹”\›ùŸŸ€J	⁄Y[âÀ\HOOH	€X[ùX[	 N¬à€€ú›]X[ù]SXô[H	
+	ÿ\‹Ÿ]]X[ù]SXô[	 N¬àYà
+\HOOH	€Y][	 H¬à	
+	ÿ\‹Ÿ]ﬁ[Xõ€	 Kö[õô\íSHQUSÀõX\
+
+‹ﬁ[Xõ€ò[YWJHOà‹[€àò[YOHâ‹ﬁ[Xõ€Hèâ€ò[Y_H
+	‹ﬁ[Xõ€JO€‹[€èò
+Köõ⁄[ä	… N¬à]X[ù]SXô[ò⁄[õŸ\÷ÃKõõŸUò[YHH	’ŸZY⁄[à‹ò[\…Œ¬àH[ŸHYà
+\HOOH	ÿ‹û\… H¬à	
+	ÿ\‹Ÿ]ﬁ[Xõ€	 Kö[õô\íSH‘ñTÀõX\
+
+‹ﬁ[Xõ€ò[YWJHOà‹[€àò[YOHâ‹ﬁ[Xõ€Hèâ€ò[Y_H
+	‹ﬁ[Xõ€JO€‹[€èò
+Köõ⁄[ä	… N¬à]X[ù]SXô[ò⁄[õŸ\÷ÃKõõŸUò[YHH	–€⁄[à]X[ù]IŒ¬àH[ŸHYà
+\HOOH	ÿÿ\⁄	 H]X[ù]SXô[ò⁄[õŸ\÷ÃKõõŸUò[YHH	–ò[[òŸIŒ¬à[ŸH]X[ù]SXô[ò⁄[õŸ\÷ÃKõõŸUò[YHH	‘]X[ù]H
+‹[€ò[ôYô\ô[òŸJIŒ¬àYà
+Ÿ[X›Y	âàX\öŸ]
+H	
+	ÿ\‹Ÿ]ﬁ[Xõ€	 Kùò[YHHŸ[X›Y¬üBÇò\ﬁ[ò»ù[ò›[€à[]P\‹Ÿ]
+Y
+H¬à€€ú›\‹Ÿ]H›]Kò\‹Ÿ]Àôö[ô
+][HOà][KöYOOHY
+N¬àYà
+X\‹Ÿ]X€€ôö\õJ[]H	ÿ\‹Ÿ]õò[Y_Oÿ
+JHô]\õé¬à›]Kò\‹Ÿ]»H›]Kò\‹Ÿ]Àôö[\ä][HOà][KöYOOHY
+N¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	Ÿ[]IÀXõNà	ÿ\‹Ÿ]…ÀYK»€‹ŸNàò[ŸKY\‹ÿYŸNà	–\‹Ÿ][]Y	»JN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬üBÇôù[ò›[€à‹[ëXùõ‹õJYHù[
+H¬à€€ú›XùHY»›]KôXùÀôö[ô
+][HOà][KöYOOHY
+Hàù[¬à‹[ì[Ÿ[
+Xù»	—Y]Xù	»à	–YXù	Àõ‹õH€\‹œHôõ‹õHàYHôXùõ‹õHèÇàXô[ìò[YO[ú]YHôXùò[YHàô\]Z\ôYX^[ô›HåLàò[YOHâŸ\ÿ XùÀõò[YH	… _HàXŸZ€\èHê‹ôY]ÿ\ô»ÿ[àèè€Xô[Çà]à€\‹œHôöY[õ›»èèXô[ì‹öY⁄[ò[[[›[ù[ú]YHôXù‹öY⁄[ò[à\OHõù[Xô\ààZ[èHåà›\HååHàô\]Z\ôYò[YOHâŸXùÀõ‹öY⁄[ò[œ»	…ﬂHèè€Xô[èXô[îô[XZ[ö[ô»õ›œ[ú]YHôXùô[XZ[ö[ô»à\OHõù[Xô\ààZ[èHåà›\HååHàô\]Z\ôYò[YOHâŸXùÀúô[XZ[ö[ô»œ»	…ﬂHèè€Xô[èŸ]èÇàXô[ê›\úô[òﬁOŸ[X›YHôXù›\úô[òﬁHâŸXù»	»\ÿXõY	»à	…ﬂOâÿ›\úô[òﬁS‹[€ú XùÀò›\úô[òﬁH›]KúŸ][ô‹Àõ\››\úô[òﬁJ_O‹Ÿ[X›è€Xô[Çà]à€\‹œHôöY[õ›»èèXô[ê[õùX[[ù\ô\›	O[ú]YHôXù\àà\OHõù[Xô\ààZ[èHåàX^HåLà›\HååHàò[YOHâŸXùÀò\àœ»Hèè€Xô[èXô[ìZ[ö[][H[€ùH^[Y[ù[ú]YHôXùZ[ö[][Hà\OHõù[Xô\ààZ[èHåà›\HååHàò[YOHâŸXùÀõZ[ö[][Hœ»Hèè€Xô[èŸ]èÇà]à€\‹œHôöY[õ›»èèXô[ï\›X[^[Y[ù^O[ú]YHôXù^[Y[ù^Hà\OHõù[Xô\ààZ[èHåHàX^HåÃHàò[YOHâŸXùÀú^[Y[ù^H	…ﬂHàXŸZ€\èHì‹[€ò[èè€Xô[èXô[ï\ôŸ]^[Ÿôà]O[ú]YHôXùYHà\OHô]Hàò[YOHâŸXùÀôYH	…ﬂHèè€Xô[èŸ]èÇà]à€\‹œHùÿ\õö[ô”õ›Hèï\ŸH8†'XZŸH^[Y[ù8†'HYù\à\»\»ÿ]ôYàH[öŸY^[Y[ùôYXŸ\»Hô[XZ[ö[ô»ò[[òŸH]]€X]Xÿ[H[ôŸY\»H\›‹ûHXÿ›\ò]KâŸXù»	»›\úô[òﬁH›^\»ö^Y»õ›X›^[Y[ù\›‹ûKâ»à	…ﬂOŸ]èÇàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èîÿ]ôHXùÿù]€èÇàŸõ‹õOò
+N¬à	
+	ŸXùõ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›‹öY⁄[ò[H
+…
+	ŸXù‹öY⁄[ò[	 Kùò[YN¬à€€ú›ô[XZ[ö[ô»H
+…
+	ŸXùô[XZ[ö[ô… Kùò[YN¬àYà
+ô[XZ[ö[ô»à‹öY⁄[ò[
+H»ÿ\›
+	‘ô[XZ[ö[ô»ò[[òŸHÿ[õõ›^ŸYYH‹öY⁄[ò[[[›[ùâ N»ô]\õé»Bà€€ú›][HH¬àYàXùÀöY‹û\Àúò[ô€UURQ
+
+Kò[YNà	
+	ŸXùò[YI Kùò[YKùö[J
+K‹öY⁄[ò[ô[XZ[ö[ôÀà›\úô[òﬁNà	
+	ŸXù›\úô[òﬁI Kùò[YKYNà	
+	ŸXùYI Kùò[YK\éà
+…
+	ŸXù\â Kùò[YHàZ[ö[][Nà
+…
+	ŸXùZ[ö[][I Kùò[YH^[Y[ù^Nà
+…
+	ŸXù^[Y[ù^I Kùò[YHù[àX›]ôNàùYK‹ôX]Y]àXùÀò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàN¬àô[Y[Xô\ê›\úô[òﬁJ][Kò›\úô[òﬁJN¬à€€ú›[ô^H›]KôXùÀôö[ô[ô^
+OàöYOOH][KöY
+N¬àYà
+[ô^èH
+H›]KôXù÷⁄[ô^HH][N¬à[ŸH›]KôXùÀú\⁄
+][JN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	ŸXù…Àõ›Œà»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€Yò[YNà][Kõò[YK‹öY⁄[ò[ÿ[[›[ùà][Kõ‹öY⁄[ò[ô[XZ[ö[ô◊ÿ[[›[ùà][Kúô[XZ[ö[ôÀ›\úô[òﬁNà][Kò›\úô[òﬁKYWŸ]Nà][KôYHù[[õùX[⁄[ù\ô\›‹ò]Nà][Kò\ãZ[ö[][W‹^[Y[ùà][KõZ[ö[][K^[Y[ùŸ^Nà][Kú^[Y[ù^KX›]ôNàùYHHK»Y\‹ÿYŸNà	—Xù[àÿ]ôY8ß$…»JN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬àN¬üBÇôù[ò›[€à‹[ëXù^[Y[ù
+XùYò[úÿX›[€íYHù[ô\Ÿ]HﬂJH¬à€€ú›^\›[ô»Hò[úÿX›[€íY»›]Kùò[úÿX›[€úÀôö[ô
+OàöYOOHò[úÿX›[€íY
+Hàù[¬à€€ú›XùH›]KôXùÀôö[ô
+][HOà][KöYOOH
+^\›[ôœÀôXùYXùY
+JN¬à€€ú›Xÿ€›[ù»HX›]ôPXÿ€›[ù 
+N¬àYà
+YXù
+Hô]\õé¬àYà
+XXÿ€›[ùÀõ[ô›
+H¬à‹[ì[Ÿ[
+	”XZŸHXù^[Y[ù	À]à€\‹œHôõ‹õHèè]à€\‹œHôúöY[ôSõ›HèêYHò[ö»‹àÿ\⁄Xÿ€›[ùH^[Y[ùX]ô\»úõ€Hö\ú›à]ŸY\»õ›[›\àXù[ôXÿ€›[ùò[[òŸH€‹úôX›èŸ]èèù]€à€\‹œHúö[X\ûHà€ò€X⁄œHò€‹ŸS[Ÿ[
+
+N€‹[êXÿ€›[ùõ‹õJ
+HèêYXÿ€›[ùÿù]€èèŸ]èò
+N¬àô]\õé¬àBà€€ú›Ÿ[X›YXÿ€›[ùH^\›[ôœÀòXÿ€›[ùYXÿ€›[ùÀôö[ô
+HOàKò›\úô[òﬁHOOHXùò›\úô[òﬁJOÀöYXÿ€›[ù÷ÃKöY¬à€€ú›X^ö[ò⁄\[HXùúô[XZ[ö[ô»
+»ù[Xô\ä^\›[ôœÀôXùö[ò⁄\[
+N¬à€€ú››YŸŸ\›Y^[Y[ùT—Hù[Xô\äô\Ÿ]ú^[Y[ùT—
+N¬à€€ú››YŸŸ\›Y[ù\ô\›T—HX]õZ[ä›YŸŸ\›Y^[Y[ùT—\Ÿ
+Xùúô[XZ[ö[ôÀXùò›\úô[òﬁJH
+àù[Xô\äXùò\à
+H»Lå
+N¬à€€ú››YŸŸ\›Yö[ò⁄\[HX]õZ[äX^ö[ò⁄\[úõ€UT—
+X]õX^
+›YŸŸ\›Y^[Y[ùT—H›YŸŸ\›Y[ù\ô\›T—
+KXùò›\úô[òﬁJJN¬à€€ú››YŸŸ\›Y[ù\ô\›Húõ€UT—
+›YŸŸ\›Y[ù\ô\›T—Xùò›\úô[òﬁJN¬à€€ú››YŸŸ\›YXÿ€›[ù›[Húõ€UT—
+›YŸŸ\›Y^[Y[ùT—Xÿ€›[ùÀôö[ô
+Xÿ€›[ùOàXÿ€›[ùöYOOHŸ[X›YXÿ€›[ù
+OÀò›\úô[òﬁHXùò›\úô[òﬁJN¬à‹[ì[Ÿ[
+^\›[ô»»	—Y]Xù^[Y[ù	»à^H	ŸXùõò[Y_Xõ‹õH€\‹œHôõ‹õHàYHôXù^[Y[ùõ‹õHèÇà]à€\‹œHôúöY[ôSõ›Hèîö[ò⁄\[ôYXŸ\»HXùà[ù\ô\›\»ôX€‹ôYù]Ÿ\»õ›ôYXŸH]àH›[X]ö[ô»HŸ[X›YXÿ€›[ù\]\»]»ò[[òŸKèŸ]èÇàXô[î^Húõ€OŸ[X›YHôXù^[Y[ùXÿ€›[ùèâÿXÿ€›[ùŸ[X›‹[€ú Ÿ[X›YXÿ€›[ùò[ŸJ_O‹Ÿ[X›è€Xô[ÇàXô[ï›[X]ö[ô»Xÿ€›[ù‹[àYHôXùXÿ€›[ù›\úô[òﬁHèè‹‹[èè[ú]YHôXù^[Y[ù›[à\OHõù[Xô\ààZ[èHååHà›\HååHàô\]Z\ôYò[YOHâŸ^\›[ôœÀò[[›[ùœ»
+›YŸŸ\›Y^[Y[ùT—à»›YŸŸ\›YXÿ€›[ù›[ù—ö^Y
+äHà	… _Hèè€Xô[Çà]à€\‹œHôöY[õ›»èèXô[îö[ò⁄\[‹[èâŸXùò›\úô[òﬁ_O‹‹[èè[ú]YHôXù^[Y[ùö[ò⁄\[à\OHõù[Xô\ààZ[èHååHàX^Hâ€X^ö[ò⁄\[Hà›\HååHàô\]Z\ôYò[YOHâŸ^\›[ôœÀôXùö[ò⁄\[œ»
+›YŸŸ\›Y^[Y[ùT—à»›YŸŸ\›Yö[ò⁄\[ù—ö^Y
+äHà	… _Hèè€Xô[èXô[í[ù\ô\›»ôY\»‹[èâŸXùò›\úô[òﬁ_O‹‹[èè[ú]YHôXù^[Y[ù[ù\ô\›à\OHõù[Xô\ààZ[èHåà›\HååHàò[YOHâŸ^\›[ôœÀôXù[ù\ô\›œ»
+›YŸŸ\›Y^[Y[ùT—à»›YŸŸ\›Y[ù\ô\›ù—ö^Y
+äHà
+_Hèè€Xô[èŸ]èÇà]àYHôXù^[Y[ù[ùà€\‹œHôúöY[ôSõ›HèèŸ]èÇàXô[ë]O[ú]YHôXù^[Y[ù]Hà\OHô]Hàô\]Z\ôYò[YOHâŸ^\›[ôœÀô]HŸ^J
+_Hèè€Xô[ÇàXô[ìõ›O[ú]YHôXù^[Y[ùõ›HàX^[ô›Hååàò[YOHâŸ\ÿ ^\›[ôœÀõõ›H	… _HàXŸZ€\èHì‹[€ò[èè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èîÿ]ôH^[Y[ùÿù]€èÇàŸõ‹õOò
+N¬à	
+	ŸXù^[Y[ùXÿ€›[ù	 Kùò[YHHŸ[X›YXÿ€›[ù¬à€€ú›ﬁ[ò—Xù^[Y[ùH€›\òŸHOà¬à€€ú›Xÿ€›[ùH›]KòXÿ€›[ùÀôö[ô
+HOàKöYOOH	
+	ŸXù^[Y[ùXÿ€›[ù	 Kùò[YJN¬à	
+	ŸXùXÿ€›[ù›\úô[òﬁI Kù^€€ù[ùHXÿ€›[ùÀò›\úô[òﬁH	…Œ¬à€€ú›ÿ[YP›\úô[òﬁHHXÿ€›[ùÀò›\úô[òﬁHOOHXùò›\úô[òﬁN¬à	
+	ŸXù^[Y[ù[ù	 Kù^€€ù[ùHÿ[YP›\úô[òﬁBà»	‘ÿ[YH›\úô[òﬁNàö[ò⁄\[
+»[ù\ô\›]\›\]X[H›[X]ö[ô»HXÿ€›[ùâ¬àà‹õ‹‹ÀX›\úô[òﬁH^[Y[ùà[ù\àH^X›	ÿXÿ€›[ùÀò›\úô[òﬁH	…ﬂHXö]Y[ôH^X›	ŸXùò›\úô[òﬁ_Hö[ò⁄\[⁄›€àûHH[ô\ãò¬àYà
+ÿ[YP›\úô[òﬁH	âà€›\òŸHOOH	››[	 H¬à	
+	ŸXù^[Y[ùö[ò⁄\[	 Kùò[YHHX]õX^
+
+…
+	ŸXù^[Y[ù›[	 Kùò[YHH
+
+…
+	ŸXù^[Y[ù[ù\ô\›	 Kùò[YH
+JKù—ö^Y
+äN¬àBàN¬à	
+	ŸXù^[Y[ùXÿ€›[ù	 Kõ€ò⁄[ôŸHH
+
+HOàﬁ[ò—Xù^[Y[ù
+	ÿXÿ€›[ù	 N¬à	
+	ŸXù^[Y[ù›[	 Kõ€ö[ú]H
+
+HOàﬁ[ò—Xù^[Y[ù
+	››[	 N¬à	
+	ŸXù^[Y[ù[ù\ô\›	 Kõ€ö[ú]H
+
+HOàﬁ[ò—Xù^[Y[ù
+	››[	 N¬àﬁ[ò—Xù^[Y[ù
+	ÿXÿ€›[ù	 N¬à	
+	ŸXù^[Y[ùõ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›Xÿ€›[ùH›]KòXÿ€›[ùÀôö[ô
+HOàKöYOOH	
+	ŸXù^[Y[ùXÿ€›[ù	 Kùò[YJN¬à€€ú››[H
+…
+	ŸXù^[Y[ù›[	 Kùò[YN¬à€€ú›ö[ò⁄\[H
+…
+	ŸXù^[Y[ùö[ò⁄\[	 Kùò[YN¬à€€ú›[ù\ô\›H
+…
+	ŸXù^[Y[ù[ù\ô\›	 Kùò[YH¬àYà
+XXÿ€›[ù
+Hô]\õé¬àYà
+ö[ò⁄\[àX^ö[ò⁄\[
+»åJH»ÿ\›
+ö[ò⁄\[ÿ[õõ›^ŸYY	€[€ô^JX^ö[ò⁄\[Xùò›\úô[òﬁJ_Kò
+N»ô]\õé»BàYà
+Xÿ€›[ùò›\úô[òﬁHOOHXùò›\úô[òﬁH	âàX]òXú ›[Hö[ò⁄\[H[ù\ô\›
+HàåJH¬àÿ\›
+	—õ‹àHÿ[YH›\úô[òﬁK›[]\›\]X[ö[ò⁄\[\»[ù\ô\›â N¬àô]\õé¬àBà€€ú›]HH	
+	ŸXù^[Y[ù]I Kùò[YN¬àYà
+]HXÿ€›[ùõ‹[ö[ô—]JH»ÿ\›
+⁄€‹ŸH	ÿXÿ€›[ùõ‹[ö[ô—]_H‹à]\àõ‹à\»Xÿ€›[ùò
+N»ô]\õé»BàYà
+^\›[ôœÀôXùY	âà^\›[ôÀôXùö[ò⁄\[
+H¬à€€ú›€XùH›]KôXùÀôö[ô
+][HOà][KöYOOH^\›[ôÀôXùY
+N¬àYà
+€Xù
+H€Xùúô[XZ[ö[ô»HX]õZ[ä€Xùõ‹öY⁄[ò[€Xùúô[XZ[ö[ô»
+»^\›[ôÀôXùö[ò⁄\[
+N¬àBàXùúô[XZ[ö[ô»HX]õX^
+Xùúô[XZ[ö[ô»Hö[ò⁄\[
+N¬à€€ú›ò[úÿX›[€àH¬àYà^\›[ôœÀöY‹û\Àúò[ô€UURQ
+
+K\Nà	Ÿ^[úŸIÀ[[›[ùà›[›\úô[òﬁNàXÿ€›[ùò›\úô[òﬁKàÿ]Y€‹ûNà	—Xù	ÀZYûNàYò][\ú€€ä
+KàXÿ€›[ùYàXÿ€›[ùöYXÿ€›[ùàXÿ€›[ùõò[YK–Xÿ€›[ùYà	…À–[[›[ùàù[XùYàXùöYàXùö[ò⁄\[àö[ò⁄\[Xù[ù\ô\›à[ù\ô\›ôX›\úö[ô“][RYà	…ÀôX›\úö[ô”[€ùà	…À]Kàõ›Nà	
+	ŸXù^[Y[ùõ›I Kùò[YKùö[J
+K‹ôX]Y]à^\›[ôœÀò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàN¬à€€ú›[ô^H›]Kùò[úÿX›[€úÀôö[ô[ô^
+OàöYOOHò[úÿX›[€ãöY
+N¬àYà
+[ô^èH
+H›]Kùò[úÿX›[€ú÷⁄[ô^HHò[úÿX›[€é¬à[ŸH›]Kùò[úÿX›[€úÀú\⁄
+ò[úÿX›[€äN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	›ò[úÿX›[€ú…Àõ›Œàò[úÿX›[€îõ› ò[úÿX›[€äHK»Y\‹ÿYŸNà	€[€ô^Jö[ò⁄\[Xùò›\úô[òﬁJ_H€õÿ⁄ŸYŸôàXù8ß$ÿŸ[Xúò]NàùYHJN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬àN¬üBÇò\ﬁ[ò»ù[ò›[€à\ò⁄]ôQXù
+Y
+H¬à€€ú›XùH›]KôXùÀôö[ô
+][HOà][KöYOOHY
+N¬àYà
+YXù
+Hô]\õé¬àYà
+Xùúô[XZ[ö[ô»àåJH»ÿ\›
+	”€õHH€X\ôYXùÿ[àôH\ò⁄]ôYâ N»ô]\õé»BàYà
+X€€ôö\õJ\ò⁄]ôH	ŸXùõò[Y_O»]»^[Y[ù\›‹ûH⁄[ô[XZ[ãò
+JHô]\õé¬àXùòX›]ôHHò[ŸN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	ŸXù…Àõ›Œà»YàXùöY›\ŸZ€⁄Yà›\ŸZ€Yò[YNàXùõò[YK‹öY⁄[ò[ÿ[[›[ùàXùõ‹öY⁄[ò[ô[XZ[ö[ô◊ÿ[[›[ùàXùúô[XZ[ö[ôÀ›\úô[òﬁNàXùò›\úô[òﬁKYWŸ]NàXùôYHù[[õùX[⁄[ù\ô\›‹ò]NàXùò\ãZ[ö[][W‹^[Y[ùàXùõZ[ö[][K^[Y[ùŸ^NàXùú^[Y[ù^KX›]ôNàò[ŸHHK»€‹ŸNàò[ŸKY\‹ÿYŸNà	—Xù\ò⁄]ôY0≠»Ÿ[€ôHI»JN¬üBÇôù[ò›[€à‹[ë€ÿ[õ‹õJYHù[ô\Ÿ]HﬂJH¬à€€ú›€ÿ[HY»›]Kô€ÿ[Àôö[ô
+][HOà][KöYOOHY
+Hàù[¬à‹[ì[Ÿ[
+€ÿ[»	—Y]€ÿ[	»à	–Yÿ]ö[ô‹»€ÿ[	Àõ‹õH€\‹œHôõ‹õHàYHô€ÿ[õ‹õHèÇàXô[ìò[YO[ú]YHô€ÿ[ò[YHàô\]Z\ôYX^[ô›HåLàò[YOHâŸ\ÿ €ÿ[Àõò[YHô\Ÿ]õò[YH	… _HàXŸZ€\èHë[Y\ôŸ[òﬁHù[ô»òXÿ][€àèè€Xô[Çà]à€\‹œHôöY[õ›»èèXô[ï\ôŸ][[›[ù[ú]YHô€ÿ[\ôŸ]à\OHõù[Xô\ààZ[èHååHà›\HååHàô\]Z\ôYò[YOHâŸ€ÿ[Àù\ôŸ]œ»ô\Ÿ]ù\ôŸ]œ»	…ﬂHèè€Xô[èXô[ê›\úô[òﬁOŸ[X›YHô€ÿ[›\úô[òﬁHâŸ€ÿ[»	»\ÿXõY	»à	…ﬂOâÿ›\úô[òﬁS‹[€ú €ÿ[Àò›\úô[òﬁHô\Ÿ]ò›\úô[òﬁH›]KúŸ][ô‹Àõ\››\úô[òﬁJ_O‹Ÿ[X›è€Xô[èŸ]èÇà	Ÿ€ÿ[»]à€\‹œHôúöY[ôSõ›Hèê[ôXYHô\Ÿ\ùôYàèâ€[€ô^J€ÿ[úÿ]ôY€ÿ[ò›\úô[òﬁJ_Oÿèãà\ŸH8†'Yÿ]ö[ô¯†'H€àH€ÿ[ÿ\ô€»]ô\ûH⁄[ôŸH\»H]H[ô\›‹ûKà›\úô[òﬁH›^\»ö^Y»õ›X›]\›‹ûKèŸ]èòàXô[ê[ôXYHÿ]ôY
+‹[€ò[
+O[ú]YHô€ÿ[›\ù[ô»à\OHõù[Xô\ààZ[èHåà›\HååHàò[YOHâ‹ô\Ÿ]úÿ]ôYHèè€Xô[òBàXô[ï\ôŸ]]O[ú]YHô€ÿ[YHà\OHô]Hàò[YOHâŸ€ÿ[ÀôYHô\Ÿ]ôYH	…ﬂHèè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èîÿ]ôH€ÿ[ÿù]€èÇàŸõ‹õOò
+N¬à	
+	Ÿ€ÿ[õ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›][HH¬àYà€ÿ[ÀöY‹û\Àúò[ô€UURQ
+
+Kò[YNà	
+	Ÿ€ÿ[ò[YI Kùò[YKùö[J
+K\ôŸ]à
+…
+	Ÿ€ÿ[\ôŸ]	 Kùò[YKàÿ]ôYà€ÿ[»€ÿ[úÿ]ôYà
+…
+	Ÿ€ÿ[›\ù[ô… Kùò[YH›\úô[òﬁNà	
+	Ÿ€ÿ[›\úô[òﬁI Kùò[YKàYNà	
+	Ÿ€ÿ[YI Kùò[YKX›]ôNàùYK‹ôX]Y]à€ÿ[Àò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàN¬à€€ú›Y]öX‹»H[€ô^SY]öX‹ 
+N¬àYà
+Y€ÿ[	âà\Ÿ
+][Kúÿ]ôY][Kò›\úô[òﬁJHàX]õX^
+Y]öX‹Àòÿ\⁄T—HY]öX‹Àô€ÿ[ÿ]ôYT—
+H
+»åJH¬àÿ\›
+	–Y‹à€‹úôX›HXÿ€›[ù€[ô»\»ÿ]ö[ô»ö\ú›â N¬àô]\õé¬àBàYà
+][Kúÿ]ôYà][Kù\ôŸ]	âàX€€ôö\õJ	‘ÿ]ôY\»Xõ›ôHH\ôŸ]àŸY\][û]ÿ^O… JHô]\õé¬àô[Y[Xô\ê›\úô[òﬁJ][Kò›\úô[òﬁJN¬à€€ú›[ô^H›]Kô€ÿ[Àôö[ô[ô^
+»OàÀöYOOH][KöY
+N¬àYà
+[ô^èH
+H›]Kô€ÿ[÷⁄[ô^HH][N¬à[ŸH›]Kô€ÿ[Àú\⁄
+][JN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	Ÿ€ÿ[…Àõ›Œà»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€Yò[YNà][Kõò[YK\ôŸ]à][Kù\ôŸ]ÿ]ôYà][Kúÿ]ôY›\úô[òﬁNà][Kò›\úô[òﬁKYWŸ]Nà][KôYHù[X›]ôNàùYHHK»Y\‹ÿYŸNà	—€ÿ[ÿ]ôY8ß$…ÀŸ[Xúò]NàY€ÿ[JN¬àN¬üBÇôù[ò›[€à‹ôX]Q[Y\ôŸ[òﬁQ€ÿ[
+
+H¬à€€ú›\‹Ÿ[ùX[’T—HÿöôX›ô[ùöY\ ›]KòùYŸ] Kôö[\ä
+ÿÿ]Y€‹ûWJHOàT‘—SïPS––UQ”‘íQTÀö[ò€Y\ ÿ]Y€‹ûJJKúôYXŸJ
+›[KÀùYŸ]JHOà›[H
+»\Ÿ
+ùYŸ]ò[[›[ùùYŸ]ò›\úô[òﬁJK
+N¬à‹[ë€ÿ[õ‹õJù[»ò[YNà	—[Y\ôŸ[òﬁHù[ô	À\ôŸ]àX]úõ›[ô
+úõ€UT—
+\‹Ÿ[ùX[’T—
+àÀ›]KúŸ][ô‹Àòò\ŸJH
+àL
+H»L›\úô[òﬁNà›]KúŸ][ô‹Àòò\ŸHJN¬üBÇôù[ò›[€à‹[ë€ÿ[€€ùöXù][€ä€ÿ[Y€€ùöXù][€íYHù[ô\Ÿ]HﬂJH¬à€€ú›€ÿ[H›]Kô€ÿ[Àôö[ô
+][HOà][KöYOOH€ÿ[Y
+N¬à€€ú›^\›[ô»H€€ùöXù][€íY»›]Kò€€ùöXù][€úÀôö[ô
+][HOà][KöYOOH€€ùöXù][€íY
+Hàù[¬àYà
+Y€ÿ[
+Hô]\õé¬à€€ú››YŸŸ\›Y[[›[ùHX]õZ[äX]õX^
+€ÿ[ù\ôŸ]H€ÿ[úÿ]ôY
+Kúõ€UT—
+ù[Xô\äô\Ÿ]ò[[›[ùT—
+K€ÿ[ò›\úô[òﬁJJN¬à€€ú››YŸŸ\›YXÿ€›[ùHX›]ôPXÿ€›[ù 
+Kôö[ô
+Xÿ€›[ùOàXÿ€›[ùò›\úô[òﬁHOOH€ÿ[ò›\úô[òﬁJOÀöY	…Œ¬à‹[ì[Ÿ[
+^\›[ô»»	—Y]€ÿ[ÿ]ö[ô…»àY»	Ÿ€ÿ[õò[Y_Xõ‹õH€\‹œHôõ‹õHàYHô€ÿ[€€ùöXù][€ëõ‹õHèÇà]à€\‹œHôúöY[ôSõ›Hèï\»ô\Ÿ\ùô\»[€ô^H[ôXYH[[à[àXÿ€›[ùà]Ÿ\»õ›‹ôX]H^òHÿ\⁄‹à›XõKX€›[ùô]€‹ùèŸ]èÇàXô[ê[[›[ù	Ÿ€ÿ[ò›\úô[òﬁ_O[ú]YHô€ÿ[€€ùöXù][€ê[[›[ùà\OHõù[Xô\ààZ[èHååHà›\HååHàô\]Z\ôYò[YOHâŸ^\›[ôœÀò[[›[ùœ»
+›YŸŸ\›Y[[›[ùà»›YŸŸ\›Y[[›[ùù—ö^Y
+äHà	… _Hèè€Xô[ÇàXô[ï⁄\ôH\»][»Ÿ[X›YHô€ÿ[€€ùöXù][€êXÿ€›[ùèè‹[€àò[YOHàèìõ›\‹⁄Y€ôY»€ôHXÿ€›[ù€‹[€èâÿX›]ôPXÿ€›[ù 
+KõX\
+Xÿ€›[ùOà‹[€àò[YOHâÿXÿ€›[ùöYHèâŸ\ÿ Xÿ€›[ùõò[YJ_H0≠»	ÿXÿ€›[ùò›\úô[òﬁ_O€‹[€èò
+Köõ⁄[ä	… _O‹Ÿ[X›è€Xô[ÇàXô[ë]O[ú]YHô€ÿ[€€ùöXù][€ë]Hà\OHô]Hàô\]Z\ôYò[YOHâŸ^\›[ôœÀô]HŸ^J
+_Hèè€Xô[ÇàXô[ìõ›O[ú]YHô€ÿ[€€ùöXù][€ìõ›HàX^[ô›Hååàò[YOHâŸ\ÿ ^\›[ôœÀõõ›H	… _HàXŸZ€\èHì‹[€ò[èè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èîÿ]ôH€€ùöXù][€èÿù]€èÇàŸõ‹õOò
+N¬à	
+	Ÿ€ÿ[€€ùöXù][€êXÿ€›[ù	 Kùò[YHH^\›[ôœÀòXÿ€›[ùY›YŸŸ\›YXÿ€›[ù¬à	
+	Ÿ€ÿ[€€ùöXù][€ëõ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›[[›[ùH
+…
+	Ÿ€ÿ[€€ùöXù][€ê[[›[ù	 Kùò[YN¬à€€ú›Y]öX‹»H[€ô^SY]öX‹ 
+N¬à€€ú›^\›[ô’T—H^\›[ô»»\Ÿ
+^\›[ôÀò[[›[ù^\›[ôÀò›\úô[òﬁJHà¬à€€ú›]òZ[XõU‘ô\Ÿ\ùôUT—HX]õX^
+Y]öX‹Àòÿ\⁄T—H
+Y]öX‹Àô€ÿ[ÿ]ôYT—H^\›[ô’T—
+JN¬àYà
+\Ÿ
+[[›[ù€ÿ[ò›\úô[òﬁJHà]òZ[XõU‘ô\Ÿ\ùôUT—
+»åJH¬àÿ\›
+€õH	ÿò\ŸS[€ô^J]òZ[XõU‘ô\Ÿ\ùôUT—
+_H\»›\úô[ùHúôYH»ô\Ÿ\ùôKò
+N¬àô]\õé¬àBàYà
+^\›[ô H€ÿ[úÿ]ôYHX]õX^
+€ÿ[úÿ]ôYH^\›[ôÀò[[›[ù
+N¬à€ÿ[úÿ]ôY
+œH[[›[ù¬à€€ú›][HH¬àYà^\›[ôœÀöY‹û\Àúò[ô€UURQ
+
+K€ÿ[Yà€ÿ[öYàXÿ€›[ùYà	
+	Ÿ€ÿ[€€ùöXù][€êXÿ€›[ù	 Kùò[YK[[›[ù›\úô[òﬁNà€ÿ[ò›\úô[òﬁKà]Nà	
+	Ÿ€ÿ[€€ùöXù][€ë]I Kùò[YKõ›Nà	
+	Ÿ€ÿ[€€ùöXù][€ìõ›I Kùò[YKùö[J
+Kà‹ôX]Y]à^\›[ôœÀò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàN¬à€€ú›[ô^H›]Kò€€ùöXù][€úÀôö[ô[ô^
+»OàÀöYOOH][KöY
+N¬àYà
+[ô^èH
+H›]Kò€€ùöXù][€ú÷⁄[ô^HH][N¬à[ŸH›]Kò€€ùöXù][€úÀú\⁄
+][JN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	Ÿ€ÿ[ÿ€€ùöXù][€ú…Àõ›Œà»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€Y€ÿ[⁄Yà][Kô€ÿ[YXÿ€›[ù⁄Yà][KòXÿ€›[ùYù[\Ÿ\ó⁄Yà›\úô[ù\Ÿ\ãöY[[›[ùà][Kò[[›[ù›\úô[òﬁNà][Kò›\úô[òﬁK]Nà][Kô]Kõ›Nà][Kõõ›Hù[HK»Y\‹ÿYŸNà	€[€ô^J[[›[ù€ÿ[ò›\úô[òﬁJ_H€‹Ÿ\à»	Ÿ€ÿ[õò[Y_H8ß$ÿŸ[Xúò]NàùYHJN¬àN¬üBÇôù[ò›[€à‹[ë€ÿ[\›‹ûJ€ÿ[Y
+H¬à€€ú›€ÿ[H›]Kô€ÿ[Àôö[ô
+][HOà][KöYOOH€ÿ[Y
+N¬àYà
+Y€ÿ[
+Hô]\õé¬à€€ú›€€ùöXù][€ú»H›]Kò€€ùöXù][€úÀôö[\ä][HOà][Kô€ÿ[YOOH€ÿ[Y
+Kú€‹ù
+
+KäHOà
+ãô]H
+»ãò‹ôX]Y]
+Kõÿÿ[P€€\\ôJKô]H
+»Kò‹ôX]Y]
+JN¬à‹[ì[Ÿ[
+	Ÿ€ÿ[õò[Y_H\›‹ûX]à€\‹œHôúöY[ôSõ›Hèê›\úô[ùô\Ÿ\ùôY›[àèâ€[€ô^J€ÿ[úÿ]ôY€ÿ[ò›\úô[òﬁJ_Oÿèãà›\ù[ô»ÿ]ö[ô‹»\ôH[ò€YY[àH›[]ô[àYà^HôY]H\»\›‹ûKèŸ]èâÿ€€ùöXù][€úÀõ[ô›»]à€\‹œHú›][Y[ùèâÿ€€ùöXù][€úÀõX\
+][HOà]à€\‹œHú›][Y[ùõ›»èè[YOâŸ\ÿ ][Kô]J_O›[YOè]èèèâŸ\ÿ ][Kõõ›H	—€ÿ[ÿ]ö[ô… _Oÿèè]à€\‹œHõY]HèâŸ\ÿ Xÿ€›[ùò[YJ][KòXÿ€›[ùY
+H	”õ»Xÿ€›[ù\‹⁄Y€ôY	 _OŸ]èè]à€\‹œHòÿ\ôX›[€ú»èèù]€à€\‹œHõ[ö–ùàà€ò€X⁄œHõ‹[ë€ÿ[€€ùöXù][€ä	…Ÿ€ÿ[öYIÀ	…⁄][KöYI HèëY]ÿù]€èèù]€à€\‹œHô[ôŸ\ì[ö»à€ò€X⁄œHô[]Q€ÿ[€€ùöXù][€ä	…⁄][KöYI Hèë[]Oÿù]€èèŸ]èèŸ]èè]à€\‹œHú›][Y[ùò[YHèè›õ€ôœä»	€[€ô^J][Kò[[›[ù][Kò›\úô[òﬁJ_O‹›õ€ôœè‹[èúô\Ÿ\ùôY‹‹[èèŸ]èèŸ]èò
+Köõ⁄[ä	… _OŸ]èòà	œ]à€\‹œHòÿ\ô[ùà›[OHõX\ô⁄[ã]‹åLúèìõ»]Y€€ùöXù][€ú»Y]èŸ]èâﬂOù]€à€\‹œHúö[X\ûH⁄YHà›[OHõX\ô⁄[ã]‹åLúà€ò€X⁄œHõ‹[ë€ÿ[€€ùöXù][€ä	…Ÿ€ÿ[öYI HèªÔ"»Yÿ]ö[ôœÿù]€èò
+N¬üBÇò\ﬁ[ò»ù[ò›[€à[]Q€ÿ[€€ùöXù][€äY
+H¬à€€ú›€€ùöXù][€àH›]Kò€€ùöXù][€úÀôö[ô
+][HOà][KöYOOHY
+N¬àYà
+X€€ùöXù][€àX€€ôö\õJ	—[]H\»€ÿ[€€ùöXù][€è… JHô]\õé¬à€€ú›€ÿ[H›]Kô€ÿ[Àôö[ô
+][HOà][KöYOOH€€ùöXù][€ãô€ÿ[Y
+N¬àYà
+€ÿ[
+H€ÿ[úÿ]ôYHX]õX^
+€ÿ[úÿ]ôYH€€ùöXù][€ãò[[›[ù
+N¬à›]Kò€€ùöXù][€ú»H›]Kò€€ùöXù][€úÀôö[\ä][HOà][KöYOOHY
+N¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	Ÿ[]IÀXõNà	Ÿ€ÿ[ÿ€€ùöXù][€ú…ÀYK»€‹ŸNàò[ŸKY\‹ÿYŸNà	–€€ùöXù][€à[]Y	»JN¬üBÇò\ﬁ[ò»ù[ò›[€à\ò⁄]ôQ€ÿ[
+Y
+H¬à€€ú›€ÿ[H›]Kô€ÿ[Àôö[ô
+][HOà][KöYOOHY
+N¬àYà
+Y€ÿ[X€€ôö\õJ\ò⁄]ôH	Ÿ€ÿ[õò[Y_O»ô\Ÿ\ùôY[€ô^H⁄[ô]\õà»‹[ôXõHÿ\⁄⁄[H]»\›‹ûHô[XZ[úÀò
+JHô]\õé¬à€ÿ[òX›]ôHHò[ŸN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	Ÿ€ÿ[…Àõ›Œà»Yà€ÿ[öY›\ŸZ€⁄Yà›\ŸZ€Yò[YNà€ÿ[õò[YK\ôŸ]à€ÿ[ù\ôŸ]ÿ]ôYà€ÿ[úÿ]ôY›\úô[òﬁNà€ÿ[ò›\úô[òﬁKYWŸ]Nà€ÿ[ôYHù[X›]ôNàò[ŸHHK»€‹ŸNàò[ŸKY\‹ÿYŸNà	—€ÿ[\ò⁄]ôY	»JN¬üBÇôù[ò›[€à‹[îôX›\úö[ô—õ‹õJYHù[
+H¬à€€ú›][HHY»›]KúôX›\úö[ôÀôö[ô
+[ùûHOà[ùûKöYOOHY
+Hàù[¬à€€ú›⁄[ôH][OÀö⁄[ô	Ÿ^[úŸIŒ¬à‹[ì[Ÿ[
+][H»	—Y]ôY›[\à][I»à	–YôY›[\à][IÀõ‹õH€\‹œHôõ‹õHàYHúôX›\úö[ô—õ‹õHèÇà]à€\‹œHôúöY[ôSõ›HèîŸ]\»\€òŸKàXX⁄[€ù\€€ôö\õH€àŸ^H»‹ôX]HHôX[]Y[ùûKèŸ]èÇàXô[ìò[YO[ú]YHúôX›\úö[ô”ò[YHàô\]Z\ôYX^[ô›Héàò[YOHâŸ\ÿ ][OÀõò[YH	… _HàXŸZ€\èHîÿ[\ûH»ô[ù»[ù\õô]èè€Xô[Çà]à€\‹œHôöY[õ›»èèXô[ï\OŸ[X›YHúôX›\úö[ô“⁄[ôèè‹[€àò[YOHö[ò€€YHèí[ò€€YO€‹[€èè‹[€àò[YOHô^[úŸHèë^[úŸO€‹[€èè‹Ÿ[X›è€Xô[èXô[ë^HXX⁄[€ù[ú]YHúôX›\úö[ô—^Hà\OHõù[Xô\ààZ[èHåHàX^HåÃHàô\]Z\ôYò[YOHâ⁄][OÀô^H_Hèè€Xô[èŸ]èÇà]à€\‹œHôöY[õ›»èèXô[ê[[›[ù[ú]YHúôX›\úö[ô–[[›[ùà\OHõù[Xô\ààZ[èHååHà›\HååHàô\]Z\ôYò[YOHâ⁄][OÀò[[›[ùœ»	…ﬂHèè€Xô[èXô[ê›\úô[òﬁOŸ[X›YHúôX›\úö[ô–›\úô[òﬁHèâÿ›\úô[òﬁS‹[€ú ][OÀò›\úô[òﬁH›]KúŸ][ô‹Àõ\››\úô[òﬁJ_O‹Ÿ[X›è€Xô[èŸ]èÇàXô[êÿ]Y€‹ûOŸ[X›YHúôX›\úö[ô–ÿ]Y€‹ûHèè‹Ÿ[X›è€Xô[ÇàXô[êXÿ€›[ùŸ[X›YHúôX›\úö[ô–Xÿ€›[ùèâÿXÿ€›[ùŸ[X›‹[€ú ][OÀòXÿ€›[ùY	… _O‹Ÿ[X›è€Xô[ÇàXô[îZY»ôXŸZ]ôYûOŸ[X›YHúôX›\úö[ô‘ZYûHèâ‹[‹S‹[€ú ][OÀúZYûH	‘⁄\ôY	 _O‹Ÿ[X›è€Xô[ÇàXô[ìõ›O[ú]YHúôX›\úö[ô”õ›HàX^[ô›Hååàò[YOHâŸ\ÿ ][OÀõõ›H	… _HàXŸZ€\èHì‹[€ò[èè€Xô[Çàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èîÿ]ôH[€ùH][Oÿù]€èÇàŸõ‹õOò
+N¬à	
+	‹ôX›\úö[ô“⁄[ô	 Kùò[YHH⁄[ô¬à	
+	‹ôX›\úö[ô‘ZYûI Kùò[YHH][OÀúZYûH	‘⁄\ôY	Œ¬à	
+	‹ôX›\úö[ô–Xÿ€›[ù	 Kùò[YHH][OÀòXÿ€›[ùY	…Œ¬à€€ú›€€ôöY›\ôTôX›\úö[ô»H
+
+HOà¬à€€ú››\úô[ù⁄[ôH	
+	‹ôX›\úö[ô“⁄[ô	 Kùò[YN¬à€€ú›ÿ]Y€‹öY\»H›\úô[ù⁄[ôOOH	⁄[ò€€YI»»Sê””QW––UQ”‘íQT»àVSî—W––UQ”‘íQTÀõX\
+
+ÿÿ]Y€‹ûWJHOàÿ]Y€‹ûJN¬à€€ú›Ÿ[X›YH][OÀòÿ]Y€‹ûH	âà
+][Kö⁄[ôOOH›\úô[ù⁄[ô
+H»][Kòÿ]Y€‹ûHà›\úô[ù⁄[ôOOH	⁄[ò€€YI»»	‘ÿ[\ûI»à	–ö[…Œ¬à	
+	‹ôX›\úö[ô–ÿ]Y€‹ûI Kö[õô\íSHÿ]Y€‹öY\ÀõX\
+ÿ]Y€‹ûHOà‹[€èâŸ\ÿ ÿ]Y€‹ûJ_O€‹[€èò
+Köõ⁄[ä	… N¬à	
+	‹ôX›\úö[ô–ÿ]Y€‹ûI Kùò[YHHŸ[X›Y¬àN¬à€€ú›ﬁ[ò‘ôX›\úö[ô–›\úô[òﬁHH
+
+HOà¬à€€ú›Xÿ€›[ùH›]KòXÿ€›[ùÀôö[ô
+HOàKöYOOH	
+	‹ôX›\úö[ô–Xÿ€›[ù	 Kùò[YJN¬à	
+	‹ôX›\úö[ô–›\úô[òﬁI Kô\ÿXõYHHXXÿ€›[ù¬àYà
+Xÿ€›[ù
+H	
+	‹ôX›\úö[ô–›\úô[òﬁI Kùò[YHHXÿ€›[ùò›\úô[òﬁN¬àN¬à	
+	‹ôX›\úö[ô“⁄[ô	 Kõ€ò⁄[ôŸHH€€ôöY›\ôTôX›\úö[ôŒ¬à	
+	‹ôX›\úö[ô–Xÿ€›[ù	 Kõ€ò⁄[ôŸHHﬁ[ò‘ôX›\úö[ô–›\úô[òﬁN¬à€€ôöY›\ôTôX›\úö[ô 
+N¬àﬁ[ò‘ôX›\úö[ô–›\úô[òﬁJ
+N¬à	
+	‹ôX›\úö[ô—õ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›Xÿ€›[ùH›]KòXÿ€›[ùÀôö[ô
+HOàKöYOOH	
+	‹ôX›\úö[ô–Xÿ€›[ù	 Kùò[YJN¬à€€ú›ôX›\úö[ô“][HH¬àYà][OÀöY‹û\Àúò[ô€UURQ
+
+Kò[YNà	
+	‹ôX›\úö[ô”ò[YI Kùò[YKùö[J
+K⁄[ôà	
+	‹ôX›\úö[ô“⁄[ô	 Kùò[YKà[[›[ùà
+…
+	‹ôX›\úö[ô–[[›[ù	 Kùò[YK›\úô[òﬁNàXÿ€›[ùÀò›\úô[òﬁH	
+	‹ôX›\úö[ô–›\úô[òﬁI Kùò[YKàÿ]Y€‹ûNà	
+	‹ôX›\úö[ô–ÿ]Y€‹ûI Kùò[YKZYûNà	
+	‹ôX›\úö[ô‘ZYûI Kùò[YKXÿ€›[ùYàXÿ€›[ùÀöY	…Àà^Nà
+…
+	‹ôX›\úö[ô—^I Kùò[YKõ›Nà	
+	‹ôX›\úö[ô”õ›I Kùò[YKùö[J
+KX›]ôNàùYKà‹ôX]Y]à][OÀò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàN¬àô[Y[Xô\ê›\úô[òﬁJôX›\úö[ô“][Kò›\úô[òﬁJN¬à€€ú›[ô^H›]KúôX›\úö[ôÀôö[ô[ô^
+[ùûHOà[ùûKöYOOHôX›\úö[ô“][KöY
+N¬àYà
+[ô^èH
+H›]KúôX›\úö[ô÷⁄[ô^HHôX›\úö[ô“][N¬à[ŸH›]KúôX›\úö[ôÀú\⁄
+ôX›\úö[ô“][JN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	‹ôX›\úö[ô◊⁄][\…Àõ›Œà»YàôX›\úö[ô“][KöY›\ŸZ€⁄Yà›\ŸZ€Y‹ôX]YÿûNà›\úô[ù\Ÿ\ãöYò[YNàôX›\úö[ô“][Kõò[YK⁄[ôàôX›\úö[ô“][Kö⁄[ô[[›[ùàôX›\úö[ô“][Kò[[›[ù›\úô[òﬁNàôX›\úö[ô“][Kò›\úô[òﬁKÿ]Y€‹ûNàôX›\úö[ô“][Kòÿ]Y€‹ûKZYÿûNàôX›\úö[ô“][KúZYûKXÿ€›[ù⁄YàôX›\úö[ô“][KòXÿ€›[ùYù[^W€Ÿó€[€ùàôX›\úö[ô“][Kô^Kõ›NàôX›\úö[ô“][Kõõ›Hù[X›]ôNàùYHHK»Y\‹ÿYŸNà	”[€ùH⁄X⁄€\›\]Y8ß$…»JN¬àN¬üBÇôù[ò›[€à€€ôö\õTôX›\úö[ô Y
+H¬à€€ú›][HH›]KúôX›\úö[ôÀôö[ô
+[ùûHOà[ùûKöYOOHY
+N¬àYà
+Z][JHô]\õé¬à€€ú›\›^HHô]»]Jô]»]J
+KôŸ]ù[YX\ä
+Kô]»]J
+KôŸ][€ù
+
+H
+»K
+KôŸ]]J
+N¬à€€ú›]HH	€[€ùŸ^J
+_KI‘›ö[ô X]õZ[ä][Kô^K\›^JJKúY›\ù
+ã	Ã	 _X¬à‹[ïò[úÿX›[€ä][Kö⁄[ôù[»[[›[ùà][Kò[[›[ù›\úô[òﬁNà][Kò›\úô[òﬁKÿ]Y€‹ûNà][Kòÿ]Y€‹ûKZYûNà][KúZYûKXÿ€›[ùYà][KòXÿ€›[ùY]Kõ›Nà][Kõõ›KôX›\úö[ô“][RYà][KöYôX›\úö[ô”[€ùà[€ù›\ù
+
+HJN¬üBÇò\ﬁ[ò»ù[ò›[€à\ò⁄]ôTôX›\úö[ô Y
+H¬à€€ú›][HH›]KúôX›\úö[ôÀôö[ô
+[ùûHOà[ùûKöYOOHY
+N¬àYà
+Z][HX€€ôö\õJ\ò⁄]ôH	⁄][Kõò[Y_O»\›€€ôö\õX][€ú»ô[XZ[ãò
+JHô]\õé¬à][KòX›]ôHHò[ŸN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	›\Ÿ\ù	ÀXõNà	‹ôX›\úö[ô◊⁄][\…Àõ›Œà»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€Y‹ôX]YÿûNà›\úô[ù\Ÿ\ãöYò[YNà][Kõò[YK⁄[ôà][Kö⁄[ô[[›[ùà][Kò[[›[ù›\úô[òﬁNà][Kò›\úô[òﬁKÿ]Y€‹ûNà][Kòÿ]Y€‹ûKZYÿûNà][KúZYûKXÿ€›[ù⁄Yà][KòXÿ€›[ùYù[^W€Ÿó€[€ùà][Kô^Kõ›Nà][Kõõ›Hù[X›]ôNàò[ŸHHK»€‹ŸNàò[ŸKY\‹ÿYŸNà	‘ôY›[\à][H\ò⁄]ôY	»JN¬üBÇôù[ò›[€à‹[êùYŸ]
+
+H¬à€€ú›Yò][ÿ]Y€‹öY\»H…“›\⁄[ô…À	—õ€Ÿ	À	’ò[ú‹‹ù	À	–ö[…À	“X[	À	‘⁄‹[ô…À	—[ù\ùZ[õY[ù	À	’ò]ô[	À	”›\â◊N¬à€€ú›ÿ]Y€‹öY\»HÀããõô]»Ÿ]
+ÀããôYò][ÿ]Y€‹öY\ÀããìÿöôX›öŸ^\ ›]KòùYŸ] WJWN¬à‹[ì[Ÿ[
+	”[€ùHÿ]Y€‹ûHùYŸ]	Àõ‹õH€\‹œHôõ‹õHàYHòùYŸ]õ‹õHèè]à€\‹œHôúöY[ôSõ›Hèï\ŸH[Z]»›ZYHH	H\‹Ÿ[ùX[»[ôL	Hÿ[ù»ùX⁄Ÿ]ÀàXù[ô€ÿ[\ôŸ]»€€YH\ôX›Húõ€H[ò€€YKèŸ]èâÿÿ]Y€‹öY\ÀõX\
+
+ÿ]Y€‹ûK[ô^
+HOà¬à€€ú›ùYŸ]H›]KòùYŸ]÷ÿÿ]Y€‹ûWH»[[›[ùà›\úô[òﬁNà›]KúŸ][ô‹Àòò\ŸHN¬àô]\õà]à€\‹œHôöY[õ›»èèXô[âŸ\ÿ ÿ]Y€‹ûJ_O[ú]YHòùYŸ][[›[ù	⁄[ô^Hà\OHõù[Xô\ààZ[èHåà›\HååHàò[YOHâÿùYŸ]ò[[›[ùHàô\]Z\ôYè€Xô[èXô[ê›\úô[òﬁOŸ[X›YHòùYŸ]›\úô[òﬁI⁄[ô^Hèâÿ›\úô[òﬁS‹[€ú ùYŸ]ò›\úô[òﬁJ_O‹Ÿ[X›è€Xô[èŸ]èò¬àJKöõ⁄[ä	… _Où]€à€\‹œHúö[X\ûHà\OHú›XõZ]èîÿ]ôHÿ]Y€‹ûHùYŸ]ÿù]€èèŸõ‹õOò
+N¬à	
+	ÿùYŸ]õ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬àÿ]Y€‹öY\Àôõ‹ëXX⁄
+
+ÿ]Y€‹ûK[ô^
+HOà»›]KòùYŸ]÷ÿÿ]Y€‹ûWHH»[[›[ùà
+…
+ùYŸ][[›[ù	⁄[ô^X
+Kùò[YH›\úô[òﬁNà	
+ùYŸ]›\úô[òﬁI⁄[ô^X
+Kùò[YHN»JN¬à€€ú›õ›‹»HÿöôX›ô[ùöY\ ›]KòùYŸ] KõX\
+
+ÿÿ]Y€‹ûKùYŸ]JHOà
+»›\ŸZ€⁄Yà›\ŸZ€Yÿ]Y€‹ûK[[›[ùàùYŸ]ò[[›[ù›\úô[òﬁNàùYŸ]ò›\úô[òﬁHJJN¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	ÿùYŸ]	Àõ›‹»K»Y\‹ÿYŸNà	–ùYŸ]\]Y8ß$…»JN¬àN¬üBÇôù[ò›[€àŸ][ô‹‘õ› 
+H¬à€€ú›õ›»H¬à›\ŸZ€⁄Yà›\ŸZ€Yò\ŸWÿ›\úô[òﬁNà›]KúŸ][ô‹Àòò\ŸK^Y^WŸ^Nà›]KúŸ][ô‹Àú^Y^Q^Kàù[ó€[ŸNà›]KúŸ][ô‹Àôù[ì[ŸKXù‹›ò]YﬁNà›]KúŸ][ô‹ÀôXù›ò]YﬁKà\Ÿ›◊ÿYYà›]KúŸ][ô‹Àúò]\ÀêQQ\Ÿ›◊€]úéà›]KúŸ][ô‹Àúò]\ÀìUîã\Ÿ›◊⁄[úéà›]KúŸ][ô‹Àúò]\ÀíSîãà\›‹‹ùXõWÿòX⁄›\ÿ]à›]KúŸ][ô‹Àõ\›òX⁄›\]ù[à\›‹‹ùXõWÿòX⁄›\‹⁄LçMéà›]KúŸ][ô‹Àõ\›òX⁄›\\⁄ù[àN¬àYà
+›]KõY[Xô\ãúõ€HOOH	€›€ô\â H¬àõ›Àô[XZ[‹›][Y[ù◊Ÿ[òXõYH›]KúŸ][ô‹Àô[XZ[›][Y[ù»OOHùYN¬àõ›Àú›][Y[ù‹ôX⁄\Y[ù›\Ÿ\ó⁄YH›]KúŸ][ô‹Àú›][Y[ùôX⁄\Y[ù\Ÿ\íYù[¬àBàô]\õàõ›Œ¬üBÇôù[ò›[€àô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+H¬à€€ú›õ€›H	
+	Ÿ[XZ[›][Y[ù€‹I N¬à€€ú›ù]€àH	
+	Ÿ[XZ[›][Y[ùX›[€â N¬àYà
+\õ€›Xù]€äHô]\õé¬à€€ú›ôXYHH]\›ô\\ôY›][Y[ù
+ò[ŸJN¬à€€ú›]\›HôXYH]\›ô\\ôY›][Y[ù
+ùYJN¬à€€ú›Xô[H]\›»õ‹õX]]J›][Y[ù][Tò[ôŸJ]\›
+Kôúõ€K»[€ùà	€€ô…ÀYX\éà	€ù[Y\öX…»JHà	…Œ¬àõ€›ö[õô\íSHôXYBà»œì[€ùH[€ô^H›‹ûHôXYO⁄œèâŸ\ÿ Xô[
+_H0≠»X\ﬁHX›\ôKZ[H‹ò\[ô‹[€ò[]Z[YôX€‹ôÀè‹òàà]\›à»œì[€ùH›][Y[ù⁄œèâŸ\ÿ Xô[
+_Hô\\ôY8ß$»0≠»‹[à‹àôYŸ[ô\ò]H][û][YKè‹òàà	œœì[€ùH›][Y[ù⁄œèîô\\ôY]]€X]Xÿ[HYù\àÿ[\ûH\»ôX€‹ôYè‹âŒ¬àù]€ãù^€€ù[ùHôXYH»	”‹[â»à	‘ô]öY]…Œ¬àù]€ãô\ÿXõYHò[ŸN¬àYà
+	
+	€[€ô^T›][Y[ù›]\… JH	
+	€[€ô^T›][Y[ù›]\… Kù^€€ù[ùHôXYH»	€Xô[HôXYXà	–⁄€‹ŸHH\ö[Ÿ	Œ¬üBÇôù[ò›[€àô[ô\ë]TÿYô]T›]\ 
+H¬à€€ú›õ€›H	
+	Ÿ]TÿYô]P€‹I N¬àYà
+\õ€›
+Hô]\õé¬à€€ú›û]\»Hô]»õÿä“î””ãú›ö[ô⁄YûJ›]JWJKú⁄^ôN¬à€€ú›\›òX⁄›\H›]KúŸ][ô‹Àõ\›òX⁄›\]»õ‹õX]]J›]KúŸ][ô‹Àõ\›òX⁄›\]ú€XŸJL
+JHà	…Œ¬à€€ú›YŸQ^\»H\›òX⁄›\»X]ôõ€‹ä
+]Kõõ› 
+HHô]»]J	‹›]KúŸ][ô‹Àõ\›òX⁄›\]ú€XŸJL
+_ULéåå
+KôŸ][YJ
+JH»óÕÃ
+Hà[ôö[ö]N¬à€€ú››]\»HYŸQ^\»HÕH»õ›X›Y€‹HXYH	Ÿ\ÿ \›òX⁄›\
+_H8ß$ÿà	‘ö]ò]HòX⁄›\\»YIŒ¬àõ€›ö[õô\íSHœì›€à[›\à]O⁄œèâ‹›]Kùò[úÿX›[€úÀõ[ô›ù”ÿÿ[T›ö[ô 	Ÿ[ãUT… _HôX€‹ô»0≠»Xõ›]	⁄[X[êû]\ û]\ _H€à\»€ôH0≠»	‹›]\ﬂO‹ò¬àYà
+	
+	€[€ô^PòX⁄›\›]\… JH	
+	€[€ô^PòX⁄›\›]\… Kù^€€ù[ùHYŸQ^\»HÕH»õ›X›Y	€\›òX⁄›\H8ß$ÿà	‘ö]ò]HòX⁄›\YIŒ¬üBÇò\ﬁ[ò»ù[ò›[€àŸŸ€T›][Y[ù[XZ[ 
+H¬àYà
+›]KõY[Xô\ãúõ€HOOH	€›€ô\â H»ÿ\›
+	”€õHH›\ŸZ€›€ô\àÿ[à⁄[ôŸH[XZ[[]ô\ûKâ N»ô]\õé»Bà›]KúŸ][ô‹Àô[XZ[›][Y[ù»H\›]KúŸ][ô‹Àô[XZ[›][Y[ùŒ¬àYà
+›]KúŸ][ô‹Àô[XZ[›][Y[ù H›]KúŸ][ô‹Àú›][Y[ùôX⁄\Y[ù\Ÿ\íYH›\úô[ù\Ÿ\ãöY¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	‹Ÿ][ô‹…Àõ›ŒàŸ][ô‹‘õ› 
+HK¬à€‹ŸNàò[ŸKàY\‹ÿYŸNà›]KúŸ][ô‹Àô[XZ[›][Y[ù»»	”[€ùH›][Y[ù[XZ[\õôY€â»à	”[€ùH›][Y[ù[XZ[]\ŸY	¬àJN¬àYà
+›]KúŸ][ô‹Àô[XZ[›][Y[ù H¬à]ÿZ]ôYúô\⁄›][Y[ù[XZ[›]\ 
+N¬à]ÿZ]õ\⁄›][Y[ù[XZ[]Y]YJùYJN¬àH[ŸH¬àÿ]ôT[ô[ô‘›][Y[ù[XZ[ ◊JN¬à›][Y[ù[XZ[\››]\»H	…Œ¬àô[ô\î›][Y[ù[XZ[Ÿ][ô‹ 
+N¬àBüBÇôù[ò›[€à‹[î›][Y[ù[XZ[[ôõ 
+H¬à‹[ì[Ÿ[
+	”[€ùH›][Y[ù⁄\ö[ô…À]à€\‹œHô[XZ[[ôõ»èÇà]à€\‹œHô[XZ[[ôõ“\õ»èè‹[èëîëQH	ò[\»íUêUO‹‹[èèèîô\\ôY€à\»€ôOÿèè€X[ìõ»Ÿ\\ò]H›][Y[ùö[H\»Ÿ\€õ[ôO‹€X[èŸ]èÇà]à€\‹œHô[XZ[[ôõ‘›\»èÇà]èèOåO⁄Oè‹[èèèîôX€‹ôÿ[\ûOÿèè€X[îÿ]ö[ô»[à[ò€€YH[ùûH⁄]Hÿ[\ûHÿ]Y€‹ûH\»HöYŸŸ\ãè‹€X[è‹‹[èèŸ]èÇà]èèOåè⁄Oè‹[èèèîô]ö[›\»[€ùôX€€Y\»H›‹ûOÿèè€X[îŸYH[€ô^HôXŸZ]ôY[€ô^H‹[ùHZ[H‹ò\‹[ô[ô»\ôX\»[ôH8†$ÃÃ8†$Ãå8†$ÃL›ZYKè‹€X[è‹‹[èèŸ]èÇà]èèOåœ⁄Oè‹[èèèî⁄\ôHHX\ﬁHX›\ôOÿèè€X[ñ[›\à€ôH‹[ú»XZ[€XZ[‹à[õ›\à\⁄]H⁄[\H›[[X\ûHX›\ôH]X⁄Y⁄[à›\‹ùYè‹€X[è‹‹[èèŸ]èÇàŸ]èÇà]à€\‹œHôúöY[ôSõ›HèïH›][Y[ù\»ùZ[€õH⁄[àôYYYúõ€HHôX€‹ô»[ôXYH[à›\àSãà⁄\ö[ô»\»ô]ô\àŸ[ù⁄[[ùx†%[›H⁄€‹ŸHH\[ôôX⁄\Y[ùèŸ]èÇà]à€\‹œHòù]€îõ›»èèù]€à€\‹œHúö[X\ûHà€ò€X⁄œHò€‹ŸS[Ÿ[
+
+N€‹[îô\\ôY[€ùT›][Y[ù
+
+Hèîô]öY]»›][Y[ùÿù]€èèù]€à€\‹œHúŸX€€ô\ûHà€ò€X⁄œHò€‹ŸS[Ÿ[
+
+Hèë€ôOÿù]€èèŸ]èÇàŸ]èò
+N¬üBÇò\ﬁ[ò»ù[ò›[€àÿ]ôTŸ][ô‹ 
+H¬à€€ú›ò]\»H»T—àKQQà
+…
+	‹ò]PQQ	 Kùò[YKUîéà
+…
+	‹ò]SUîâ Kùò[YKSîéà
+…
+	‹ò]RSîâ Kùò[YHN¬à€€ú›^Y^Q^HH
+…
+	‹^Y^Q^I Kùò[YHù[¬àYà
+\ò]\ÀêQQ\ò]\ÀìUîà\ò]\ÀíSîäH»ÿ\›
+	—]ô\ûH^⁄[ôŸHò]H]\›ôH‹ôX]\à[àô\õÀâ N»ô]\õé»BàYà
+^Y^Q^H	âà
+^Y^Q^HH^Y^Q^HàÃJJH»ÿ\›
+	‘ÿ[\ûH^H]\›ôHúõ€HH»ÃKâ N»ô]\õé»Bà›]KúŸ][ô‹Àòò\ŸHH	
+	ÿò\ŸP›\úô[òﬁI Kùò[YN¬à›]KúŸ][ô‹Àú^Y^Q^HH^Y^Q^N¬à›]KúŸ][ô‹Àúò]\»Hò]\Œ¬à]ÿZ]ÿ]ôS‹\ò][€ä»X›[€éà	‹Ÿ][ô‹…Àõ›ŒàŸ][ô‹‘õ› 
+HK»€‹ŸNàò[ŸKY\‹ÿYŸNà	‘Ÿ][ô‹»ﬁ[òŸY8ß$…»JN¬à[ú›\ôUŸ^T€ò\⁄›
+
+N¬üBÇò€€ú›]ZX⁄—^[úŸU\õH
+
+HOà	€ÿÿ][€ãõ‹öY⁄[üI€ÿÿ][€ãú]ò[Y_O‹]ZX⁄œY^[úŸX¬Çôù[ò›[€à⁄‹ù›][ô[
+]õ‹õJH¬àYà
+]õ‹õHOOH	ÿ[ôõ⁄Y	 H¬àô]\õà]à€\‹œHú›\»èÇà]à€\‹œHú›\èè‹[èåO‹‹[èè]èèèí[ú›[›\àSèÿèèì‹[à\»⁄]H[à⁄õ€YK\ŸHHúõ›‹Ÿ\àY[ùH[ô⁄€‹ŸH[ú›[\‹àY»€YHÿ‹ôY[ãè‹èŸ]èèŸ]èÇà]à€\‹œHú›\èè‹[èåè‹‹[èè]èèèì€ôÀ\ô\‹»]»\X€€èÿèèê⁄€‹ŸH8†'Y‹[ô8†'Hõ‹àH\ôX›^[úŸHõ‹õKà[›Hÿ[àòY»]⁄‹ù›]€ù»H€YHÿ‹ôY[ãè‹èŸ]èèŸ]èÇà]à€\‹œHú›\èè‹[èåœ‹‹[èè]èèèî^[‹[€éà]ZX⁄»\ÿèèîŸ][ô‹»8°§àﬁ\›[H8°§àŸ\›\ô\»8°§à]ZX⁄»\8°§à‹[à\8°§à›\àSãàH\ôX›€YK\ÿ‹ôY[à⁄‹ù›]\»›[Hò\›\›õ›]H»Y‹[ôè‹èŸ]èèŸ]èÇàŸ]èò¬àBàô]\õà]à€\‹œHú›\»èÇà]à€\‹œHú›\èè‹[èåO‹‹[èè]èèèê‹ôX]H[à\H⁄‹ù›]ÿèèí[à⁄‹ù›]À‹ôX]H8†'Ÿ»‹[ô8†'HYH‹[àTì»X›[€ã[ô\›HH]ZX⁄»[ö»ô[›Àè‹èŸ]èèŸ]èÇà]à€\‹œHú›\èè‹[èåè‹‹[èè]èèèê⁄€‹ŸHòX⁄»\ÿèèîŸ][ô‹»8°§àXÿŸ\‹⁄Xö[]H8°§à›X⁄8°§àòX⁄»\8°§à›XõH\8°§àŸ»‹[ôè‹èŸ]èèŸ]èÇà]à€\‹œHú›\èè‹[èåœ‹‹[èè]èèèî›^H⁄Y€ôY[èÿèèêH›XõH\⁄[‹[àHö]ò]HY‹[ôõ‹õKàHö\ú›ö\⁄]X^H\⁄»[›H»⁄Y€à[ãè‹èŸ]èèŸ]èÇàŸ]èò¬üBÇôù[ò›[€à‹[î⁄‹ù›][
+]õ‹õHH–[ôõ⁄Y⁄Kù\›
+ò]öYÿ]‹ãù\Ÿ\êYŸ[ù
+H»	ÿ[ôõ⁄Y	»à	⁄\€ôI H¬à‹[ì[Ÿ[
+	—ò\›^[úŸH⁄‹ù›]	À]à€\‹œHú⁄‹ù›]Xú»èèù]€àYHú⁄‹ù›]\€ôHà€\‹œHâ‹]õ‹õHOOH	⁄\€ôI»»	ÿX›]ôI»à	…ﬂHà€ò€X⁄œHú›⁄]⁄⁄‹ù›]Xä	⁄\€ôI HèöT€ôHòX⁄»\ÿù]€èèù]€àYHú⁄‹ù›][ôõ⁄Yà€\‹œHâ‹]õ‹õHOOH	ÿ[ôõ⁄Y	»»	ÿX›]ôI»à	…ﬂHà€ò€X⁄œHú›⁄]⁄⁄‹ù›]Xä	ÿ[ôõ⁄Y	 Hèê[ôõ⁄Yÿù]€èèŸ]èè]àYHú⁄‹ù›][ô[èâ‹⁄‹ù›][ô[
+]õ‹õJ_OŸ]èè]à€\‹œHôõ‹õHà›[OHõX\ô⁄[ã]‹åM\èèXô[ë\ôX›Y‹[ô[öœ[ú]YHú]ZX⁄—^[úŸS[ö»àôXY€õHò[YOHâŸ\ÿ ]ZX⁄—^[úŸU\õ
+
+J_Hèè€Xô[è]à€\‹œHòù]€îõ›»èèù]€à€\‹œHúŸX€€ô\ûH€€\X›à€ò€X⁄œHò€‹T]ZX⁄”[ö 
+Hèê€‹H[öœÿù]€èèù]€à€\‹œHúö[X\ûH€€\X›à€ò€X⁄œHú⁄\ôT]ZX⁄”[ö 
+Hèî⁄\ôOÿù]€èèŸ]èè]à€\‹œHôúöY[ôSõ›Hèï\»\Ÿ\»€õHHŸXú⁄]H[ô[›\à€ôx†&\»ùZ[Z[à⁄‹ù›]ôX]\ô\Àà]›^\»úôYH[ôŸ\»õ›\ŸH⁄]‘èŸ]èèŸ]èò
+N¬üBÇôù[ò›[€à›⁄]⁄⁄‹ù›]Xä]õ‹õJH¬à	
+	‹⁄‹ù›][ô[	 Kö[õô\íSH⁄‹ù›][ô[
+]õ‹õJN¬à	
+	‹⁄‹ù›]\€ôI Kò€\‹”\›ùŸŸ€J	ÿX›]ôIÀ]õ‹õHOOH	⁄\€ôI N¬à	
+	‹⁄‹ù›][ôõ⁄Y	 Kò€\‹”\›ùŸŸ€J	ÿX›]ôIÀ]õ‹õHOOH	ÿ[ôõ⁄Y	 N¬üBÇò\ﬁ[ò»ù[ò›[€à€‹T]ZX⁄”[ö 
+H¬àûH»]ÿZ]ò]öYÿ]‹ãò€\õÿ\ôù‹ö]U^
+]ZX⁄—^[úŸU\õ
+
+JN»ÿ\›
+	‘]ZX⁄»[ö»€‹YY8ß$… N»Bàÿ]⁄
+Ÿ\úõ‹äH»	
+	‹]ZX⁄—^[úŸS[ö… OÀúŸ[X›
+
+N»ÿ›[Y[ùô^X–€€[X[ô
+	ÿ€‹I N»ÿ\›
+	‘]ZX⁄»[ö»€‹YY8ß$… N»BüBÇò\ﬁ[ò»ù[ò›[€à⁄\ôT]ZX⁄”[ö 
+H¬àYà
+ò]öYÿ]‹ãú⁄\ôJH¬àûH»]ÿZ]ò]öYÿ]‹ãú⁄\ôJ»]Nà	”›\àSà0≠»Y‹[ô	À^à	‘]ZX⁄»^[úŸH[ùûHõ‹à›\àSâÀ\õà]ZX⁄—^[úŸU\õ
+
+HJN»Bàÿ]⁄
+Ÿ\úõ‹äH» à\Ÿ\àÿ[òŸ[Yà
+ã»BàH[ŸH€‹T]ZX⁄”[ö 
+N¬üBÇôù[ò›[€à›€õÿYö[Jò[YK^\JH¬à€€ú›\õHTìò‹ôX]SÿöôX›Tì
+ô]»õÿä›^K»\HJJN¬à€€ú›[ò⁄‹àHÿ›[Y[ùò‹ôX]Q[[Y[ù
+	ÿI N¬à[ò⁄‹ãöôYàH\õ¬à[ò⁄‹ãô›€õÿYHò[YN¬àÿ›[Y[ùòõŸKò\[ô⁄[
+[ò⁄‹äN¬à[ò⁄‹ãò€X⁄ 
+N¬à[ò⁄‹ãúô[[›ôJ
+N¬àŸ][Y[›]
+
+
+HOàTìúô]õ⁄ŸSÿöôX›Tì
+\õ
+KL
+N¬üBÇôù[ò›[€à[X[êû]\ û]\ H¬à€€ú›ò[YHHù[Xô\äû]\»
+N¬àYà
+ò[YHLç
+Hô]\õà	›ò[Y_Hò¬àYà
+ò[YHLç
+äàäHô]\õà	 ò[YH»Lç
+Kù—ö^Y
+J_H–ò¬àô]\õà	 ò[YH»Lç
+äàäKù—ö^Y
+J_HPò¬üBÇôù[ò›[€àòX⁄›\ôX€‹ô€›[ù 
+H¬àô]\õàÿöôX›ôúõ€Q[ùöY\ …›ò[úÿX›[€ú…À	ÿXÿ€›[ù…À	ÿ\‹Ÿ]…À	ŸXù…À	Ÿ€ÿ[…À	ÿ€€ùöXù][€ú…À	‹ôX›\úö[ô…À	‹€ò\⁄›…À	ÿ⁄X⁄›\…À	‹⁄[ö⁄[ô—ù[ô…À	›ŸYZ€Tô]öY]‹…◊BàõX\
+Ÿ^HOà⁄Ÿ^K›]V⁄Ÿ^WOÀõ[ô›JJN¬üBÇôù[ò›[€àòX⁄›\õŸJ
+H¬àô]\õà¬àõ‹õX]à	€›\ãY[ã\‹ùXõKXòX⁄›\	Àõ‹õX]ô\ú⁄[€éàK\ô\ú⁄[€éàëTî“S”ãà^‹ùY]àô]»]J
+Kù“T”‘›ö[ô 
+K›\ŸZ€à	”›\àSâÀàôX€›ô\ûNà	”‹[à›\àSà[ô⁄€‹ŸHô\›‹ôHòX⁄›\àH]H\»Z[àî””à€»]ÿ[à[€»ôHôXY⁄]›]\»\âÀàôX€‹ô€›[ùŒàòX⁄›\ôX€‹ô€›[ù 
+K]Nà›]BàN¬üBÇôù[ò›[€àÿ[õ€öXÿ[ú€€äò[YJH¬àYà
+ò[YHOOHù[\[Ÿàò[YHOOH	€ÿöôX›	 Hô]\õàî””ãú›ö[ô⁄YûJò[YJN¬àYà
+\úò^Kö\–\úò^Jò[YJJHô]\õà…›ò[YKõX\
+][HOà][HOOH[ôYö[ôY»	€ù[	»àÿ[õ€öXÿ[ú€€ä][JJKöõ⁄[ä	À	 _WX¬àô]\õà…”ÿöôX›öŸ^\ ò[YJKôö[\äŸ^HOàò[YV⁄Ÿ^WHOOH[ôYö[ôY
+Kú€‹ù
+
+KõX\
+Ÿ^HOà	“î””ãú›ö[ô⁄YûJŸ^J_Nâÿÿ[õ€öXÿ[ú€€äò[YV⁄Ÿ^WJ_X
+Köõ⁄[ä	À	 __X¬üBÇò\ﬁ[ò»ù[ò›[€à⁄LçMí^
+ò[YJH¬à€€ú›û]\»H\[Ÿàò[YHOOH	‹›ö[ô…»»ô]»^[ò€Ÿ\ä
+Kô[ò€ŸJò[YJHàò[YN¬à€€ú›YŸ\›H]ÿZ]‹û\Àú›XùKôYŸ\›
+	‘“KLçMâÀû]\ N¬àô]\õàÀããõô]»Z[ù\úò^JYŸ\›
+WKõX\
+û]HOàû]Kù‘›ö[ô MäKúY›\ù
+ã	Ã	 JKöõ⁄[ä	… N¬üBÇôù[ò›[€àû]\’–ò\ŸMç
+û]\ H¬à]ö[ò\ûHH	…Œ¬àõ‹à
+][ô^H»[ô^û]\Àõ[ô›»[ô^
+œH
+Hö[ò\ûH
+œH›ö[ôÀôúõ€P⁄\ê€ŸJããòû]\Àú›Xò\úò^J[ô^[ô^
+»
+JN¬àô]\õàùÿJö[ò\ûJN¬üBÇôù[ò›[€àò\ŸMç–û]\ ò[YJH¬à€€ú›ö[ò\ûHH]ÿäò[YJN¬àô]\õàZ[ù\úò^Kôúõ€Jö[ò\ûK⁄\òX›\àOà⁄\òX›\ãò⁄\ê€ŸP]
+
+JN¬üBÇò\ﬁ[ò»ù[ò›[€à€€\ô\‹–òX⁄›\û]\ û]\ H¬àYà
+J	–€€\ô\‹⁄[€î›ôX[I»[à⁄[ô› JHô]\õà»û]\À€€\ô\‹⁄[€éà	€õ€ôI»N¬à€€ú››ôX[HHô]»õÿäÿû]\◊JKú›ôX[J
+Kú\Uõ›Y⁄
+ô]»€€\ô\‹⁄[€î›ôX[J	Ÿﬁö\	 JN¬àô]\õà»û]\Œàô]»Z[ù\úò^J]ÿZ]ô]»ô\‹€úŸJ›ôX[JKò\úò^PùYôô\ä
+JK€€\ô\‹⁄[€éà	Ÿﬁö\	»N¬üBÇò\ﬁ[ò»ù[ò›[€à›ôX[Pû]\’⁄][Z]
+›ôX[K[Z]HL
+àLç
+àLç
+H¬à€€ú›ôXY\àH›ôX[KôŸ]ôXY\ä
+N¬à€€ú›⁄[ö‹»H◊N¬à]›[H¬à⁄[H
+ùYJH¬à€€ú›»ò[YK€ôHHH]ÿZ]ôXY\ãúôXY
+
+N¬àYà
+€ôJHúôXZŒ¬à›[
+œHò[YKòû]S[ô›¬àYà
+›[à[Z]
+H»]ÿZ]ôXY\ãòÿ[òŸ[
+
+N»õ›»ô]»\úõ‹ä	’H^[ôYòX⁄›\\»[ô^X›YH\ôŸKâ N»Bà⁄[ö‹Àú\⁄
+ò[YJN¬àBà€€ú››]]Hô]»Z[ù\úò^J›[
+N¬à]ŸôúŸ]H¬à⁄[ö‹Àôõ‹ëXX⁄
+⁄[ö»Oà»›]]úŸ]
+⁄[öÀŸôúŸ]
+N»ŸôúŸ]
+œH⁄[öÀòû]S[ô›»JN¬àô]\õà›]]¬üBÇò\ﬁ[ò»ù[ò›[€àX€€\ô\‹–òX⁄›\û]\ û]\À€€\ô\‹⁄[€äH¬àYà
+€€\ô\‹⁄[€àOOH	€õ€ôI H¬àYà
+û]\Àòû]S[ô›àL
+àLç
+àLç
+Hõ›»ô]»\úõ‹ä	’HòX⁄›\\»[ô^X›YH\ôŸKâ N¬àô]\õàû]\Œ¬àBàYà
+€€\ô\‹⁄[€àOOH	Ÿﬁö\	»J	—X€€\ô\‹⁄[€î›ôX[I»[à⁄[ô› JHõ›»ô]»\úõ‹ä	’\»úõ›‹Ÿ\àÿ[õõ›‹[àH€€\ô\‹ŸYòX⁄›\â N¬à€€ú››ôX[HHô]»õÿäÿû]\◊JKú›ôX[J
+Kú\Uõ›Y⁄
+ô]»X€€\ô\‹⁄[€î›ôX[J	Ÿﬁö\	 JN¬àô]\õà›ôX[Pû]\’⁄][Z]
+›ôX[JN¬üBÇò\ﬁ[ò»ù[ò›[€àòX⁄›\[ò‹û\[€íŸ^J\‹‹ò\ŸKÿ[]\ò][€úÀ\ÿYŸ\ H¬à€€ú›X]\öX[H]ÿZ]‹û\Àú›XùKö[\‹ùŸ^J	‹ò]…Àô]»^[ò€Ÿ\ä
+Kô[ò€ŸJ\‹‹ò\ŸJK	‘í—åâÀò[ŸK…Ÿ\ö]ôRŸ^I◊JN¬àô]\õà‹û\Àú›XùKô\ö]ôRŸ^Jà»ò[YNà	‘í—åâÀÿ[]\ò][€úÀ\⁄à	‘“KLçMâ»KàX]\öX[à»ò[YNà	–QTÀQ–”IÀ[ô›àçMàKàò[ŸKà\ÿYŸ\¬à
+N¬üBÇôù[ò›[€àôX€‹ôòX⁄›\‹ôX]Y
+⁄X⁄‹›[K‹ôX]Y]
+H¬à›]KúŸ][ô‹Àõ\›òX⁄›\]H‹ôX]Y]¬à›]KúŸ][ô‹Àõ\›òX⁄›\\⁄H⁄X⁄‹›[N¬àÿX⁄J
+N¬àYà
+à	âà›\ŸZ€Y
+H¬à[ú]Y]YJ»X›[€éà	‹Ÿ][ô‹…Àõ›ŒàŸ][ô‹‘õ› 
+HJN¬àõ\⁄[ô[ô 
+Kù[ä⁄»Oà»Yà
+⁄ HÿYô[[›J
+N»JN¬àBüBÇò\ﬁ[ò»ù[ò›[€à^‹ùòX⁄›\
+Xô[H	…À]ZY]Hò[ŸJH¬à€€ú›õŸHHòX⁄›\õŸJ
+N¬à€€ú›ÿ[õ€öXÿ[Hÿ[õ€öXÿ[ú€€äõŸJN¬à€€ú›⁄X⁄‹›[HH]ÿZ]⁄LçMí^
+ÿ[õ€öXÿ[
+N¬à€€ú›òX⁄›\H»ããòõŸK[ùY‹ö]Nà»[€‹ö]Nà	‘“KLçMâÀò[YNà⁄X⁄‹›[HHN¬à›€õÿYö[J›\ãY[ãI€Xô[»	€Xô[KXà	ÿòX⁄›\IﬂI›Ÿ^J
+_Köú€€òî””ãú›ö[ô⁄YûJòX⁄›\ù[äK	ÿ\Xÿ][€ã⁄ú€€â N¬àôX€‹ôòX⁄›\‹ôX]Y
+⁄X⁄‹›[KõŸKô^‹ùY]
+N¬àYà
+\]ZY]
+Hÿ\›
+	‘ôXYXõHòX⁄›\›€õÿYY8ß$… N¬üBÇôù[ò›[€à‹[îö]ò]PòX⁄›\õ‹õJ
+H¬à‹[ì[Ÿ[
+	–‹ôX]Hö]ò]HòX⁄›\	Àõ‹õHYHúö]ò]PòX⁄›\õ‹õHà€\‹œHôõ‹õHèÇàŸX›[€à€\‹œHôõ›‘›\èÇà]à€\‹œHôúöY[ôSõ›HèîôX€€[Y[ôYà[›\à€€\]HòX⁄›\\»€€\ô\‹ŸY[àÿ⁄ŸY⁄]H\‹‹ò\ŸHôYõ‹ôH]X]ô\»\»€ôKèŸ]èÇàXô[êòX⁄›\\‹‹ò\ŸO[ú]YHòòX⁄›\\‹‹ò\ŸHà\OHú\‹›€‹ôàZ[õ[ô›HåLàX^[ô›HåLéà]]ÿ€€\]OHõô]À\\‹›€‹ôàô\]Z\ôYè€X[€\‹œHôöY[[ùèï\ŸH]X\›L⁄\òX›\úÀà]\»ô]ô\à›‹ôY‹àŸ[ù[û]⁄\ôKè‹€X[è€Xô[ÇàXô[îô\X]\‹‹ò\ŸO[ú]YHòòX⁄›\\‹‹ò\ŸPYÿZ[àà\OHú\‹›€‹ôàZ[õ[ô›HåLàX^[ô›HåLéà]]ÿ€€\]OHõô]À\\‹›€‹ôàô\]Z\ôYè€Xô[Çà]à€\‹œHùÿ\õö[ô”õ›HèíYà\»\‹‹ò\ŸH\»‹›õÿõŸHÿ[àôX€›ô\àHòX⁄›\àŸY\][à[›\à\‹›€‹ôX[òYŸ\ãèŸ]èÇàù]€à€\‹œHúö[X\ûHà\OHú›XõZ]èìÿ⁄»[ô›€õÿYÿù]€èÇà‹ŸX›[€èÇàŸõ‹õOò
+N¬à	
+	‹ö]ò]PòX⁄›\õ‹õI Kõ€ú›XõZ]H\ﬁ[ò»]ô[ùOà¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›\‹‹ò\ŸHH	
+	ÿòX⁄›\\‹‹ò\ŸI Kùò[YN¬àYà
+\‹‹ò\ŸHOOH	
+	ÿòX⁄›\\‹‹ò\ŸPYÿZ[â Kùò[YJH»ÿ\›
+	’H\‹‹ò\Ÿ\»»õ›X]⁄â N»ô]\õé»Bà€€ú›ù]€àH]ô[ùú›XõZ]\é¬àYà
+ù]€äH»ù]€ãô\ÿXõYHùYN»ù]€ãù^€€ù[ùH	‘õ›X›[ô¯†)âŒ»BàûH¬à€€ú›õŸHHòX⁄›\õŸJ
+N¬à€€ú›Z[àHô]»^[ò€Ÿ\ä
+Kô[ò€ŸJî””ãú›ö[ô⁄YûJõŸJJN¬à€€ú›⁄X⁄‹›[HH]ÿZ]⁄LçMí^
+ÿ[õ€öXÿ[ú€€äõŸJJN¬à€€ú›€€\ô\‹ŸYH]ÿZ]€€\ô\‹–òX⁄›\û]\ Z[äN¬à€€ú›ÿ[H‹û\ÀôŸ]ò[ô€Uò[Y\ ô]»Z[ù\úò^JMäJN¬à€€ú›]àH‹û\ÀôŸ]ò[ô€Uò[Y\ ô]»Z[ù\úò^JLäJN¬à€€ú›]\ò][€ú»HÃL¬à€€ú›Ÿ^HH]ÿZ]òX⁄›\[ò‹û\[€íŸ^J\‹‹ò\ŸKÿ[]\ò][€úÀ…Ÿ[ò‹û\	◊JN¬à€€ú›⁄\\ù^Hô]»Z[ù\úò^J]ÿZ]‹û\Àú›XùKô[ò‹û\
+»ò[YNà	–QTÀQ–”IÀ]àKŸ^K€€\ô\‹ŸYòû]\ JN¬à€€ú›[ùô[‹HH¬àõ‹õX]à	€›\ãY[ã\ö]ò]KXòX⁄›\	Àõ‹õX]ô\ú⁄[€éàK\ô\ú⁄[€éàëTî“S”ã‹ôX]Y]àõŸKô^‹ùY]à[ò‹û\[€éà»⁄\\éà	–QTÀLçMãQ–”IÀŸéà	‘í—åãRPPÀT“KLçMâÀ]\ò][€úÀÿ[àû]\’–ò\ŸMç
+ÿ[
+K]éàû]\’–ò\ŸMç
+]äHKà€€\ô\‹⁄[€éà€€\ô\‹ŸYò€€\ô\‹⁄[€ã⁄\\ù^àû]\’–ò\ŸMç
+⁄\\ù^
+BàN¬à›€õÿYö[J›\ãY[ã\ö]ò]KI›Ÿ^J
+_KõŸ[òî””ãú›ö[ô⁄YûJ[ùô[‹JK	ÿ\Xÿ][€ã›õôõ›\ãY[ãòòX⁄›\
+⁄ú€€â N¬àôX€‹ôòX⁄›\‹ôX]Y
+⁄X⁄‹›[KõŸKô^‹ùY]
+N¬à€‹ŸS[Ÿ[
+
+N¬àÿ\›
+ö]ò]HòX⁄›\›€õÿYY0≠»	⁄[X[êû]\ ô]»õÿä“î””ãú›ö[ô⁄YûJ[ùô[‹JWJKú⁄^ôJ_H8ß$ÿ
+N¬àHÿ]⁄
+Ÿ\úõ‹äH¬àYà
+ù]€äH»ù]€ãô\ÿXõYHò[ŸN»ù]€ãù^€€ù[ùH	”ÿ⁄»[ô›€õÿY	Œ»Bàÿ\›
+	’\»€ôH€›[õ›‹ôX]HHö]ò]HòX⁄›\â N¬àBàN¬üBÇôù[ò›[€à‹[êòX⁄›\Ÿ[ù\ä
+H¬à€€ú›û]\»Hô]»õÿä“î””ãú›ö[ô⁄YûJ›]JWJKú⁄^ôN¬à€€ú›\›H›]KúŸ][ô‹Àõ\›òX⁄›\]»õ‹õX]]J›]KúŸ][ô‹Àõ\›òX⁄›\]ú€XŸJL
+JHà	”õ»ô\öYöYYòX⁄›\Y]	Œ¬à‹[ì[Ÿ[
+	–òX⁄›\	à]HÿYô]IÀ]à€\‹œHòòX⁄›\Ÿ[ù\àèÇà]à€\‹œHòòX⁄›\X[èè]èè‹[èê›\úô[ù]O‹‹[èèèâ⁄[X[êû]\ û]\ _Oÿèè€X[â‹›]Kùò[úÿX›[€úÀõ[ô›ù”ÿÿ[T›ö[ô 	Ÿ[ãUT… _Hò[úÿX›[€àôX€‹ôœ‹€X[èŸ]èè]èè‹[èì\›òX⁄›\‹‹[èèèâŸ\ÿ \›
+_Oÿèè€X[â‹›]KúŸ][ô‹Àõ\›òX⁄›\\⁄»	“[ùY‹ö]HôX€‹ôY8ß$…»à	”XZŸH€»€‹Y\…ﬂO‹€X[èŸ]èèŸ]èÇà]à€\‹œHòòX⁄›\⁄⁄XŸHôX€€[Y[ôYèè]èèOº'Â$è⁄Oè‹[èèèîö]ò]HòX⁄›\ÿèè€X[ê€€\ô\‹ŸY[ô[ò‹û\Y€à\»€ôO‹€X[è‹‹[èèŸ]èèù]€à€\‹œHúö[X\ûH€€\X›à€ò€X⁄œHõ‹[îö]ò]PòX⁄›\õ‹õJ
+Hèë›€õÿYÿù]€èèŸ]èÇà]à€\‹œHòòX⁄›\⁄⁄XŸHèè]èèO∏£&⁄Oè‹[èèèîôXYXõHî””èÿèè€X[ì[‹›ù]\ôK\õ€Ÿé»[û[€ôH⁄]Hö[Hÿ[àôXY]‹€X[è‹‹[èèŸ]èèù]€à€\‹œHúŸX€€ô\ûH€€\X›à€ò€X⁄œHô^‹ùòX⁄›\
+
+Hèë›€õÿYÿù]€èèŸ]èÇà]à€\‹œHòòX⁄›\⁄⁄XŸHèè]èèO∏°©O⁄Oè‹[èèèîô\›‹ôHH€‹Oÿèè€X[î›\‹ù»õŸ[à[ô€\à›\àSàî””àö[\œ‹€X[è‹‹[èèŸ]èèù]€à€\‹œHúŸX€€ô\ûH€€\X›à€ò€X⁄œHò⁄€‹ŸPòX⁄›\ö[J
+Hèê⁄€‹ŸHö[Oÿù]€èèŸ]èÇà]à€\‹œHôúöY[ôSõ›HèíŸY\€ôHö]ò]HòX⁄›\[àXX⁄Ÿà€»XŸ\»[›H€€ùõ€›X⁄\»[›\à€ôH[ôH\ú€€ò[ö]ôKà›\àSàô]ô\à\ÿY»\ŸHòX⁄›\ö[\ÀèŸ]èÇàH€\‹œHúôX€›ô\ûS[ö»àôYèHúôX€›ô\ûKö[à\ôŸ]Hóÿõ[ö»àô[Hõõ€‹[ô\àèì‹[àH[ô\[ô[ùôX€›ô\ûH€€‹[è∏†.è‹‹[èèÿOÇàù]€à\OHòù]€àà€\‹œHúŸX€€ô\ûH⁄YHà€ò€X⁄œHò€‹ŸS[Ÿ[
+
+Hèë€ôOÿù]€èÇàŸ]èò
+N¬üBÇôù[ò›[€à⁄€‹ŸPòX⁄›\ö[J
+H¬à€€ú›[ú]H	
+	ÿòX⁄›\ö[I N¬à[ú]ùò[YHH	…Œ¬à[ú]ò€X⁄ 
+N¬üBÇôù[ò›[€àò[Y]PòX⁄›\]J]Kô\ú⁄[€äH¬àYà
+Y]H\[Ÿà]HOOH	€ÿöôX›	 Hô]\õà	’\»ö[H\»õ»ùYŸ]]KâŒ¬àYà
+Jô\ú⁄[€àèH»	âàô\ú⁄[€àHëTî“S”äJHô]\õà€õH›\àùYŸ]ç¯†$›é‹à›\àSàâ’ëTî“S”üHòX⁄›\»ÿ[àôHô\›‹ôYÿYô[Kò¬à€€ú›\úò^RŸ^\»H…›ò[úÿX›[€ú…À	Ÿ€ÿ[…À	ŸXù…À	ÿ\‹Ÿ]…À	ÿXÿ€›[ù…À	‹ôX›\úö[ô…À	ÿ€€ùöXù][€ú…À	‹€ò\⁄›…◊N¬àõ‹à
+€€ú›Ÿ^HŸà\úò^RŸ^\ H¬àYà
+P\úò^Kö\–\úò^J]V⁄Ÿ^WJJHô]\õàH	⁄Ÿ^_HŸX›[€à\»Z\‹⁄[ôÀò¬àYà
+]V⁄Ÿ^WKõ[ô›àçL
+Hô]\õàH	⁄Ÿ^_HŸX›[€à\»[ô^X›YH\ôŸKò¬àBàõ‹à
+€€ú›Ÿ^HŸà…ÿ⁄X⁄›\…À	‹⁄[ö⁄[ô—ù[ô…À	›ŸYZ€Tô]öY]‹…◊JH¬àYà
+]V⁄Ÿ^WHOHù[	âàP\úò^Kö\–\úò^J]V⁄Ÿ^WJJHô]\õàH	⁄Ÿ^_HŸX›[€à\»[ùò[Yò¬àYà
+
+]V⁄Ÿ^WOÀõ[ô›
+HàçL
+Hô]\õàH	⁄Ÿ^_HŸX›[€à\»[ô^X›YH\ôŸKò¬àYà
+]V⁄Ÿ^WHOHù[
+H]V⁄Ÿ^WHH◊N¬àBà€€ú›[ôX€‹ô»HÀããò\úò^RŸ^\À	ÿ⁄X⁄›\…À	‹⁄[ö⁄[ô—ù[ô…À	›ŸYZ€Tô]öY]‹…◊Kôõ]X\
+Ÿ^HOà]V⁄Ÿ^WJN¬àYà
+[ôX€‹ôÀú€€YJ][HOàZ][H\[Ÿà][HOOH	€ÿöôX›	»
+	⁄Y	»[à][H	âà\[Ÿà][KöYOOH	‹›ö[ô… JJHô]\õà	”€ôH‹à[‹ôHôX€‹ô»\ôH[ùò[YâŒ¬à€€ú›Xÿ€›[ùY»Hô]»Ÿ]
+Àããú›]KòXÿ€›[ùÀããô]KòXÿ€›[ù◊KõX\
+][HOà][KöY
+JN¬à€€ú›XùY»Hô]»Ÿ]
+Àããú›]KôXùÀããô]KôXù◊KõX\
+][HOà][KöY
+JN¬à€€ú›€ÿ[Y»Hô]»Ÿ]
+Àããú›]Kô€ÿ[Àããô]Kô€ÿ[◊KõX\
+][HOà][KöY
+JN¬à€€ú›ôX›\úö[ô“Y»Hô]»Ÿ]
+Àããú›]KúôX›\úö[ôÀããô]KúôX›\úö[ô◊KõX\
+][HOà][KöY
+JN¬à€€ú›úõ⁄Ÿ[ì[ö»H]Kùò[úÿX›[€úÀú€€YJ][HOÇà
+][KòXÿ€›[ùY	âàXXÿ€›[ùYÀö\ ][KòXÿ€›[ùY
+JH
+][Kù–Xÿ€›[ùY	âàXXÿ€›[ùYÀö\ ][Kù–Xÿ€›[ùY
+JHà
+][KôXùY	âàYXùYÀö\ ][KôXùY
+JH
+][KúôX›\úö[ô“][RY	âà\ôX›\úö[ô“YÀö\ ][KúôX›\úö[ô“][RY
+JBà
+H]Kò€€ùöXù][€úÀú€€YJ][HOàY€ÿ[YÀö\ ][Kô€ÿ[Y
+H
+][KòXÿ€›[ùY	âàXXÿ€›[ùYÀö\ ][KòXÿ€›[ùY
+JJN¬àYà
+úõ⁄Ÿ[ì[ö Hô]\õà	’\»òX⁄›\€€ùZ[ú»H[ö»»HZ\‹⁄[ô»Xÿ€›[ùXù€ÿ[‹àôY›[\à][KâŒ¬àô]\õà	…Œ¬üBÇò\ﬁ[ò»ù[ò›[€àô\öYûTôXYXõPòX⁄›\
+^[ÿY
+H¬àYà
+\^[ÿYÀö[ùY‹ö]JHô]\õà	”€\àòX⁄›\0≠»õ»⁄X⁄‹›[IŒ¬àYà
+^[ÿYö[ùY‹ö]Kò[€‹ö]HOOH	‘“KLçMâ»K◊ñÃNXKYó^ÕçIÀù\›
+^[ÿYö[ùY‹ö]Kùò[YH	… JHõ›»ô]»\úõ‹ä	“[ùò[YòX⁄›\⁄X⁄‹›[Kâ N¬à€€ú›»[ùY‹ö]KããòõŸHHH^[ÿY¬à€€ú›X›X[H]ÿZ]⁄LçMí^
+ÿ[õ€öXÿ[ú€€äõŸJJN¬àYà
+X›X[OOH[ùY‹ö]Kùò[YJHõ›»ô]»\úõ‹ä	’HòX⁄›\⁄[ôŸY‹à\»[XYŸYâ N¬àô]\õà	“[ùY‹ö]Hô\öYöYY8ß$…Œ¬üBÇôù[ò›[€àô\\ôPòX⁄›\ô\›‹ôJ^[ÿYô\öYöXÿ][€äH¬à€€ú›ô\ú⁄[€àHù[Xô\ä^[ÿYÀò\ô\ú⁄[€à^[ÿYÀô]OÀùô\ú⁄[€à
+N¬à€€ú›\úõ‹àHò[Y]PòX⁄›\]J^[ÿYÀô]Kô\ú⁄[€äN¬àYà
+\úõ‹äH»ÿ\›
+\úõ‹äN»ô]\õé»Bà[ô[ô‘ô\›‹ôQ]HHõ‹õX[^ôT›]J^[ÿYô]JN¬à€€ú›]HH[ô[ô‘ô\›‹ôQ]N¬à‹[ì[Ÿ[
+	‘ô\›‹ôHòX⁄›\	À]à€\‹œHôõ‹õHèÇà]à€\‹œHôúöY[ôSõ›HèâŸ\ÿ ô\öYöXÿ][€ä_KàHÿYô]H€‹HŸàŸ^x†&\»]H›€õÿY»ö\ú›àô\›‹ôHY\ôŸ\»\»ö[H[ù»H›\ŸZ€[ôŸY\»ô]Ÿ\àôX€‹ôÀèŸ]èÇà]à€\‹œHúô\›‹ôTô]öY]»èÇà]èè‹[èïò[úÿX›[€úœ‹‹[èèèâŸ]Kùò[úÿX›[€úÀõ[ô›ù”ÿÿ[T›ö[ô 	Ÿ[ãUT… _OÿèèŸ]èÇà]èè‹[èêXÿ€›[ùœ‹‹[èèèâŸ]KòXÿ€›[ùÀõ[ô›OÿèèŸ]èÇà]èè‹[èî[úœ‹‹[èèèâŸ]Kô€ÿ[Àõ[ô›
+»]KôXùÀõ[ô›OÿèèŸ]èÇà]èè‹[èîôY›[\à][\œ‹‹[èèèâŸ]KúôX›\úö[ôÀõ[ô›OÿèèŸ]èÇà]èè‹[èê\‹Ÿ]œ‹‹[èèèâŸ]Kò\‹Ÿ]Àõ[ô›OÿèèŸ]èÇà]èè‹[èî€ò\⁄›œ‹‹[èèèâŸ]Kú€ò\⁄›Àõ[ô›ù”ÿÿ[T›ö[ô 	Ÿ[ãUT… _OÿèèŸ]èÇàŸ]èÇà]à€\‹œHùÿ\õö[ô”õ›HèíŸY\\»YŸH‹[à[ù[Hô\›‹ôHö[ö\⁄\Ààõ›[ô»\»ô\›‹ôY⁄[HŸôõ[ôKèŸ]èÇàù]€àYHúô\›‹ôP€€ôö\õHà€\‹œHúö[X\ûHà€ò€X⁄œHò€€ôö\õPòX⁄›\ô\›‹ôJ
+Hèë›€õÿYÿYô]H€‹H[ôô\›‹ôOÿù]€èÇàù]€à€\‹œHúŸX€€ô\ûHà€ò€X⁄œHú[ô[ô‘ô\›‹ôQ]O[ù[ÿ€‹ŸS[Ÿ[
+
+Hèêÿ[òŸ[ÿù]€èÇàŸ]èò
+N¬üBÇò\ﬁ[ò»ù[ò›[€àX‹û\Ÿ[X›YòX⁄›\
+
+H¬à€€ú›[ùô[‹HH[ô[ô—[ò‹û\YòX⁄›\¬àYà
+Y[ùô[‹JHô]\õé¬à€€ú›\‹‹ò\ŸHH	
+	‹ô\›‹ôT\‹‹ò\ŸI Kùò[YN¬à€€ú›ù]€àH	
+	ŸX‹û\òX⁄›\ù]€â N¬àYà
+ù]€äH»ù]€ãô\ÿXõYHùYN»ù]€ãù^€€ù[ùH	’[õÿ⁄⁄[ô¯†)âŒ»BàûH¬à€€ú›[ò‹û\[€àH[ùô[‹Kô[ò‹û\[€àﬂN¬à€€ú›]\ò][€ú»Hù[Xô\ä[ò‹û\[€ãö]\ò][€ú N¬àYà
+[ò‹û\[€ãò⁄\\àOOH	–QTÀLçMãQ–”I»[ò‹û\[€ãöŸàOOH	‘í—åãRPPÀT“KLçMâ»]\ò][€ú»L]\ò][€ú»àå
+Hõ›»ô]»\úõ‹ä	’[ú›\‹ùY[ò‹û\[€àŸ][ô‹Àâ N¬à€€ú›ÿ[Hò\ŸMç–û]\ [ò‹û\[€ãúÿ[	… N¬à€€ú›]àHò\ŸMç–û]\ [ò‹û\[€ãö]à	… N¬à€€ú›Ÿ^HH]ÿZ]òX⁄›\[ò‹û\[€íŸ^J\‹‹ò\ŸKÿ[]\ò][€úÀ…ŸX‹û\	◊JN¬à€€ú›X‹û\YHô]»Z[ù\úò^J]ÿZ]‹û\Àú›XùKôX‹û\
+»ò[YNà	–QTÀQ–”IÀ]àKŸ^Kò\ŸMç–û]\ [ùô[‹Kò⁄\\ù^	… JJN¬à€€ú›Z[àH]ÿZ]X€€\ô\‹–òX⁄›\û]\ X‹û\Y[ùô[‹Kò€€\ô\‹⁄[€à	€õ€ôI N¬à€€ú›^[ÿYHÿYôT\úŸJô]»^X€Ÿ\ä
+KôX€ŸJZ[äJN¬àYà
+\^[ÿY
+Hõ›»ô]»\úõ‹ä	“[ùò[YòX⁄›\^[ÿYâ N¬à[ô[ô—[ò‹û\YòX⁄›\Hù[¬àô\\ôPòX⁄›\ô\›‹ôJ^[ÿY	‘ö]ò]HòX⁄›\[õÿ⁄ŸY[ô]][ùXÿ]Y	 N¬àHÿ]⁄
+Ÿ\úõ‹äH¬àYà
+ù]€äH»ù]€ãô\ÿXõYHò[ŸN»ù]€ãù^€€ù[ùH	’[õÿ⁄»òX⁄›\	Œ»Bàÿ\›
+	’‹õ€ô»\‹‹ò\ŸH‹à[XYŸYòX⁄›\â N¬àBüBÇò\ﬁ[ò»ù[ò›[€à[ôPòX⁄›\ö[J]ô[ù
+H¬à€€ú›ö[HH]ô[ùù\ôŸ]ôö[\œÀñÃN¬àYà
+Yö[JHô]\õé¬àYà
+ö[Kú⁄^ôHàL
+àLç
+àLç
+H»ÿ\›
+	–òX⁄›\ö[\»]\›ôH[ô\àLPãâ N»ô]\õé»BàûH¬à€€ú›^[ÿYHÿYôT\úŸJ]ÿZ]ö[Kù^
+
+JN¬àYà
+\^[ÿY
+Hõ›»ô]»\úõ‹ä	“[ùò[Yî””ãâ N¬àYà
+^[ÿYôõ‹õX]OOH	€›\ãY[ã\ö]ò]KXòX⁄›\	 H¬à[ô[ô—[ò‹û\YòX⁄›\H^[ÿY¬à‹[ì[Ÿ[
+	’[õÿ⁄»ö]ò]HòX⁄›\	Àõ‹õH€\‹œHôõ‹õHà€ú›XõZ]Hô]ô[ùúô]ô[ùYò][
+
+NŸX‹û\Ÿ[X›YòX⁄›\
+
+HèèŸX›[€à€\‹œHôõ›‘›\èè]à€\‹œHôúöY[ôSõ›Hèï\»ö[H\»[ò‹û\Yà[ù\àH\‹‹ò\ŸH\ŸY⁄[à]ÿ\»‹ôX]YèŸ]èèXô[êòX⁄›\\‹‹ò\ŸO[ú]YHúô\›‹ôT\‹‹ò\ŸHà\OHú\‹›€‹ôàZ[õ[ô›HåLàX^[ô›HåLéà]]ÿ€€\]OHò›\úô[ù\\‹›€‹ôàô\]Z\ôY]]Ÿõÿ›\œè€Xô[èù]€àYHôX‹û\òX⁄›\ù]€àà€\‹œHúö[X\ûHà\OHú›XõZ]èï[õÿ⁄»òX⁄›\ÿù]€èèù]€à€\‹œHúŸX€€ô\ûHà\OHòù]€àà€ò€X⁄œHú[ô[ô—[ò‹û\YòX⁄›\[ù[ÿ€‹ŸS[Ÿ[
+
+Hèêÿ[òŸ[ÿù]€èè‹ŸX›[€èèŸõ‹õOò
+N¬àô]\õé¬àBàô\\ôPòX⁄›\ô\›‹ôJ^[ÿY]ÿZ]ô\öYûTôXYXõPòX⁄›\
+^[ÿY
+JN¬àHÿ]⁄
+\úõ‹äH»ÿ\›
+\úõ‹èÀõY\‹ÿYŸH	’\»òX⁄›\€›[õ›ôHôXYâ N»BüBÇôù[ò›[€àXÿ€›[ùô\›‹ôTõ› Xÿ€›[ù
+H¬àô]\õà»YàXÿ€›[ùöY›\ŸZ€⁄Yà›\ŸZ€Yò[YNà›ö[ô Xÿ€›[ùõò[YH	… Kùö[J
+KXÿ€›[ù›\NàXÿ€›[ùù\K›\úô[òﬁNà€X[ê›\úô[òﬁJXÿ€›[ùò›\úô[òﬁJK‹[ö[ô◊ÿò[[òŸNàù[Xô\äXÿ€›[ùõ‹[ö[ô–ò[[òŸH
+K‹[ö[ô◊Ÿ]NàXÿ€›[ùõ‹[ö[ô—]Kõ›\ŒàXÿ€›[ùõõ›\»ù[X›]ôNàXÿ€›[ùòX›]ôHOOHò[ŸK\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HN¬üBôù[ò›[€à€ÿ[ô\›‹ôTõ› €ÿ[ÿ]ôYH€ÿ[úÿ]ôY
+H¬àô]\õà»Yà€ÿ[öY›\ŸZ€⁄Yà›\ŸZ€Yò[YNà›ö[ô €ÿ[õò[YH	… Kùö[J
+K\ôŸ]àù[Xô\ä€ÿ[ù\ôŸ]
+Kÿ]ôYàù[Xô\äÿ]ôY
+K›\úô[òﬁNà€X[ê›\úô[òﬁJ€ÿ[ò›\úô[òﬁJKYWŸ]Nà€ÿ[ôYHù[X›]ôNà€ÿ[òX›]ôHOOHò[ŸK\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HN¬üBôù[ò›[€àXùô\›‹ôTõ› Xùô[XZ[ö[ô»HXùúô[XZ[ö[ô H¬àô]\õà»YàXùöY›\ŸZ€⁄Yà›\ŸZ€Yò[YNà›ö[ô Xùõò[YH	… Kùö[J
+K‹öY⁄[ò[ÿ[[›[ùàù[Xô\äXùõ‹öY⁄[ò[
+Kô[XZ[ö[ô◊ÿ[[›[ùàù[Xô\äô[XZ[ö[ô»
+K›\úô[òﬁNà€X[ê›\úô[òﬁJXùò›\úô[òﬁJKYWŸ]NàXùôYHù[[õùX[⁄[ù\ô\›‹ò]Nàù[Xô\äXùò\à
+KZ[ö[][W‹^[Y[ùàù[Xô\äXùõZ[ö[][H
+K^[Y[ùŸ^NàXùú^[Y[ù^Hù[X›]ôNàXùòX›]ôHOOHò[ŸK\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HN¬üBÇôù[ò›[€àYô\›‹ôPò]⁄\ ‹\ò][€úÀXõKõ›‹À€ê€€ôõX›H	… H¬à€€ú›⁄^ôHHL¬àõ‹à
+][ô^H»[ô^õ›‹Àõ[ô›»[ô^
+œH⁄^ôJH¬à‹\ò][€úÀú\⁄
+»X›[€éà	ÿù[’\Ÿ\ù	ÀXõKõ›‹Œàõ›‹Àú€XŸJ[ô^[ô^
+»⁄^ôJK€ê€€ôõX›JN¬àBüBÇò\ﬁ[ò»ù[ò›[€à€€ôö\õPòX⁄›\ô\›‹ôJ
+H¬à€€ú›]HH[ô[ô‘ô\›‹ôQ]N¬àYà
+Y]HYàZ›\ŸZ€Y
+Hô]\õé¬àYà
+[ò]öYÿ]‹ãõ€ì[ôJH»ÿ\›
+	‘ôX€€õôX›ôYõ‹ôHô\›‹ö[ô»HòX⁄›\â N»ô]\õé»BàYà
+[ô[ô 
+Kõ[ô›	âàJ]ÿZ]õ\⁄[ô[ô 
+JJH»ÿ\›
+	’ÿZ][ô»⁄[ôŸ\»]\›ﬁ[ò»ôYõ‹ôHô\›‹ôKâ N»ô]\õé»Bà€€ú›ù]€àH	
+	‹ô\›‹ôP€€ôö\õI N¬àYà
+ù]€äH»ù]€ãô\ÿXõYHùYN»ù]€ãù^€€ù[ùH	‘ô\›‹ö[ô¯†)âŒ»Bà]ÿZ]^‹ùòX⁄›\
+	ÿôYõ‹ôK\ô\›‹ôIÀùYJN¬à€€ú›‹\ò][€ú»H◊N¬à‹\ò][€úÀú\⁄
+»X›[€éà	‹Ÿ][ô‹…Àõ›Œà¬à›\ŸZ€⁄Yà›\ŸZ€Yò\ŸWÿ›\úô[òﬁNà]KúŸ][ô‹Àòò\ŸK^Y^WŸ^Nà]KúŸ][ô‹Àú^Y^Q^Kàù[ó€[ŸNà]KúŸ][ô‹Àôù[ì[ŸHOOHò[ŸKXù‹›ò]YﬁNà]KúŸ][ô‹ÀôXù›ò]YﬁKà\Ÿ›◊ÿYYà]KúŸ][ô‹Àúò]\ÀêQQ\Ÿ›◊€]úéà]KúŸ][ô‹Àúò]\ÀìUîã\Ÿ›◊⁄[úéà]KúŸ][ô‹Àúò]\ÀíSîÇàHJN¬à€€ú›ùYŸ]õ›‹»HÿöôX›ô[ùöY\ ]KòùYŸ] KõX\
+
+ÿÿ]Y€‹ûKùYŸ]JHOà
+»›\ŸZ€⁄Yà›\ŸZ€Yÿ]Y€‹ûK[[›[ùàù[Xô\äùYŸ]ò[[›[ù
+K›\úô[òﬁNà€X[ê›\úô[òﬁJùYŸ]ò›\úô[òﬁJHJJN¬àYà
+ùYŸ]õ›‹Àõ[ô›
+H‹\ò][€úÀú\⁄
+»X›[€éà	ÿùYŸ]	Àõ›‹ŒàùYŸ]õ›‹»JN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	ÿXÿ€›[ù…À]KòXÿ€›[ùÀõX\
+Xÿ€›[ùô\›‹ôTõ› JN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	Ÿ€ÿ[…À]Kô€ÿ[ÀõX\
+€ÿ[Oà€ÿ[ô\›‹ôTõ› €ÿ[
+JJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	ŸXù…À]KôXùÀõX\
+XùOàXùô\›‹ôTõ› XùXùõ‹öY⁄[ò[
+JJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	‹ôX›\úö[ô◊⁄][\…À]KúôX›\úö[ôÀõX\
+][HOà
+¬àYà][KöY›\ŸZ€⁄Yà›\ŸZ€Y‹ôX]YÿûNà›\úô[ù\Ÿ\ãöYò[YNà][Kõò[YK⁄[ôà][Kö⁄[ôà[[›[ùàù[Xô\ä][Kò[[›[ù
+K›\úô[òﬁNà€X[ê›\úô[òﬁJ][Kò›\úô[òﬁJKÿ]Y€‹ûNà][Kòÿ]Y€‹ûKZYÿûNà][KúZYûH	‘⁄\ôY	ÀàXÿ€›[ù⁄Yà][KòXÿ€›[ùYù[^W€Ÿó€[€ùàù[Xô\ä][Kô^JKõ›Nà][Kõõ›Hù[X›]ôNà][KòX›]ôHOOHò[ŸK\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+BàJJJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	›ò[úÿX›[€ú…À]Kùò[úÿX›[€úÀõX\
+][HOàò[úÿX›[€îõ› ¬àYà][KöY\Nà][Kù\K[[›[ùàù[Xô\ä][Kò[[›[ù
+K›\úô[òﬁNà€X[ê›\úô[òﬁJ][Kò›\úô[òﬁJKÿ]Y€‹ûNà][Kòÿ]Y€‹ûKàZYûNà][KúZYûH	‘⁄\ôY	ÀXÿ€›[ùYà][KòXÿ€›[ùY	…ÀXÿ€›[ùà][KòXÿ€›[ù	…À–Xÿ€›[ùYà][Kù–Xÿ€›[ùY	…Àà–[[›[ùà][Kù–[[›[ùOHù[»ù[àù[Xô\ä][Kù–[[›[ù
+KXùYà][KôXùY	…ÀXùö[ò⁄\[à][KôXùö[ò⁄\[OHù[»ù[àù[Xô\ä][KôXùö[ò⁄\[
+KàXù[ù\ô\›àù[Xô\ä][KôXù[ù\ô\›
+KôX›\úö[ô“][RYà][KúôX›\úö[ô“][RY	…ÀôX›\úö[ô”[€ùà][KúôX›\úö[ô”[€ù	…Àà]Nà][Kô]Kõ›Nà][Kõõ›H	…À‹ôX]Y]à][Kò‹ôX]Y]ô]»]J
+Kù“T”‘›ö[ô 
+BàJJJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	Ÿ€ÿ[ÿ€€ùöXù][€ú…À]Kò€€ùöXù][€úÀõX\
+][HOà
+¬àYà][KöY›\ŸZ€⁄Yà›\ŸZ€Y€ÿ[⁄Yà][Kô€ÿ[YXÿ€›[ù⁄Yà][KòXÿ€›[ùYù[\Ÿ\ó⁄Yà›\úô[ù\Ÿ\ãöYà[[›[ùàù[Xô\ä][Kò[[›[ù
+K›\úô[òﬁNà€X[ê›\úô[òﬁJ][Kò›\úô[òﬁJK]Nà][Kô]Kõ›Nà][Kõõ›Hù[\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+BàJJJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	ŸXù…À]KôXùÀõX\
+XùOàXùô\›‹ôTõ› Xù
+JJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	Ÿ€ÿ[…À]Kô€ÿ[ÀõX\
+€ÿ[Oà€ÿ[ô\›‹ôTõ› €ÿ[
+JJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	ÿ\‹Ÿ]…À]Kò\‹Ÿ]ÀõX\
+][HOà
+¬àYà][KöY›\ŸZ€⁄Yà›\ŸZ€Y\Ÿ\ó⁄Yà›\úô[ù\Ÿ\ãöYò[YNà][Kõò[YK\‹Ÿ]›\Nà][Kù\Kàﬁ[Xõ€à][Kúﬁ[Xõ€ù[]X[ù]Nàù[Xô\ä][Kú]X[ù]H
+K›\úô[òﬁNà€X[ê›\úô[òﬁJ][Kò›\úô[òﬁJKàX[ùX[›ò[YNà][KõX[ùX[ò[YHOHù[»ù[àù[Xô\ä][KõX[ùX[ò[YJKõ›\Œà][Kõõ›\»ù[\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+BàJJJN¬à€€ú›€ò\⁄›õ›‹»H]Kú€ò\⁄›ÀõX\
+][HOà¬à€€ú›^\›[ô»H›]Kú€ò\⁄›Àôö[ô
+€ò\⁄›Oà€ò\⁄›ô]HOOH][Kô]JN¬àô]\õà»Yà^\›[ôœÀöY][KöY›\ŸZ€⁄Yà›\ŸZ€Y€ò\⁄›Ÿ]Nà][Kô]Kÿ\⁄›\Ÿàù[Xô\ä][Kòÿ\⁄T—
+K\‹Ÿ]◊›\Ÿàù[Xô\ä][Kò\‹Ÿ]’T—
+KXù›\Ÿàù[Xô\ä][KôXùT—
+Kô]›€‹ù›\Ÿàù[Xô\ä][Kõô]€‹ùT—
+HN¬àJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	€ô]›€‹ù‹€ò\⁄›…À€ò\⁄›õ›‹À	⁄›\ŸZ€⁄Y€ò\⁄›Ÿ]I N¬à€€ú›⁄X⁄›\õ›‹»H]Kò⁄X⁄›\ÀõX\
+][HOà¬à€€ú›^\›[ô»H›]Kò⁄X⁄›\Àôö[ô
+⁄X⁄›\Oà⁄X⁄›\õ[€ùOOH][Kõ[€ù
+N¬àô]\õà»Yà^\›[ôœÀöY][KöY›\ŸZ€⁄Yà›\ŸZ€Y[€ùà][Kõ[€ù€€\]YÿûNà›\úô[ù\Ÿ\ãöYXÿ€›[ùÿ€›[ùàù[Xô\ä][KòXÿ€›[ù€›[ù
+KYù\›Y[ù››[›\Ÿàù[Xô\ä][KòYù\›Y[ùT—
+Kõ›Nà][Kõõ›Hù[õÿ›\Œà][Kôõÿ›\»ù[€‹ŸYÿ]à][Kò€‹ŸY]ù[ò[[òŸ\◊ÿ⁄X⁄ŸYÿ]à][Kòò[[òŸ\–⁄X⁄ŸY]ù[€€\]Yÿ]à][Kò€€\]Y]ô]»]J
+Kù“T”‘›ö[ô 
+K\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HN¬àJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	€[€ùWÿ⁄X⁄›\…À⁄X⁄›\õ›‹À	⁄›\ŸZ€⁄Y[€ù	 N¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	‹⁄[ö⁄[ô◊Ÿù[ô…À]Kú⁄[ö⁄[ô—ù[ôÀõX\
+][HOà
+»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€Y‹ôX]YÿûNà›\úô[ù\Ÿ\ãöYò[YNà][Kõò[YK\ôŸ]ÿ[[›[ùàù[Xô\ä][Kù\ôŸ]
+Kÿ]ôYÿ[[›[ùàù[Xô\ä][Kúÿ]ôY
+K›\úô[òﬁNà€X[ê›\úô[òﬁJ][Kò›\úô[òﬁJKYWŸ]Nà][KôYHù[\›‹ô\Ÿ\ùôY€[€ùà][Kõ\›ô\Ÿ\ùôY[€ùù[õ›Nà][Kõõ›Hù[X›]ôNà][KòX›]ôHOOHò[ŸK\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HJJJN¬àYô\›‹ôPò]⁄\ ‹\ò][€úÀ	›ŸYZ€W€[€ô^WŸ]\…À]KùŸYZ€Tô]öY]‹ÀõX\
+][HOà
+»Yà][KöY›\ŸZ€⁄Yà›\ŸZ€YŸYZ◊‹›\ùà][KùŸYZ‘›\ùô]öY]ŸYÿûNà›\úô[ù\Ÿ\ãöY⁄[éà][Kù⁄[àù[ô^ÿX›[€éà][Kõô^X›[€àù[€€\]Yÿ]à][Kò€€\]Y]ô]»]J
+Kù“T”‘›ö[ô 
+K\]Yÿ]àô]»]J
+Kù“T”‘›ö[ô 
+HJJK	⁄›\ŸZ€⁄YŸYZ◊‹›\ù	 N¬àûH¬àõ‹à
+][ô^H»[ô^‹\ò][€úÀõ[ô›»[ô^
+œHJH¬à€€ú›‹\ò][€àH‹\ò][€ú÷⁄[ô^N¬àYà
+ù]€äHù]€ãù^€€ù[ùHô\›‹ö[ô»	”X]úõ›[ô
+[ô^»X]õX^
+K‹\ò][€úÀõ[ô›
+H
+àL
+_Ix†)ò¬à€€ú›»\úõ‹àHH]ÿZ]ù[ì‹\ò][€ä‹\ò][€äN¬àYà
+\úõ‹äHõ›»\úõ‹é¬àBà[ô[ô‘ô\›‹ôQ]HHù[¬à›]KúŸ][ô‹Àõ\››\úô[òﬁHH]KúŸ][ô‹Àõ\››\úô[òﬁN¬à›]KúöXŸ\»H]KúöXŸ\Œ¬àÿX⁄J
+N¬à]ÿZ]ÿYô[[›J
+N¬à€‹ŸS[Ÿ[
+
+N¬àÿ\›
+	–òX⁄›\ô\›‹ôYÿYô[H8ß$… N¬àŸ[Xúò]J
+N¬à]ÿZ][ú›\ôUŸ^T€ò\⁄›
+
+N¬àHÿ]⁄
+\úõ‹äH¬àYà
+ù]€äH»ù]€ãô\ÿXõYHò[ŸN»ù]€ãù^€€ù[ùH	‘ô]ûHô\›‹ôIŒ»Bàÿ\›
+ô\›‹ôH›‹Yà	Ÿ\úõ‹èÀõY\‹ÿYŸH	›[ö€õ›€à\úõ‹âﬂX
+N¬à]ÿZ]ÿYô[[›J
+N¬àBüBÇôù[ò›[€à‹›êŸ[
+ò[YJH¬à€€ú›^H›ö[ô ò[YHœ»	… N¬à€€ú›ù[Y\öX»H◊ó ñ ÀWO Œó
+ Œóó
+äOﬂó
+ W âÀù\›
+^
+N¬à€€ú›ÿYôHH[ù[Y\öX»	âà◊ó ñœJ◊PKÀù\›
+^
+H»	…›^Xà^¬àô]\õàâ‹ÿYôKúô\XŸJ»ãŸÀ	»àâ _Hò¬üBôù[ò›[€à^‹ùò[úÿX›[€ú–‹›ä
+H¬à€€ú›XY\ú»H…—]IÀ	’\IÀ	–ÿ]Y€‹ûIÀ	–[[›[ù	À	–›\úô[òﬁIÀ	‘ZYûIÀ	—úõ€HXÿ€›[ù	À	’»Xÿ€›[ù	À	–[[›[ùôXŸZ]ôY	À	—Xùö[ò⁄\[	À	”õ›I◊N¬à€€ú›[ô\»H⁄XY\úÀããñÀããú›]Kùò[úÿX›[€ú◊Kú€‹ù
+
+KäHOàKô]Kõÿÿ[P€€\\ôJãô]JJKõX\
+Oà›ô]Kù\Kòÿ]Y€‹ûKò[[›[ùò›\úô[òﬁKúZYûKXÿ€›[ùò[YJòXÿ€›[ùY
+HòXÿ€›[ùXÿ€›[ùò[YJù–Xÿ€›[ùY
+Kù–[[›[ùœ»	…ÀôXùö[ò⁄\[œ»	…Àõõ›WJWN¬à›€õÿYö[J›\ãY[ã]ò[úÿX›[€úÀI›Ÿ^J
+_Kò‹›ò[ô\ÀõX\
+õ›»Oàõ›ÀõX\
+‹›êŸ[
+Köõ⁄[ä	À	 JKöõ⁄[ä	◊â K	›^ÿ‹›éÿ⁄\úŸ]]]ãN	 N¬àÿ\›
+	’ò[úÿX›[€à‘’à›€õÿYY8ß$… N¬üBÇò\ﬁ[ò»ù[ò›[€à⁄Y€ì›]
+
+H¬àYà
+äH]ÿZ]ãò]]ú⁄Y€ì›]
+
+N¬à⁄›–]]
+
+N¬üBÇâ
+	€[Ÿ[	 KòY]ô[ù\›[ô\ä	ÿ€X⁄…À]ô[ùOà»Yà
+]ô[ùù\ôŸ]OOH	
+	€[Ÿ[	 JH€‹ŸS[Ÿ[
+
+N»JN¬â
+	‹ÿZ⁄U›\ì[Ÿ[	 KòY]ô[ù\›[ô\ä	ÿ€X⁄…À]ô[ùOà»Yà
+]ô[ùù\ôŸ]OOH	
+	‹ÿZ⁄U›\ì[Ÿ[	 JH€‹ŸTÿZ⁄U›\ä
+N»JN¬ôÿ›[Y[ùòY]ô[ù\›[ô\ä	⁄Ÿ^Y›€âÀ]ô[ùOà¬àYà
+]ô[ùöŸ^HOOH	—\ÿÿ\I»	âàI
+	‹ÿZ⁄U›\ì[Ÿ[	 Kò€\‹”\›ò€€ùZ[ú 	⁄Y[â JH»€‹ŸTÿZ⁄U›\ä
+N»ô]\õé»BàYà
+]ô[ùöŸ^HOOH	—\ÿÿ\I»	âàI
+	€[Ÿ[	 Kò€\‹”\›ò€€ùZ[ú 	⁄Y[â JH»€‹ŸS[Ÿ[
+
+N»ô]\õé»BüJN¬ò€€ú›⁄Y[ÿúŸ\ùô\àHô]»]]][€ìÿúŸ\ùô\ä]]][€ú»Oà]]][€úÀôõ‹ëXX⁄
+]]][€àOà]]][€ãòYYõŸ\Àôõ‹ëXX⁄
+õŸHOà¬àYà
+õŸKõõŸU\HOOHõŸKëSSQSï”ì—JHô\\ôR[õ[ôP€€ùõ€ õŸJN¬üJJJN¬ù⁄Y[ÿúŸ\ùô\ãõÿúŸ\ùôJÿ›[Y[ùòõŸK»⁄[\›àùYK›XùôYNàùYHJN¬úô\\ôR[õ[ôP€€ùõ€ 
+N¬úŸ]\õ‹õQõ› 	
+	‹Ÿ][ô‹—õ›… JN¬ÇöYà
+	‹Ÿ\ùöXŸU€‹öŸ\â»[àò]öYÿ]‹äHò]öYÿ]‹ãúŸ\ùöXŸU€‹öŸ\ãúôY⁄\›\ä	‹›Àöú… Kòÿ]⁄
+
+
+HOàﬂJN¬úô[ô\ä
+N¬ú⁄›‘YŸJ	›Ÿ^I N¬òõ€›
+
+N¬

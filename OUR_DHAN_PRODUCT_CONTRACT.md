@@ -45,13 +45,13 @@ This file is the durable brief for future work. It records the decisions Dhani a
 
 ## Monthly statement delivery
 
-- Without an approved external relay, saving Salary must still prepare the completed previous month locally and offer one-tap phone sharing with a CSV attachment. It must not claim the message was sent automatically.
+- Without an approved external relay, saving Salary must still prepare the completed previous month locally and offer one-tap phone sharing with a simple summary picture. A detailed CSV remains an optional records download. It must not claim the message was sent automatically.
 - Local statement preparation stores only a small month/trigger marker. The statement is regenerated from source records and is never retained as a file in the browser or database.
 - External delivery is off by default. The signed-in household owner must explicitly turn it on after accepting the relay/mailbox privacy tradeoff.
 - When an authenticated household member saves an **Income → Salary** record, request the completed previous calendar month’s statement.
 - Deliver at most once per household and statement month, even after retries or repeated taps.
 - Send only to the verified login email selected by the household owner. The browser must never accept an arbitrary destination for this automation.
-- Include income, spending, balance, a 40–30–20–10 guide and a CSV attachment. Exclude transfers and balance corrections from totals.
+- Include money received, money spent, clearly labelled net change, a daily month graph, spending areas, a 40–30–20–10 guide and one next action. The share-first attachment is a readable picture; the detailed CSV remains available separately. Exclude transfers and balance corrections from totals.
 - The delivery database log stores metadata only—never statement HTML, CSV contents or financial totals.
 - The email API key is a server-side secret. It must never appear in `config.js`, browser storage, Git or a backup.
 - Email is not end-to-end private: the relay and recipient mailbox process the content. State this plainly and keep a one-tap pause control.

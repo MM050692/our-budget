@@ -34,7 +34,7 @@ The repository uses only the public Supabase publishable/anon key. Never put a s
 
 ## Monthly statement email
 
-Saving an Income → Salary entry now prepares the completed previous month's statement locally. On supported phones, **Share or email** opens the system share sheet with the CSV attached; the fallback downloads the CSV and opens an email draft addressed to the signed-in login email. This needs no paid service and does not keep a statement file online.
+Saving an Income → Salary entry now prepares the completed previous month's money story locally. The first view is a plain-language summary with money received, money spent, net change, an interactive daily graph, spending areas, a 40–30–20–10 guide and one next action. On supported phones, **Share simple summary** opens the system share sheet with an easy PNG picture attached; the fallback saves the picture and opens an email draft addressed to the signed-in login email. A clearer CSV remains available separately as **Detailed records**. This needs no paid service and does not keep a statement file online.
 
 Fully unattended external email is intentionally **not connected**. The deployed `email-monthly-statement` function is an authenticated non-sending placeholder: it accepts no destination, reads no financial rows and reports `setup_required`. Finance data, manual statement generation, CSV downloads and private backups continue normally.
 
@@ -89,6 +89,6 @@ Serve `main` through GitHub Pages. The app uses the existing GitHub Pages site, 
 12. Go offline, save an expense, reconnect and confirm the waiting-sync message clears.
 13. Add a sinking fund, record its monthly set-aside and confirm safe-to-spend remains protected before and after.
 14. Complete a weekly money date and month close, then confirm both appear on the other phone and in Timeline.
-15. Add a Salary entry and confirm the previous month's statement opens once, shows the correct totals and shares or downloads a safe CSV.
+15. Add a Salary entry and confirm the previous month's money story opens once, shows the correct totals and daily graph, explains a selected day, shares or saves a private summary picture, and still downloads safe detailed CSV records.
 16. Create a private `.odhan` backup, unlock it in `recovery.html`, download the recovered JSON and verify that the app accepts it for restore.
 17. Test with more than 1,000 generated records and confirm the oldest and newest entries both load and export.
