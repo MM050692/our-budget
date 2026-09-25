@@ -424,6 +424,18 @@ function activeAccounts() { return state.accounts.filter(a => a.active !== false
 function activeGoals() { return state.goals.filter(g => g.active !== false); }
 function activeDebts() { return state.debts.filter(d => d.active !== false || d.remaining > 0); }
 function activeSinkingFunds() { return state.sinkingFunds.filter(fund => fund.active !== false && fund.saved + .005 < fund.target); }
+function predatesAccountTracking(account, date) { return !!(account?.openingDate && date && date < account.openingDate); }
+function updateHistoricalAccountHint(dateId, accountId, hintId) {
+  const hint = $(hintId);
+  if (!hint) return;
+  const account = state.accounts.find(item => item.id === $(accountId)?.value);
+  const date = $(dateId)?.value || '';
+  const isOlder = predatesAccountTracking(account, date);
+  hint.classList.toggle('hidden', !isOlder);
+  hint.textContent = isOlder
+    ? `Older record: it will stay in history and reports. ${account.name}'s current balance still starts on ${formatDate(account.openingDate)}.`
+    : '';
+}
 function householdPeople() { return [...new Set([...state.people, state.member.displayName].map(name => String(name || '').trim()).filter(Boolean))]; }
 function defaultPerson() { return state.member.displayName || 'Shared'; }
 function peopleOptions(selected = defaultPerson()) {
@@ -817,7 +829,11 @@ function syncInlineOptionWheel(select, scroll = true) {
     item.classList.toggle('active', itemIndex === index);
     item.setAttribute('aria-selected', itemIndex === index ? 'true' : 'false');
   });
-  if (scroll) requestAnimationFrame(() => rail.scrollTo({ top: index * 48, behavior: 'smooth' }));
+  if (scroll) requestAnimationFrame(() => rail.scrollTo({ top: index * inlineOptionStep(rail), behavior: 'smooth' }));
+}
+
+function inlineOptionStep(rail) {
+  return rail?.querySelector('.inlineOptionItem')?.offsetHeight || 48;
 }
 
 function buildInlineOptionWheel(select) {
@@ -848,12 +864,12 @@ function buildInlineOptionWheel(select) {
     if (!item) return;
     const index = Number(item.dataset.optionIndex);
     choose(index);
-    rail.scrollTo({ top: index * 48, behavior: 'smooth' });
+    rail.scrollTo({ top: index * inlineOptionStep(rail), behavior: 'smooth' });
   };
   let settleTimer;
   rail.addEventListener('scroll', () => {
     clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => choose(Math.round(rail.scrollTop / 48)), 90);
+    settleTimer = setTimeout(() => choose(Math.round(rail.scrollTop / inlineOptionStep(rail))), 90);
   }, { passive: true });
   rail.onkeydown = event => {
     if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
@@ -862,7 +878,7 @@ function buildInlineOptionWheel(select) {
     syncInlineOptionWheel(select);
   };
   requestAnimationFrame(() => {
-    rail.scrollTop = Math.max(0, select.selectedIndex) * 48;
+    rail.scrollTop = Math.max(0, select.selectedIndex) * inlineOptionStep(rail);
     syncInlineOptionWheel(select, false);
   });
 }
@@ -3346,6 +3362,7 @@ function openQuickTransaction(type, options = {}) {
     <section class="flowStep" data-flow-title="${isIncome ? 'Received in' : 'Paid from'}">
       <label>${isIncome ? 'Which account received it?' : 'Which account paid?'}<select id="quickAccount">${accounts.length ? accounts.map(account => `<option value="${account.id}"${account.id === rememberedAccount ? ' selected' : ''}>${esc(account.name)} · ${account.currency}</option>`).join('') : '<option value="">Not linked</option>'}</select></label>
       ${accounts.length ? '' : '<div class="friendlyNote">You can save now and add the bank account later.</div>'}
+      <div id="quickHistoricalHint" class="friendlyNote historicalAccountHint hidden"></div>
     </section>
     <section class="flowStep" data-flow-title="${isIncome ? 'Income type' : 'Reason'}">
       <label>${isIncome ? 'What type of income?' : 'What was it for?'}<select id="quickCategory">${categories.map(([category, icon]) => `<option value="${esc(category)}"${category === rememberedCategory ? ' selected' : ''}>${icon} ${esc(category)}</option>`).join('')}</select></label>
@@ -3363,6 +3380,7 @@ function openQuickTransaction(type, options = {}) {
   let autoNote = suggestedNote;
   $('quickPaidBy').value = options.paidBy || defaultPerson();
   $('quickCurrency').onchange = () => { $('quickAmountPrefix').textContent = $('quickCurrency').value; };
+  $('quickDate').addEventListener('change', () => updateHistoricalAccountHint('quickDate', 'quickAccount', 'quickHistoricalHint'));
   $('quickCategory').onchange = () => {
     category = $('quickCategory').value;
     const note = $('quickNote');
@@ -3379,12 +3397,14 @@ function openQuickTransaction(type, options = {}) {
       syncInlineOptionWheel($('quickCurrency'), false);
     }
     $('quickAmountPrefix').textContent = accountCurrency || $('quickCurrency').value;
+    updateHistoricalAccountHint('quickDate', 'quickAccount', 'quickHistoricalHint');
   };
+  updateHistoricalAccountHint('quickDate', 'quickAccount', 'quickHistoricalHint');
   $('quickTransactionForm').onsubmit = async event => {
     event.preventDefault();
     const account = accounts.find(a => a.id === accountId);
     const date = $('quickDate').value;
-    if (account && date < account.openingDate) { toast(`Choose ${account.openingDate} or later for this account.`); return; }
+    const isOlderRecord = predatesAccountTracking(account, date);
     const transaction = {
       id: crypto.randomUUID(), type, amount: +$('quickAmount').value,
       currency: account?.currency || $('quickCurrency').value, category, paidBy: $('quickPaidBy').value,
@@ -3399,7 +3419,10 @@ function openQuickTransaction(type, options = {}) {
     }
     rememberCurrency(transaction.currency);
     state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: isIncome ? 'Income added ✓' : 'Spend recorded ✓', celebrate: isIncome });
+    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, {
+      message: isOlderRecord ? 'Past record saved ✓ Current balance kept.' : isIncome ? 'Income added ✓' : 'Spend recorded ✓',
+      celebrate: isIncome
+    });
     queueSalaryStatement(transaction);
     ensureTodaySnapshot();
   };
@@ -3419,7 +3442,7 @@ function openTransaction(type, id = null, options = {}) {
       <label>Amount<input id="transactionAmount" type="number" step="0.01" min="0.01" required value="${existing?.amount ?? options.amount ?? ''}"></label>
       <label>Currency<select id="transactionCurrency">${currencyOptions(existing?.currency || options.currency || state.settings.lastCurrency)}</select></label>
     </section>
-    <section class="flowStep" data-flow-title="${type === 'income' ? 'Received in' : 'Paid from'}"><label>Account<select id="transactionAccount">${accountSelectOptions(selectedAccount)}</select></label>${activeAccounts().length ? '' : '<div class="friendlyNote">Add a bank or cash account later to update its balance automatically.</div>'}</section>
+    <section class="flowStep" data-flow-title="${type === 'income' ? 'Received in' : 'Paid from'}"><label>Account<select id="transactionAccount">${accountSelectOptions(selectedAccount)}</select></label>${activeAccounts().length ? '' : '<div class="friendlyNote">Add a bank or cash account later to update its balance automatically.</div>'}<div id="transactionHistoricalHint" class="friendlyNote historicalAccountHint hidden"></div></section>
     <section class="flowStep" data-flow-title="${type === 'income' ? 'Income type' : 'Reason'}"><label>${type === 'income' ? 'Income type' : 'What was it for?'}<select id="transactionCategory">${[...new Set([selectedCategory, ...categories])].map(category => `<option>${esc(category)}</option>`).join('')}</select></label></section>
     <section class="flowStep" data-flow-title="${type === 'income' ? 'Received by' : 'Who paid'}"><label>${type === 'income' ? 'Received by' : 'Paid by'}<select id="transactionPaidBy">${peopleOptions(existing?.paidBy || options.paidBy || defaultPerson())}</select></label></section>
     <section class="flowStep" data-flow-title="Note and save"><label>Note<input id="transactionNote" maxlength="200" value="${esc(existing?.note || options.note || '')}" placeholder="Optional"></label><button class="primary" type="submit">Save ${type}</button></section>
@@ -3433,13 +3456,16 @@ function openTransaction(type, id = null, options = {}) {
     if (account) $('transactionCurrency').value = account.currency;
     syncInlineOptionWheel($('transactionCurrency'), false);
   };
-  $('transactionAccount').onchange = syncCurrency;
+  const refreshHistoricalHint = () => updateHistoricalAccountHint('transactionDate', 'transactionAccount', 'transactionHistoricalHint');
+  $('transactionAccount').onchange = () => { syncCurrency(); refreshHistoricalHint(); };
+  $('transactionDate').addEventListener('change', refreshHistoricalHint);
   syncCurrency();
+  refreshHistoricalHint();
   $('transactionForm').onsubmit = async event => {
     event.preventDefault();
     const account = state.accounts.find(a => a.id === $('transactionAccount').value);
     const date = $('transactionDate').value;
-    if (account && date < account.openingDate) { toast(`Choose ${account.openingDate} or later for ${account.name}.`); return; }
+    const isOlderRecord = predatesAccountTracking(account, date);
     const transaction = {
       id: existing?.id || crypto.randomUUID(), type, amount: +$('transactionAmount').value,
       currency: account?.currency || $('transactionCurrency').value, category: $('transactionCategory').value,
@@ -3453,7 +3479,10 @@ function openTransaction(type, id = null, options = {}) {
     const index = state.transactions.findIndex(t => t.id === transaction.id);
     if (index >= 0) state.transactions[index] = transaction;
     else state.transactions.push(transaction);
-    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, { message: type === 'income' ? 'Income added ✓' : 'Expense saved ✓', celebrate: type === 'income' });
+    await saveOperation({ action: 'upsert', table: 'transactions', row: transactionRow(transaction) }, {
+      message: isOlderRecord ? 'Past record saved ✓ Current balance kept.' : type === 'income' ? 'Income added ✓' : 'Expense saved ✓',
+      celebrate: type === 'income'
+    });
     queueSalaryStatement(transaction);
     ensureTodaySnapshot();
   };
@@ -3558,8 +3587,10 @@ function openAccountForm(id = null) {
       return;
     }
     const openingDate = $('accountDate').value;
-    const earlierLinked = account && state.transactions.some(transaction =>
-      (transaction.accountId === account.id || transaction.toAccountId === account.id) && transaction.date < openingDate
+    const movesTrackingForward = account && openingDate > account.openingDate;
+    const earlierLinked = movesTrackingForward && state.transactions.some(transaction =>
+      (transaction.accountId === account.id || transaction.toAccountId === account.id) &&
+      transaction.date >= account.openingDate && transaction.date < openingDate
     );
     if (earlierLinked) { toast('The tracking date cannot move after an existing linked record.'); return; }
     const item = {
@@ -3580,6 +3611,9 @@ function openAccountForm(id = null) {
 function openAccountStatement(id) {
   const account = state.accounts.find(item => item.id === id);
   if (!account) return;
+  const olderRecords = state.transactions.filter(transaction =>
+    transaction.date < account.openingDate && (transaction.accountId === id || transaction.toAccountId === id)
+  );
   const records = state.transactions
     .filter(transaction => transaction.date >= account.openingDate && (transaction.accountId === id || transaction.toAccountId === id))
     .sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt));
@@ -3590,7 +3624,10 @@ function openAccountStatement(id) {
     running += delta;
     rows.push({ date: transaction.date, title: transaction.type === 'transfer' ? (delta < 0 ? `Transfer to ${accountName(transaction.toAccountId)}` : `Transfer from ${accountName(transaction.accountId)}`) : transaction.category, delta, balance: running });
   });
-  openModal(`${account.name} statement`, `<div class="friendlyNote">This running balance starts from ${formatDate(account.openingDate)} and updates from every linked entry.</div><div class="statement">${rows.map(row => `<div class="statementRow"><time>${esc(row.date)}</time><div><b>${esc(row.title)}</b>${row.delta == null ? '' : `<div class="meta">${row.delta >= 0 ? '+' : '−'} ${money(Math.abs(row.delta), account.currency)}</div>`}</div><div class="statementValue"><strong>${money(row.balance, account.currency)}</strong><span>balance</span></div></div>`).join('')}</div><button class="secondary wide" onclick="closeModal();reconcileAccount('${account.id}')">Correct to today’s balance</button>`);
+  const olderNote = olderRecords.length
+    ? ` ${olderRecords.length} older record${olderRecords.length === 1 ? '' : 's'} remain${olderRecords.length === 1 ? 's' : ''} in Timeline and reports without changing this starting balance.`
+    : '';
+  openModal(`${account.name} statement`, `<div class="friendlyNote">This running balance starts from ${formatDate(account.openingDate)} and updates from every linked entry.${olderNote}</div><div class="statement">${rows.map(row => `<div class="statementRow"><time>${esc(row.date)}</time><div><b>${esc(row.title)}</b>${row.delta == null ? '' : `<div class="meta">${row.delta >= 0 ? '+' : '−'} ${money(Math.abs(row.delta), account.currency)}</div>`}</div><div class="statementValue"><strong>${money(row.balance, account.currency)}</strong><span>balance</span></div></div>`).join('')}</div><button class="secondary wide" onclick="closeModal();reconcileAccount('${account.id}')">Correct to today’s balance</button>`);
 }
 
 function reconcileAccount(id) {

@@ -36,6 +36,7 @@ This file is the durable brief for future work. It records the decisions Dhani a
 ## Accounting invariants
 
 - Accounts are the source of current bank, cash and wallet balances. Salary is income flowing into an account—not the account balance itself.
+- A normal income or spending record may be backdated before an account's tracking start. It remains visible in household history and reports but must not alter that account's opening or current running balance.
 - Transfers between owned accounts never count as income or spending and never change net worth.
 - Balance corrections remain visible and are excluded from income/spending reports.
 - Goal savings remain inside accounts and are marked reserved; never add the same cash to net worth twice.
