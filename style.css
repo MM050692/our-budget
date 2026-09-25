@@ -834,6 +834,7 @@ h3 { font-weight: 680; }
 .flowBack { padding: 12px 16px; border-radius: 999px; background: #e7e7eb; color: var(--ink); font-weight: 650; }
 .flowNext { min-width: 132px; }
 .flowStep > button[type="submit"] { width: 100%; min-height: 49px; order: 99; }
+.historicalAccountHint { margin-top: 2px; }
 
 .inlineNumberWheel {
   width: 100%;
@@ -1416,7 +1417,28 @@ h3 { font-weight: 680; }
 @keyframes tourDoneIn { from { opacity: 0; transform: scale(.72) rotate(-8deg); } }
 
 @media (max-width: 430px) {
+  body { font-size: 13px; -webkit-text-size-adjust: 100%; }
+  h1 { font-size: clamp(25px, 7vw, 31px); }
+  h2 { font-size: 16px; }
+  h3 { font-size: 13px; }
+  .eyebrow { font-size: 8px; }
+  .brandTitle { font-size: 13px; }
+  .syncStatus { font-size: 8px; }
   main { padding-top: 18px; }
+  .pageTitle, .todayHeading { margin-bottom: 20px; }
+  .sectionHead { margin: 22px 0 9px; }
+  .sectionHead p { font-size: 9px; }
+  .safeTop span, .safeMessage, .netWorthCard p { font-size: 10px; }
+  .safeTop b { font-size: clamp(27px, 8vw, 36px); }
+  .netWorthCard > b { font-size: clamp(29px, 8vw, 38px); }
+  .metricCard span { font-size: 9px; }
+  .metricCard b { font-size: clamp(13px, 3.5vw, 17px); }
+  .form { gap: 10px; }
+  .form label { gap: 4px; font-size: 9px; }
+  .form input, .form select, .form textarea { padding: 10px 11px; font-size: 16px; }
+  .form textarea { min-height: 68px; }
+  .primary, .secondary { padding: 11px 13px; font-size: 11px; }
+  .friendlyNote, .warningNote { padding: 9px 10px; font-size: 8px; }
   .moneyToolsGrid { grid-template-columns: 1fr 1fr; }
   .moneyBreakdownVisual { grid-template-columns: 1fr; }
   .moneyBreakdownDonut { margin: 0 auto; }
@@ -1446,7 +1468,26 @@ h3 { font-weight: 680; }
   .backupHealth { grid-template-columns: 1fr; }
   .backupChoice { grid-template-columns: 1fr; }
   .backupChoice > button { justify-self: start; }
-  .flowStep { min-height: calc(100svh - 112px); }
+  .flowModal .sheet { padding-top: 4px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .flowModal .sheetHead { padding: 8px 0; margin-bottom: 4px; }
+  .flowModal .sheetHead h2 { font-size: 16px; }
+  .flowStep { min-height: calc(100svh - 88px); gap: 10px; padding: 4px 0; }
+  .flowStepHead { gap: 4px; margin-bottom: 0; }
+  .flowStepHead span { font-size: 8px; }
+  .flowStepHead b { font-size: clamp(18px, 5vw, 22px); }
+  .flowStepHead i { height: 3px; }
+  .flowActions { padding-top: 4px; }
+  .flowBack { padding: 10px 13px; font-size: 10px; }
+  .flowNext { min-width: 110px; }
+  .flowStep > button[type="submit"] { min-height: 42px; }
+  .inlineNumberWheel { grid-template-rows: 30px 48px 30px auto; border-radius: 17px; }
+  .inlineNumberWheel .inlineNumberInput { height: 48px; font-size: 22px; }
+  .numberNudge { height: 30px; font-size: 13px; }
+  .inlineNumberWheel > small { padding: 4px 9px 6px; font-size: 7px; }
+  .inlineOptionRail { height: 152px; padding-block: 57px; border-radius: 17px; }
+  .inlineOptionItem { height: 38px; padding: 0 14px; font-size: 13px; }
+  .inlineOptionItem.active { font-size: 17px; }
+  .amountField .amountPrefix { top: 58px; font-size: 9px; }
   .sakhiTourLauncher { grid-template-columns: 40px minmax(0, 1fr) auto; padding: 10px 11px; }
   .sakhiTourPlay { width: 40px; height: 40px; border-radius: 14px; }
   .sakhiTourLauncherCopy small { font-size: 8px; }

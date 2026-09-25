@@ -57,6 +57,8 @@ Use **Money → Backup data** to make a private encrypted backup at least monthl
 5. Use **Correct balance** if the app and bank differ; the correction remains visible in history.
 6. Gold, investments, crypto and property belong under **Other assets**. Goal savings stay in Accounts and are marked as reserved, so they are not added twice.
 
+Income and spending dated before an account's tracking start remain in Timeline and reports. They do not change that account's opening or current running balance.
+
 ## Phone shortcuts
 
 ### iPhone Back Tap
@@ -92,3 +94,4 @@ Serve `main` through GitHub Pages. The app uses the existing GitHub Pages site, 
 15. Add a Salary entry and confirm the previous month's money story opens once, shows the correct totals and daily graph, explains a selected day, shares or saves a private summary picture, and still downloads safe detailed CSV records.
 16. Create a private `.odhan` backup, unlock it in `recovery.html`, download the recovered JSON and verify that the app accepts it for restore.
 17. Test with more than 1,000 generated records and confirm the oldest and newest entries both load and export.
+18. From the second household login, save income and spending dated before that account's tracking start; confirm the records appear in Timeline while its current balance stays unchanged.
