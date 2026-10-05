@@ -1117,7 +1117,7 @@ document.addEventListener('visibilitychange', () => {
 });
 // Reconcile missed events and retry failed uploads while the app is visible.
 setInterval(() => {
-  if (document.visibilityState === 'visible') refreshConnection();
+  if (document.visibilityState === 'visible' && (!realtimeConnected || pending().length)) refreshConnection();
 }, 60000);
 
 function showPage(name) {
