@@ -10,7 +10,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <title>Our DHAN</title>
-  <link rel="stylesheet" href="style.css?v=9-16">
+  <link rel="stylesheet" href="style.css?v=9-17">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4"></script>
   <script src="config.js"></script>
 </head>
@@ -129,10 +129,10 @@
           <div class="netWorthRateBar">
             <div class="netWorthRateCopy">
               <span id="moneyRateStatus" aria-live="polite">Gold &amp; crypto market rates</span>
-              <small>Free live data · updates the dashboard</small>
+              <small>Metal &amp; crypto prices · currency rates in Settings</small>
             </div>
             <button id="moneyRefreshRates" class="liveRateButton" type="button" onclick="refreshPrices(true)">
-              <span aria-hidden="true">↻</span><span id="moneyRefreshLabel">Refresh rates</span>
+              <span aria-hidden="true">↻</span><span id="moneyRefreshLabel">Refresh prices</span>
             </button>
           </div>
         </div>
@@ -327,6 +327,8 @@
           <label>1 USD = MVR<input id="rateMVR" type="number" step="0.0001"></label>
           <label>1 USD = INR<input id="rateINR" type="number" step="0.0001"></label>
           <button class="primary" type="submit">Save settings</button>
+          <button class="secondary" type="button" onclick="openCurrencyRateRefresh()">Update currency rates</button>
+          <small>Daily reference <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">rates by ExchangeRate-API</a>. Manual rates remain available.</small>
         </form>
 
         <div class="settingsCard top emailStatementCard">
@@ -360,6 +362,7 @@
 
         <button class="signOutButton" onclick="signOut()">Sign out</button>
       </section>
+      <p class="friendlyNote"><small>Optional currency reference <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">rates by ExchangeRate-API</a>. Your saved rates are used for conversions.</small></p>
     </main>
 
     <nav class="bottomNav" aria-label="Main navigation">
@@ -393,6 +396,7 @@
   <div id="toast" class="toast hidden" aria-live="polite"></div>
   <div id="confetti" class="confetti" aria-hidden="true"></div>
 
-  <script src="app.js?v=9-16"></script>
+  <script src="app.js?v=9-17"></script>
 </body>
 </html>
+
