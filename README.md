@@ -24,7 +24,7 @@ A private shared household money app for a couple. It runs on GitHub Pages with 
 - Household-scoped Row Level Security, Realtime updates, a compressed IndexedDB cache and a second durable offline-change queue
 - Keyset-paginated history loading so records beyond a service's first 1,000 rows remain available
 - Private compressed `.odhan` backups, readable integrity-checked JSON, validated batched restore, transaction CSV export and a dependency-free recovery page
-- Salary-triggered delivery of the completed previous month's statement, with one delivery record per month and no financial contents stored in its database log
+- Salary-triggered local preparation of the completed previous month's statement; external email remains inactive pending explicit owner acceptance and provider setup
 
 ## Data model and migration
 
@@ -95,3 +95,15 @@ Serve `main` through GitHub Pages. The app uses the existing GitHub Pages site, 
 16. Create a private `.odhan` backup, unlock it in `recovery.html`, download the recovered JSON and verify that the app accepts it for restore.
 17. Test with more than 1,000 generated records and confirm the oldest and newest entries both load and export.
 18. From the second household login, save income and spending dated before that account's tracking start; confirm the records appear in Timeline while its current balance stays unchanged.
+
+
+## Reliability update (October 2026)
+
+- Restore imports missing records only. Existing IDs, snapshot dates, monthly checks and weekly reviews are preserved regardless of the backup timestamp. Settings and budget categories are added only when absent. Database writes also ignore duplicates, protecting records created during restore.
+- New debt and goal balances are seeded to account for the existing INSERT triggers. There is no final unconditional balance overwrite. Interrupted restores are not atomic: completed batches remain saved, and retries import only missing records. Keep the safety copy and review balances afterward.
+- Offline uploads are serialized and retain entries added during another upload. IndexedDB queue writes are serialized too. Cached household membership allows offline startup after a successful online login; the app must revalidate membership before uploading.
+- Shared data is refreshed on reconnect, phone resume, Realtime subscription and once per visible minute. Status text reports connection/local-save evidence rather than claiming both phones were verified. Simultaneous ordinary edits to the same record still use the existing last-write behavior; full conflict resolution is not implemented.
+- Money refreshes metal/crypto prices and identifies unavailable symbols without erasing their saved values. Settings offers an explicit optional daily currency-reference lookup from ExchangeRate-API, with attribution and manual-rate fallback. There is no automatic replacement of manual currency rates on login. Converted reports use current saved rates; original amounts remain in CSV.
+- Backup metadata records a download request, not a verified saved file. Backups remain user-initiated and require two independent user-controlled copies. No unattended external backup destination is configured.
+
+Run `node --test tests/reliability.test.cjs` for synthetic regression checks. These tests read production functions directly and do not access household financial data. Mobile visual checks and a real two-phone/offline round-trip are still required before publishing.
