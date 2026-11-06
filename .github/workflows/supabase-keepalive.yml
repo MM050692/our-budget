@@ -1,0 +1,39 @@
+name: Keep Supabase Active
+
+on:
+  schedule:
+    # Three lightweight requests per day. Times are UTC.
+    - cron: "17 1,9,17 * * *"
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase database
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://wdtlkqcgyjvosejolyqd.supabase.co/rest/v1/households?select=id&limit=1"
+          KEY="sb_publishable_58FcG-q9hZgmi7osTfXvBA_tytG73LR"
+
+          # The publishable key is intentionally safe for client-side/public use.
+          # Row Level Security prevents this anonymous request from exposing household data.
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /tmp/supabase-response.txt -w "%{http_code}" \
+              --connect-timeout 15 --max-time 30 \
+              -H "apikey: $KEY" \
+              "$URL" || true)
+
+            if [ "$code" = "200" ] || [ "$code" = "206" ]; then
+              echo "Supabase keep-alive succeeded (HTTP $code)."
+              exit 0
+            fi
+
+            echo "Attempt $attempt failed with HTTP $code."
+            cat /tmp/supabase-response.txt 2>/dev/null || true
+            sleep 10
+          done
+
+          echo "Supabase keep-alive failed after 3 attempts."
+          exit 1
