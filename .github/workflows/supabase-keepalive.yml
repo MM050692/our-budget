@@ -6,26 +6,34 @@ on:
     - cron: "17 1,9,17 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   keepalive:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
       - name: Ping Supabase database
         shell: bash
         run: |
           set -euo pipefail
-          URL="https://wdtlkqcgyjvosejolyqd.supabase.co/rest/v1/households?select=id&limit=1"
+          URL="https://wdtlkqcgyjvosejolyqd.supabase.co/rest/v1/rpc/keepalive"
           KEY="sb_publishable_58FcG-q9hZgmi7osTfXvBA_tytG73LR"
 
           # The publishable key is intentionally safe for client-side/public use.
-          # Row Level Security prevents this anonymous request from exposing household data.
+          # This RPC returns only true and cannot read household data.
           for attempt in 1 2 3; do
             code=$(curl -sS -o /tmp/supabase-response.txt -w "%{http_code}" \
               --connect-timeout 15 --max-time 30 \
+              --request POST \
               -H "apikey: $KEY" \
+              -H "Content-Type: application/json" \
+              --data '{}' \
               "$URL" || true)
 
-            if [ "$code" = "200" ] || [ "$code" = "206" ]; then
+            response=$(tr -d '[:space:]' < /tmp/supabase-response.txt 2>/dev/null || true)
+            if [ "$code" = "200" ] && [ "$response" = "true" ]; then
               echo "Supabase keep-alive succeeded (HTTP $code)."
               exit 0
             fi
