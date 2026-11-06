@@ -1,6 +1,11 @@
 name: Keep Supabase Active
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/supabase-keepalive.yml"
+      - "supabase/migrations/*keepalive*.sql"
   schedule:
     # Three lightweight requests per day. Times are UTC.
     - cron: "17 1,9,17 * * *"
