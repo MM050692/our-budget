@@ -16,6 +16,14 @@ This file is the durable brief for future work. It records the decisions Dhani a
 - Ending a ChatGPT plan must not affect the website, sign-in, stored data, calculations, backups or email logic.
 - A free external service may be used only when there is a portable fallback and the app clearly reports when its one-time setup is incomplete.
 
+## Free backend continuity
+
+- Supabase Free may pause a low-activity project. The repository therefore keeps `.github/workflows/supabase-keepalive.yml`, scheduled three times daily as a best-effort free activity pulse.
+- The workflow must call only `public.keepalive()`. That RPC runs as `SECURITY INVOKER`, returns only `true`, reads no household table and grants execution only to the anonymous role.
+- The workflow may use the public publishable key, but it must never use or store a database password, secret API key or service-role key.
+- A successful keep-alive must verify both HTTP `200` and the exact `true` response. Permission errors or other responses must fail visibly rather than being treated as success.
+- The keep-alive reduces the likelihood of free-plan pausing but cannot be described as a guarantee. Portable backups remain mandatory.
+
 ## Interaction and visual rules
 
 - Keep the visual language clean, spacious and product-like, inspired by Apple’s clarity rather than a dense accounting dashboard.
