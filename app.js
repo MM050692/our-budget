@@ -46,7 +46,16 @@ let statementEmailKey = '';
 let realtimeChannel = null;
 let realtimeTimer = null;
 let priceRefresh = null;
+let pendingFlush = null;
+let remoteLoad = null;
+let connectionRefresh = null;
+let lastRemoteLoadedAt = '';
+let realtimeConnected = false;
+let restoreInProgress = false;
+let cachedMembershipUsed = false;
+let remoteSettingsPresent = false;
 let durableCacheTimer = null;
+const durableWriteChains = new Map();
 let pendingEncryptedBackup = null;
 let pendingOperationsMemory = [];
 let statementEmailQueueMemory = [];
@@ -152,6 +161,14 @@ async function durableCacheGet(key) {
 }
 
 async function durableCacheSet(key, value) {
+  const previous = durableWriteChains.get(key) || Promise.resolve();
+  const write = previous.catch(() => {}).then(() => durableCacheSetOnce(key, value));
+  durableWriteChains.set(key, write);
+  try { await write; }
+  finally { if (durableWriteChains.get(key) === write) durableWriteChains.delete(key); }
+}
+
+async function durableCacheSetOnce(key, value) {
   const database = await openDurableCache();
   if (!database) return;
   let stored = value;
@@ -220,7 +237,7 @@ async function loadScopedState() {
       if (Array.isArray(legacyQueued) && legacyQueued.length) { queued = legacyQueued; break; }
     }
   }
-  pendingOperationsMemory = Array.isArray(queued) ? queued : [];
+  pendingOperationsMemory = Array.isArray(queued) ? queued.map(item => ({ ...item, queueId: item.queueId || crypto.randomUUID() })) : [];
   savePending(pendingOperationsMemory);
   const emailQueue = safeParse(storageGet(statementEmailKey)) || safeParse(await durableCacheGet(`${statementEmailKey}:queue`));
   statementEmailQueueMemory = Array.isArray(emailQueue) ? emailQueue.slice(-24) : [];
@@ -391,7 +408,9 @@ function updateSyncStatus(message = '') {
   const count = pendingKey ? pending().length : 0;
   $('syncStatus').textContent = message || (count
     ? `${count} change${count === 1 ? '' : 's'} waiting to sync`
-    : currentUser ? 'Synced between both phones' : 'Offline');
+    : !navigator.onLine ? 'Offline · saved on this phone'
+    : currentUser && lastRemoteLoadedAt ? `${realtimeConnected ? 'Shared updates connected' : 'Saved to household'} · ${new Date(lastRemoteLoadedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : currentUser ? 'Connecting to household…' : 'Offline');
 }
 
 function usd(value, currency) {
@@ -1000,6 +1019,9 @@ async function runOperation(operation) {
   if (operation.action === 'moneyDate') {
     return db.from('weekly_money_dates').upsert(operation.row, { onConflict: 'household_id,week_start' });
   }
+  if (operation.action === 'restoreInsert') {
+    return db.from(operation.table).upsert(operation.rows, { ignoreDuplicates: true, onConflict: operation.onConflict || 'id' });
+  }
   if (operation.action === 'bulkUpsert') {
     return db.from(operation.table).upsert(operation.rows, operation.onConflict ? { onConflict: operation.onConflict } : undefined);
   }
@@ -1007,7 +1029,15 @@ async function runOperation(operation) {
 }
 
 async function flushPending() {
-  if (!db || !householdId || !navigator.onLine) return false;
+  if (pendingFlush) return pendingFlush;
+  pendingFlush = flushPendingOnce();
+  try { return await pendingFlush; }
+  finally { pendingFlush = null; }
+}
+
+async function flushPendingOnce() {
+  if (!db || !householdId || !navigator.onLine || cachedMembershipUsed) return false;
+  const requestedPendingKey = pendingKey;
   let items = pending();
   if (!items.length) { updateSyncStatus(); return true; }
   updateSyncStatus('Syncing saved changes…');
@@ -1016,11 +1046,13 @@ async function flushPending() {
     try {
       const { error } = await runOperation(operation);
       if (error) throw error;
-      items.shift();
+      if (requestedPendingKey !== pendingKey) return false;
+      items = pending().filter(item => item.queueId !== operation.queueId);
       savePending(items);
     } catch (error) {
+      if (requestedPendingKey !== pendingKey) return false;
       if (error?.code === '23505' && operation.row?.recurring_item_id) {
-        items.shift();
+        items = pending().filter(item => item.queueId !== operation.queueId);
         savePending(items);
         toast('This recurring item was already confirmed this month.');
         continue;
@@ -1055,10 +1087,38 @@ async function saveOperations(operations, options = {}) {
   if (await flushPending()) await loadRemote();
 }
 
-window.addEventListener('online', async () => {
-  if (await flushPending()) await loadRemote();
-  if (state.settings.emailStatements) await flushStatementEmailQueue(true);
+async function refreshConnection() {
+  if (!db || !householdId || !navigator.onLine || restoreInProgress) { updateSyncStatus(); return false; }
+  if (connectionRefresh) return connectionRefresh;
+  connectionRefresh = (async () => {
+    if (cachedMembershipUsed) {
+      const { data: member, error } = await db.from('household_members').select('household_id,display_name,role').eq('user_id', currentUser.id).limit(1).maybeSingle();
+      if (error || !member || member.household_id !== householdId) {
+        updateSyncStatus('Household access needs verification · saved changes kept');
+        return false;
+      }
+      cachedMembershipUsed = false;
+      state.member = { displayName: member.display_name || 'Friend', role: member.role || 'member' };
+    }
+    if (!(await flushPending())) return false;
+    const loaded = await loadRemote();
+    if (state.settings.emailStatements) await flushStatementEmailQueue(true);
+    return loaded;
+  })();
+  try { return await connectionRefresh; }
+  finally { connectionRefresh = null; }
+}
+
+window.addEventListener('online', refreshConnection);
+window.addEventListener('offline', () => updateSyncStatus());
+window.addEventListener('pageshow', event => { if (event.persisted) refreshConnection(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshConnection();
 });
+// Reconcile missed events and retry failed uploads while the app is visible.
+setInterval(() => {
+  if (document.visibilityState === 'visible' && (!realtimeConnected || pending().length)) refreshConnection();
+}, 60000);
 
 function showPage(name) {
   currentPage = name;
@@ -1092,6 +1152,9 @@ function showAuth() {
   if (realtimeChannel && db) db.removeChannel(realtimeChannel);
   currentUser = null;
   householdId = null;
+  realtimeConnected = false;
+  lastRemoteLoadedAt = '';
+  cachedMembershipUsed = false;
   stateKey = '';
   pendingKey = '';
   statementEmailKey = '';
@@ -1119,19 +1182,31 @@ async function signedIn(user) {
   $('authScreen').classList.add('hidden');
   $('app').classList.remove('hidden');
   updateSyncStatus('Finding your household…');
-  const { data: member, error } = await db.from('household_members')
-    .select('household_id,display_name,role').eq('user_id', user.id).limit(1).maybeSingle();
-  if (error || !member) {
-    updateSyncStatus('Household not found');
-    toast('This login is not attached to a household.');
+  const membershipKey = `our_dhan_membership_v1:${user.id}`;
+  const cachedMember = safeParse(storageGet(membershipKey));
+  const result = navigator.onLine
+    ? await db.from('household_members').select('household_id,display_name,role').eq('user_id', user.id).limit(1).maybeSingle()
+    : { data: null, error: { message: 'offline' } };
+  let member = result.data;
+  cachedMembershipUsed = false;
+  // Cached membership only unlocks local UI. The server verifies access again before any queued write.
+  if (result.error && cachedMember?.user_id === user.id && typeof cachedMember.household_id === 'string') {
+    member = cachedMember;
+    cachedMembershipUsed = true;
+  }
+  if (!member) {
+    updateSyncStatus('Household not found · reconnect to verify access');
+    toast('Reconnect to verify this login’s household.');
     return;
+  }
+  if (!cachedMembershipUsed) {
+    try { localStorage.setItem(membershipKey, JSON.stringify({ ...member, user_id: user.id })); } catch (_error) { /* Offline startup is optional when storage is unavailable. */ }
   }
   householdId = member.household_id;
   await loadScopedState();
   state.member = { displayName: member.display_name || 'Friend', role: member.role || 'member' };
   cache();
-  await flushPending();
-  await loadRemote();
+  await refreshConnection();
   if (state.settings.emailStatements) {
     await refreshStatementEmailStatus();
     await flushStatementEmailQueue(true);
@@ -1162,7 +1237,16 @@ async function fetchAllHouseholdRows(table, columns = '*') {
 }
 
 async function loadRemote() {
-  if (!db || !householdId) return;
+  if (remoteLoad) return remoteLoad;
+  remoteLoad = loadRemoteOnce();
+  try { return await remoteLoad; }
+  finally { remoteLoad = null; }
+}
+
+async function loadRemoteOnce() {
+  if (!db || !householdId || !navigator.onLine || cachedMembershipUsed) return false;
+  const requestedHousehold = householdId;
+  const requestedUser = currentUser?.id;
   const results = await Promise.all([
     fetchAllHouseholdRows('transactions'),
     db.from('budgets').select('*').eq('household_id', householdId),
@@ -1181,9 +1265,10 @@ async function loadRemote() {
   ]);
   if (results.some(result => result.error)) {
     updateSyncStatus('Could not refresh · saved data kept');
-    return;
+    return false;
   }
-  if (pending().length) { updateSyncStatus(); return; }
+  if (requestedHousehold !== householdId || requestedUser !== currentUser?.id) return false;
+  if (pending().length) { updateSyncStatus(); return false; }
   const [transactions, budgets, goals, debts, assets, accounts, recurring, contributions, snapshots, checkups, sinkingFunds, weeklyReviews, settings, members] = results.map(r => r.data);
   state.people = members.map(member => member.display_name).filter(Boolean);
   state.transactions = transactions.map(row => ({
@@ -1206,6 +1291,7 @@ async function loadRemote() {
   state.checkups = checkups.map(row => ({ id: row.id, month: row.month, accountCount: +row.account_count, adjustmentUSD: +row.adjustment_total_usd, note: row.note || '', focus: row.focus || '', closedAt: row.closed_at || '', balancesCheckedAt: row.balances_checked_at || '', completedBy: row.completed_by || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' })).sort((a, b) => a.month.localeCompare(b.month));
   state.sinkingFunds = sinkingFunds.map(row => ({ id: row.id, name: row.name, target: +row.target_amount, saved: +row.saved_amount, currency: cleanCurrency(row.currency), due: row.due_date || '', lastReservedMonth: row.last_reserved_month || '', note: row.note || '', active: row.active !== false, createdAt: row.created_at || '', updatedAt: row.updated_at || '' }));
   state.weeklyReviews = weeklyReviews.map(row => ({ id: row.id, weekStart: row.week_start, reviewedBy: row.reviewed_by || '', win: row.win || '', nextAction: row.next_action || '', completedAt: row.completed_at || '', updatedAt: row.updated_at || '' })).sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+  remoteSettingsPresent = Boolean(settings);
   if (settings) {
     state.settings.base = cleanCurrency(settings.base_currency) || state.settings.base;
     state.settings.paydayDay = settings.payday_day || null;
@@ -1224,13 +1310,15 @@ async function loadRemote() {
   }
   cache();
   render();
+  lastRemoteLoadedAt = new Date().toISOString();
   updateSyncStatus();
+  return true;
 }
 
 function scheduleRemoteReload() {
-  if (pending().length) return;
+  if (restoreInProgress) return;
   clearTimeout(realtimeTimer);
-  realtimeTimer = setTimeout(() => loadRemote(), 350);
+  realtimeTimer = setTimeout(refreshConnection, 350);
 }
 
 function subscribeRealtime() {
@@ -1240,7 +1328,9 @@ function subscribeRealtime() {
     realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table, filter: `household_id=eq.${householdId}` }, scheduleRemoteReload);
   }
   realtimeChannel.subscribe(status => {
-    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') updateSyncStatus('Realtime reconnecting…');
+    realtimeConnected = status === 'SUBSCRIBED';
+    if (realtimeConnected) refreshConnection();
+    else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) updateSyncStatus('Shared updates reconnecting…');
   });
 }
 
@@ -1514,6 +1604,43 @@ function openSafeBreakdown() {
   </div>`);
 }
 
+function openCurrencyRateRefresh() {
+  openModal('Update currency rates', `<div class="form"><div class="friendlyNote">Update AED, MVR and INR from daily reference rates. These may differ from your bank or money changer. Current balances and converted reports will use the new rates; original recorded amounts stay unchanged.</div><p>Keep your manual rates if they match the rates you actually use. Only a USD price lookup is requested; no household records are sent.</p><button id="currencyRefreshConfirm" class="primary" onclick="refreshCurrencyRates()">Update reference rates</button><button class="secondary" onclick="closeModal()">Keep current rates</button><small><a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">Rates by ExchangeRate-API</a></small></div>`);
+}
+
+function currencyRatesFromQuote(payload) {
+  if (payload?.result !== 'success' || payload.base_code !== 'USD') throw new Error('Currency rates are unavailable.');
+  const rates = { USD: 1 };
+  for (const currency of ['AED', 'MVR', 'INR']) {
+    const value = Number(payload.rates?.[currency]);
+    if (!Number.isFinite(value) || value <= 0) throw new Error('Currency rates are incomplete.');
+    rates[currency] = value;
+  }
+  return rates;
+}
+
+async function refreshCurrencyRates() {
+  const button = $('currencyRefreshConfirm');
+  if (button?.disabled) return;
+  if (!navigator.onLine) { toast('Reconnect to update currency rates. Your saved rates are kept.'); return; }
+  if (button) { button.disabled = true; button.textContent = 'Checking daily rates…'; }
+  const requestedHousehold = householdId;
+  const requestedUser = currentUser?.id;
+  try {
+    const response = await fetch('https://open.er-api.com/v6/latest/USD', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error('Currency rates are unavailable.');
+    const payload = await response.json();
+    const rates = currencyRatesFromQuote(payload);
+    if (requestedHousehold !== householdId || requestedUser !== currentUser?.id || !householdId) return;
+    state.settings.rates = rates;
+    await saveOperation({ action: 'settings', row: { household_id: householdId, usd_to_aed: rates.AED, usd_to_mvr: rates.MVR, usd_to_inr: rates.INR } }, { message: 'Daily reference rates saved · check your bank rate when recording conversions' });
+  } catch (_error) {
+    toast('Currency refresh unavailable. Your saved rates are kept.');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Update reference rates'; }
+  }
+}
+
 function setPriceRefreshUi(message, busy = false) {
   ['priceStatus', 'moneyRateStatus'].forEach(id => {
     const element = $(id);
@@ -1525,7 +1652,7 @@ function setPriceRefreshUi(message, busy = false) {
     button.classList.toggle('isRefreshing', busy);
   }
   const label = $('moneyRefreshLabel');
-  if (label) label.textContent = busy ? 'Refreshing…' : 'Refresh rates';
+  if (label) label.textContent = busy ? 'Refreshing…' : 'Refresh prices';
 }
 
 async function refreshPrices(force = false) {
@@ -1535,26 +1662,30 @@ async function refreshPrices(force = false) {
     const owned = state.assets.filter(a => ['metal', 'crypto'].includes(a.type)).map(a => a.symbol).filter(Boolean);
     const symbols = [...new Set([...defaults, ...owned])];
     setPriceRefreshUi('Refreshing free market rates…', true);
+    const failed = [];
     await Promise.allSettled(symbols.map(async symbol => {
       const cached = state.prices[symbol];
       if (!force && cached && Date.now() - new Date(cached.updated).getTime() < 15 * 60 * 1000) return;
       try {
         const response = await fetch(`https://api.gold-api.com/price/${encodeURIComponent(symbol)}`, { cache: 'no-store' });
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('Price request failed');
         const payload = await response.json();
         const price = Number(payload.price);
         if (Number.isFinite(price) && price > 0) {
           state.prices[symbol] = { usd: price, updated: payload.updatedAt || new Date().toISOString(), source: 'Gold API' };
-        }
-      } catch (_error) { /* Cached values remain available offline. */ }
+        } else throw new Error('Invalid market price');
+      } catch (_error) { failed.push(symbol); /* Preserve each last known value. */ }
     }));
     cache();
     render();
-    const newest = Object.values(state.prices).map(p => new Date(p.updated).getTime()).filter(Number.isFinite).sort((a, b) => b - a)[0];
-    const stale = newest && Date.now() - newest > 60 * 60 * 1000;
-    setPriceRefreshUi(newest
-      ? `${stale ? 'Last saved rates' : 'Live rates updated'} · ${new Date(newest).toLocaleString()}`
-      : 'Live rates unavailable · using saved values');
+    const stale = symbols.filter(symbol => {
+      const time = new Date(state.prices[symbol]?.updated || '').getTime();
+      return !Number.isFinite(time) || Date.now() - time > 60 * 60 * 1000;
+    });
+    const savedOnly = [...new Set([...failed, ...stale])];
+    setPriceRefreshUi(savedOnly.length
+      ? `Saved or unavailable prices: ${savedOnly.join(', ')}${savedOnly.length < symbols.length ? ' · other prices current' : ''}`
+      : `Market prices current · checked ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
   })();
   try { return await priceRefresh; }
   finally {
@@ -1565,7 +1696,7 @@ async function refreshPrices(force = false) {
       button.classList.remove('isRefreshing');
     }
     const label = $('moneyRefreshLabel');
-    if (label) label.textContent = 'Refresh rates';
+    if (label) label.textContent = 'Refresh prices';
   }
 }
 
@@ -2550,7 +2681,7 @@ function renderStatementGenerator() {
     <div class="reportPeriodTabs">${periods.map(([value, label]) => `<button type="button" class="${reportPeriod === value ? 'active' : ''}" onclick="setReportPeriod('${value}')">${label}</button>`).join('')}</div>
     ${reportPeriod === 'custom' ? `<div class="statementCustomRange reportCustomRange"><label>From<input id="reportFrom" type="date" max="${today()}" value="${esc(range.from)}" onchange="setReportCustomRange()"></label><label>To<input id="reportTo" type="date" max="${today()}" value="${esc(range.to)}" onchange="setReportCustomRange()"></label></div>` : ''}
     ${statementSummaryHtml(model)}
-    <div class="friendlyNote">Transfers and balance corrections stay out of this summary so money is not counted twice.</div>
+    <div class="friendlyNote">Transfers and balance corrections stay out of this summary so money is not counted twice. Currency conversions use your current saved rates; original amounts remain in the CSV.</div>
     <div class="buttonRow statementShareActions"><button type="button" class="secondary" onclick="viewGeneratedStatement()">Timeline</button><button type="button" class="secondary" onclick="downloadGeneratedStatement()">Detailed CSV</button><button type="button" class="primary" onclick="shareGeneratedStatement()">Share simple summary</button></div>
   </div>`;
 }
@@ -4126,9 +4257,9 @@ function renderDataSafetyStatus() {
   const bytes = new Blob([JSON.stringify(state)]).size;
   const lastBackup = state.settings.lastBackupAt ? formatDate(state.settings.lastBackupAt.slice(0, 10)) : '';
   const ageDays = lastBackup ? Math.floor((Date.now() - new Date(`${state.settings.lastBackupAt.slice(0, 10)}T12:00:00`).getTime()) / 86_400_000) : Infinity;
-  const status = ageDays <= 35 ? `Protected copy made ${esc(lastBackup)} ✓` : 'Private backup is due';
+  const status = ageDays <= 35 ? `Backup download requested ${esc(lastBackup)}` : 'Private backup is due';
   root.innerHTML = `<h3>Own your data</h3><p>${state.transactions.length.toLocaleString('en-US')} records · about ${humanBytes(bytes)} on this phone · ${status}</p>`;
-  if ($('moneyBackupStatus')) $('moneyBackupStatus').textContent = ageDays <= 35 ? `Protected ${lastBackup} ✓` : 'Private backup due';
+  if ($('moneyBackupStatus')) $('moneyBackupStatus').textContent = ageDays <= 35 ? `Download requested ${lastBackup}` : 'Private backup due';
 }
 
 async function toggleStatementEmails() {
@@ -4329,7 +4460,7 @@ async function exportBackup(label = '', quiet = false) {
   const backup = { ...body, integrity: { algorithm: 'SHA-256', value: checksum } };
   downloadFile(`our-dhan-${label ? `${label}-` : 'backup-'}${today()}.json`, JSON.stringify(backup, null, 2), 'application/json');
   recordBackupCreated(checksum, body.exportedAt);
-  if (!quiet) toast('Readable backup downloaded ✓');
+  if (!quiet) toast('Backup download requested · check your saved file');
 }
 
 function openPrivateBackupForm() {
@@ -4366,7 +4497,7 @@ function openPrivateBackupForm() {
       downloadFile(`our-dhan-private-${today()}.odhan`, JSON.stringify(envelope), 'application/vnd.our-dhan.backup+json');
       recordBackupCreated(checksum, body.exportedAt);
       closeModal();
-      toast(`Private backup downloaded · ${humanBytes(new Blob([JSON.stringify(envelope)]).size)} ✓`);
+      toast(`Private backup download requested · ${humanBytes(new Blob([JSON.stringify(envelope)]).size)} ✓`);
     } catch (_error) {
       if (button) { button.disabled = false; button.textContent = 'Lock and download'; }
       toast('This phone could not create the private backup.');
@@ -4376,9 +4507,9 @@ function openPrivateBackupForm() {
 
 function openBackupCenter() {
   const bytes = new Blob([JSON.stringify(state)]).size;
-  const last = state.settings.lastBackupAt ? formatDate(state.settings.lastBackupAt.slice(0, 10)) : 'No verified backup yet';
+  const last = state.settings.lastBackupAt ? formatDate(state.settings.lastBackupAt.slice(0, 10)) : 'No backup download recorded';
   openModal('Backup & data safety', `<div class="backupCenter">
-    <div class="backupHealth"><div><span>Current data</span><b>${humanBytes(bytes)}</b><small>${state.transactions.length.toLocaleString('en-US')} transaction records</small></div><div><span>Last backup</span><b>${esc(last)}</b><small>${state.settings.lastBackupHash ? 'Integrity recorded ✓' : 'Make two copies'}</small></div></div>
+    <div class="backupHealth"><div><span>Current data</span><b>${humanBytes(bytes)}</b><small>${state.transactions.length.toLocaleString('en-US')} transaction records</small></div><div><span>Last backup</span><b>${esc(last)}</b><small>${state.settings.lastBackupHash ? 'File checksum recorded · check your saved copy' : 'Make two copies'}</small></div></div>
     <div class="backupChoice recommended"><div><i>🔒</i><span><b>Private backup</b><small>Compressed and encrypted on this phone</small></span></div><button class="primary compact" onclick="openPrivateBackupForm()">Download</button></div>
     <div class="backupChoice"><div><i>⌘</i><span><b>Readable JSON</b><small>Most future-proof; anyone with the file can read it</small></span></div><button class="secondary compact" onclick="exportBackup()">Download</button></div>
     <div class="backupChoice"><div><i>↥</i><span><b>Restore a copy</b><small>Supports .odhan and older Our DHAN JSON files</small></span></div><button class="secondary compact" onclick="chooseBackupFile()">Choose file</button></div>
@@ -4437,7 +4568,7 @@ function prepareBackupRestore(payload, verification) {
   pendingRestoreData = normalizeState(payload.data);
   const data = pendingRestoreData;
   openModal('Restore backup', `<div class="form">
-    <div class="friendlyNote">${esc(verification)}. A safety copy of today’s data downloads first. Restore merges this file into the household and keeps newer records.</div>
+    <div class="friendlyNote">${esc(verification)}. A safety copy of today’s data downloads first. Restore adds missing records and preserves every existing record, setting and budget. Missing budgets and settings are added; current values stay unchanged. Existing IDs and saved dates are skipped, even if the backup differs.</div>
     <div class="restorePreview">
       <div><span>Transactions</span><b>${data.transactions.length.toLocaleString('en-US')}</b></div>
       <div><span>Accounts</span><b>${data.accounts.length}</b></div>
@@ -4446,7 +4577,7 @@ function prepareBackupRestore(payload, verification) {
       <div><span>Assets</span><b>${data.assets.length}</b></div>
       <div><span>Snapshots</span><b>${data.snapshots.length.toLocaleString('en-US')}</b></div>
     </div>
-    <div class="warningNote">Keep this page open until the restore finishes. Nothing is restored while offline.</div>
+    <div class="warningNote">Keep this page open until the restore finishes. Nothing is restored while offline. Keep the safety copy. If a batch fails, completed batches remain saved; retry imports only missing records.</div>
     <button id="restoreConfirm" class="primary" onclick="confirmBackupRestore()">Download safety copy and restore</button>
     <button class="secondary" onclick="pendingRestoreData=null;closeModal()">Cancel</button>
   </div>`);
@@ -4506,65 +4637,102 @@ function debtRestoreRow(debt, remaining = debt.remaining) {
 function addRestoreBatches(operations, table, rows, onConflict = '') {
   const size = 500;
   for (let index = 0; index < rows.length; index += size) {
-    operations.push({ action: 'bulkUpsert', table, rows: rows.slice(index, index + size), onConflict });
+    operations.push({ action: 'restoreInsert', table, rows: rows.slice(index, index + size), onConflict });
   }
 }
 
+function missingBackupRecords(data, current) {
+  const result = { ...data };
+  const naturalKeys = { snapshots: 'date', checkups: 'month', weeklyReviews: 'weekStart' };
+  let skipped = 0;
+  for (const key of ['accounts', 'goals', 'debts', 'recurring', 'transactions', 'contributions', 'assets', 'snapshots', 'checkups', 'sinkingFunds', 'weeklyReviews']) {
+    const ids = new Set((current[key] || []).map(item => item.id));
+    const natural = naturalKeys[key];
+    const values = new Set(natural ? (current[key] || []).map(item => item[natural]) : []);
+    result[key] = data[key].filter(item => {
+      if (ids.has(item.id) || (natural && values.has(item[natural]))) { skipped += 1; return false; }
+      ids.add(item.id);
+      if (natural) values.add(item[natural]);
+      return true;
+    });
+  }
+  return { data: result, skipped };
+}
+
+function restoreGoalStartingValue(goal, contributions) {
+  const linked = contributions.filter(item => item.goalId === goal.id).reduce((sum, item) => sum + Number(item.amount), 0);
+  const value = Number(goal.saved || 0) - linked;
+  if (!Number.isFinite(value) || value < -.005) throw new Error('Goal savings do not match the contribution history.');
+  return Math.max(0, value);
+}
+
+function restoreDebtStartingValue(debt, transactions) {
+  const linked = transactions.filter(item => item.debtId === debt.id).reduce((sum, item) => sum + Number(item.debtPrincipal || 0), 0);
+  const value = Number(debt.remaining || 0) + linked;
+  if (!Number.isFinite(value) || value > Number(debt.original) + .005) throw new Error('Debt balance does not match the payment history.');
+  return value;
+}
+
 async function confirmBackupRestore() {
-  const data = pendingRestoreData;
+  if (restoreInProgress) return;
+  let data = pendingRestoreData;
   if (!data || !db || !householdId) return;
   if (!navigator.onLine) { toast('Reconnect before restoring a backup.'); return; }
   if (pending().length && !(await flushPending())) { toast('Waiting changes must sync before restore.'); return; }
   const button = $('restoreConfirm');
   if (button) { button.disabled = true; button.textContent = 'Restoring…'; }
-  await exportBackup('before-restore', true);
-  const operations = [];
-  operations.push({ action: 'settings', row: {
-    household_id: householdId, base_currency: data.settings.base, payday_day: data.settings.paydayDay,
-    fun_mode: data.settings.funMode !== false, debt_strategy: data.settings.debtStrategy,
-    usd_to_aed: data.settings.rates.AED, usd_to_mvr: data.settings.rates.MVR, usd_to_inr: data.settings.rates.INR
-  } });
-  const budgetRows = Object.entries(data.budgets).map(([category, budget]) => ({ household_id: householdId, category, amount: Number(budget.amount || 0), currency: cleanCurrency(budget.currency) }));
-  if (budgetRows.length) operations.push({ action: 'budget', rows: budgetRows });
-  addRestoreBatches(operations, 'accounts', data.accounts.map(accountRestoreRow));
-  addRestoreBatches(operations, 'goals', data.goals.map(goal => goalRestoreRow(goal, 0)));
-  addRestoreBatches(operations, 'debts', data.debts.map(debt => debtRestoreRow(debt, debt.original)));
-  addRestoreBatches(operations, 'recurring_items', data.recurring.map(item => ({
-    id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, kind: item.kind,
-    amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category, paid_by: item.paidBy || 'Shared',
-    account_id: item.accountId || null, day_of_month: Number(item.day), note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString()
-  })));
-  addRestoreBatches(operations, 'transactions', data.transactions.map(item => transactionRow({
-    id: item.id, type: item.type, amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category,
-    paidBy: item.paidBy || 'Shared', accountId: item.accountId || '', account: item.account || '', toAccountId: item.toAccountId || '',
-    toAmount: item.toAmount == null ? null : Number(item.toAmount), debtId: item.debtId || '', debtPrincipal: item.debtPrincipal == null ? null : Number(item.debtPrincipal),
-    debtInterest: Number(item.debtInterest || 0), recurringItemId: item.recurringItemId || '', recurringMonth: item.recurringMonth || '',
-    date: item.date, note: item.note || '', createdAt: item.createdAt || new Date().toISOString()
-  })));
-  addRestoreBatches(operations, 'goal_contributions', data.contributions.map(item => ({
-    id: item.id, household_id: householdId, goal_id: item.goalId, account_id: item.accountId || null, user_id: currentUser.id,
-    amount: Number(item.amount), currency: cleanCurrency(item.currency), date: item.date, note: item.note || null, updated_at: new Date().toISOString()
-  })));
-  addRestoreBatches(operations, 'debts', data.debts.map(debt => debtRestoreRow(debt)));
-  addRestoreBatches(operations, 'goals', data.goals.map(goal => goalRestoreRow(goal)));
-  addRestoreBatches(operations, 'assets', data.assets.map(item => ({
-    id: item.id, household_id: householdId, user_id: currentUser.id, name: item.name, asset_type: item.type,
-    symbol: item.symbol || null, quantity: Number(item.quantity || 0), currency: cleanCurrency(item.currency),
-    manual_value: item.manualValue == null ? null : Number(item.manualValue), notes: item.notes || null, updated_at: new Date().toISOString()
-  })));
-  const snapshotRows = data.snapshots.map(item => {
-    const existing = state.snapshots.find(snapshot => snapshot.date === item.date);
-    return { id: existing?.id || item.id, household_id: householdId, snapshot_date: item.date, cash_usd: Number(item.cashUSD), assets_usd: Number(item.assetsUSD), debt_usd: Number(item.debtUSD), net_worth_usd: Number(item.netWorthUSD) };
-  });
-  addRestoreBatches(operations, 'net_worth_snapshots', snapshotRows, 'household_id,snapshot_date');
-  const checkupRows = data.checkups.map(item => {
-    const existing = state.checkups.find(checkup => checkup.month === item.month);
-    return { id: existing?.id || item.id, household_id: householdId, month: item.month, completed_by: currentUser.id, account_count: Number(item.accountCount || 0), adjustment_total_usd: Number(item.adjustmentUSD || 0), note: item.note || null, focus: item.focus || null, closed_at: item.closedAt || null, balances_checked_at: item.balancesCheckedAt || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() };
-  });
-  addRestoreBatches(operations, 'monthly_checkups', checkupRows, 'household_id,month');
-  addRestoreBatches(operations, 'sinking_funds', data.sinkingFunds.map(item => ({ id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, target_amount: Number(item.target), saved_amount: Number(item.saved || 0), currency: cleanCurrency(item.currency), due_date: item.due || null, last_reserved_month: item.lastReservedMonth || null, note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString() })));
-  addRestoreBatches(operations, 'weekly_money_dates', data.weeklyReviews.map(item => ({ id: item.id, household_id: householdId, week_start: item.weekStart, reviewed_by: currentUser.id, win: item.win || null, next_action: item.nextAction || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() })), 'household_id,week_start');
+  restoreInProgress = true;
+  let skipped = 0;
   try {
+    if (!(await loadRemote())) throw new Error('Could not verify current household data. Reconnect and retry.');
+    const selected = missingBackupRecords(data, state);
+    data = selected.data;
+    skipped = selected.skipped;
+    await exportBackup('before-restore', true);
+    const operations = [];
+    if (!remoteSettingsPresent) addRestoreBatches(operations, 'household_settings', [{
+      household_id: householdId, base_currency: data.settings.base, payday_day: data.settings.paydayDay,
+      fun_mode: data.settings.funMode !== false, debt_strategy: data.settings.debtStrategy,
+      usd_to_aed: data.settings.rates.AED, usd_to_mvr: data.settings.rates.MVR, usd_to_inr: data.settings.rates.INR
+    }], 'household_id');
+    const budgetRows = Object.entries(data.budgets).filter(([category]) => !Object.hasOwn(state.budgets, category)).map(([category, budget]) => ({ household_id: householdId, category, amount: Number(budget.amount || 0), currency: cleanCurrency(budget.currency) }));
+    addRestoreBatches(operations, 'budgets', budgetRows, 'household_id,category');
+    addRestoreBatches(operations, 'accounts', data.accounts.map(accountRestoreRow));
+    addRestoreBatches(operations, 'goals', data.goals.map(goal => goalRestoreRow(goal, restoreGoalStartingValue(goal, data.contributions))));
+    addRestoreBatches(operations, 'debts', data.debts.map(debt => debtRestoreRow(debt, restoreDebtStartingValue(debt, data.transactions))));
+    addRestoreBatches(operations, 'recurring_items', data.recurring.map(item => ({
+      id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, kind: item.kind,
+      amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category, paid_by: item.paidBy || 'Shared',
+      account_id: item.accountId || null, day_of_month: Number(item.day), note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString()
+    })));
+    addRestoreBatches(operations, 'transactions', data.transactions.map(item => transactionRow({
+      id: item.id, type: item.type, amount: Number(item.amount), currency: cleanCurrency(item.currency), category: item.category,
+      paidBy: item.paidBy || 'Shared', accountId: item.accountId || '', account: item.account || '', toAccountId: item.toAccountId || '',
+      toAmount: item.toAmount == null ? null : Number(item.toAmount), debtId: item.debtId || '', debtPrincipal: item.debtPrincipal == null ? null : Number(item.debtPrincipal),
+      debtInterest: Number(item.debtInterest || 0), recurringItemId: item.recurringItemId || '', recurringMonth: item.recurringMonth || '',
+      date: item.date, note: item.note || '', createdAt: item.createdAt || new Date().toISOString()
+    })));
+    addRestoreBatches(operations, 'goal_contributions', data.contributions.map(item => ({
+      id: item.id, household_id: householdId, goal_id: item.goalId, account_id: item.accountId || null, user_id: currentUser.id,
+      amount: Number(item.amount), currency: cleanCurrency(item.currency), date: item.date, note: item.note || null, updated_at: new Date().toISOString()
+    })));
+    addRestoreBatches(operations, 'assets', data.assets.map(item => ({
+      id: item.id, household_id: householdId, user_id: currentUser.id, name: item.name, asset_type: item.type,
+      symbol: item.symbol || null, quantity: Number(item.quantity || 0), currency: cleanCurrency(item.currency),
+      manual_value: item.manualValue == null ? null : Number(item.manualValue), notes: item.notes || null, updated_at: new Date().toISOString()
+    })));
+    const snapshotRows = data.snapshots.map(item => {
+      const existing = state.snapshots.find(snapshot => snapshot.date === item.date);
+      return { id: existing?.id || item.id, household_id: householdId, snapshot_date: item.date, cash_usd: Number(item.cashUSD), assets_usd: Number(item.assetsUSD), debt_usd: Number(item.debtUSD), net_worth_usd: Number(item.netWorthUSD) };
+    });
+    addRestoreBatches(operations, 'net_worth_snapshots', snapshotRows, 'household_id,snapshot_date');
+    const checkupRows = data.checkups.map(item => {
+      const existing = state.checkups.find(checkup => checkup.month === item.month);
+      return { id: existing?.id || item.id, household_id: householdId, month: item.month, completed_by: currentUser.id, account_count: Number(item.accountCount || 0), adjustment_total_usd: Number(item.adjustmentUSD || 0), note: item.note || null, focus: item.focus || null, closed_at: item.closedAt || null, balances_checked_at: item.balancesCheckedAt || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() };
+    });
+    addRestoreBatches(operations, 'monthly_checkups', checkupRows, 'household_id,month');
+    addRestoreBatches(operations, 'sinking_funds', data.sinkingFunds.map(item => ({ id: item.id, household_id: householdId, created_by: currentUser.id, name: item.name, target_amount: Number(item.target), saved_amount: Number(item.saved || 0), currency: cleanCurrency(item.currency), due_date: item.due || null, last_reserved_month: item.lastReservedMonth || null, note: item.note || null, active: item.active !== false, updated_at: new Date().toISOString() })));
+    addRestoreBatches(operations, 'weekly_money_dates', data.weeklyReviews.map(item => ({ id: item.id, household_id: householdId, week_start: item.weekStart, reviewed_by: currentUser.id, win: item.win || null, next_action: item.nextAction || null, completed_at: item.completedAt || new Date().toISOString(), updated_at: new Date().toISOString() })), 'household_id,week_start');
     for (let index = 0; index < operations.length; index += 1) {
       const operation = operations[index];
       if (button) button.textContent = `Restoring ${Math.round(index / Math.max(1, operations.length) * 100)}%…`;
@@ -4572,18 +4740,20 @@ async function confirmBackupRestore() {
       if (error) throw error;
     }
     pendingRestoreData = null;
-    state.settings.lastCurrency = data.settings.lastCurrency;
-    state.prices = data.prices;
+    state.prices = { ...data.prices, ...state.prices };
     cache();
     await loadRemote();
     closeModal();
-    toast('Backup restored safely ✓');
+    toast(`Missing records restored · ${skipped} existing records kept. Check the safety copy is saved.`);
     celebrate();
     await ensureTodaySnapshot();
   } catch (error) {
     if (button) { button.disabled = false; button.textContent = 'Retry restore'; }
     toast(`Restore stopped: ${error?.message || 'unknown error'}`);
     await loadRemote();
+  } finally {
+    restoreInProgress = false;
+    refreshConnection();
   }
 }
 
@@ -4622,3 +4792,4 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 render();
 showPage('today');
 boot();
+
