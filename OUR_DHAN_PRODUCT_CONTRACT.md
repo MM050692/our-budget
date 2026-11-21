@@ -24,6 +24,16 @@ This file is the durable brief for future work. It records the decisions Dhani a
 - A successful keep-alive must verify both HTTP `200` and the exact `true` response. Permission errors or other responses must fail visibly rather than being treated as success.
 - The keep-alive reduces the likelihood of free-plan pausing but cannot be described as a guarantee. Portable backups remain mandatory.
 
+## Daily phone reminders
+
+- Dhani and Sakhi can independently enable private Web Push reminders on their own installed phones.
+- The fixed household reminder times are **3:00 PM** and **9:00 PM Maldives time** every day.
+- Lock-screen text stays generic and never includes balances, account names, transaction amounts or other financial details.
+- Tapping a reminder opens Our DHAN. Each phone can turn its own reminders off without affecting the other phone.
+- iPhone setup requires the Safari website to be added to the Home Screen before notification permission is requested. Android setup uses the installed PWA.
+- Delivery uses the existing Supabase Free project, stores only the device push subscription needed for delivery, and must never depend on ChatGPT or a paid notification service.
+- Phone Focus, Do Not Disturb, battery controls and operating-system delivery may delay a notification; the app must not promise exact-to-the-minute delivery.
+
 ## Interaction and visual rules
 
 - Keep the visual language clean, spacious and product-like, inspired by Apple’s clarity rather than a dense accounting dashboard.
@@ -51,6 +61,7 @@ This file is the durable brief for future work. It records the decisions Dhani a
 - Debt payments reduce linked cash and debt exactly once. Principal and interest remain distinguishable.
 - Market assets use explicit quantities/manual values and saved currency rates. A failed live-rate refresh must not erase the last known values.
 - Historical records are immutable in meaning. Fixes use visible edits/corrections; storage optimization must never discard raw history.
+- A deliberate owner-authorised clean reset increments the household data generation. Older cached or offline writes must be rejected so deleted records cannot silently return.
 
 ## Monthly statement delivery
 

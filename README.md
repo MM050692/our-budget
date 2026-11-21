@@ -25,6 +25,7 @@ A private shared household money app for a couple. It runs on GitHub Pages with 
 - Keyset-paginated history loading so records beyond a service's first 1,000 rows remain available
 - Private compressed `.odhan` backups, readable integrity-checked JSON, validated batched restore, transaction CSV export and a dependency-free recovery page
 - Salary-triggered delivery of the completed previous month's statement, with one delivery record per month and no financial contents stored in its database log
+- Private Web Push reminders at 3:00 PM and 9:00 PM Maldives time, enabled separately on Dhani and Sakhi’s installed phones
 
 ## Data model and migration
 
@@ -70,6 +71,12 @@ Income and spending dated before an account's tracking start remain in Timeline 
 ### Android
 
 Install the PWA from Chrome. Long-press **Our DHAN** and choose **Add spend**, or drag that shortcut to the home screen. On Pixel, Settings → System → Gestures → Quick Tap can open Our DHAN.
+
+## Daily reminders
+
+Open **Settings → Daily transaction reminders → Set up** once on each phone. On iPhone, first open the site in Safari and use **Share → Add to Home Screen**. On Samsung, install the app from Chrome. Sign in as the correct household member on each phone, tap **Set up**, then allow notifications.
+
+The two generic reminders arrive daily at 3:00 PM and 9:00 PM Maldives time and contain no financial figures. Each phone can disable its own reminders. Supabase Cron calls the private `push-reminders` Edge Function; VAPID keys and the cron token stay server-side, and subscriptions are inaccessible to browser roles.
 
 ## Free deployment
 

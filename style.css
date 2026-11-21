@@ -457,6 +457,21 @@ main { width: min(920px, 100%); margin: 0 auto; padding: 14px 18px calc(104px + 
 .settingsCard { padding: 15px; margin-bottom: 10px; display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 12px; }
 .settingsIcon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 14px; background: var(--mint); font-size: 19px; }
 .settingsCard p { color: var(--muted); font-size: 10px; margin: 3px 0 0; }
+.reminderCard.isOn { border-color: #abd9c7; background: linear-gradient(135deg, var(--paper), #eefaf4); }
+.reminderCard.isOn .settingsIcon { background: var(--green); color: white; }
+.freshStartBanner {
+  margin: 12px 0 16px;
+  padding: 14px 15px;
+  border: 1px solid #cfc0e0;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #f2ebf9, #fffdf7);
+  color: #59416f;
+  display: grid;
+  gap: 3px;
+  animation: pageIn .35s ease both;
+}
+.freshStartBanner b { font-size: 13px; }
+.freshStartBanner span { font-size: 10px; line-height: 1.5; color: #735c88; }
 .signOutButton { width: 100%; margin: 14px 0; padding: 13px; border-radius: 15px; background: var(--coral-soft); color: #9d3a30; font-weight: 850; }
 
 .form { display: grid; gap: 13px; }

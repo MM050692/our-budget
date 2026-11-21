@@ -10,7 +10,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <title>Our DHAN</title>
-  <link rel="stylesheet" href="style.css?v=9-16">
+  <link rel="stylesheet" href="style.css?v=9-17">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4"></script>
   <script src="config.js"></script>
 </head>
@@ -52,6 +52,8 @@
           </div>
           <span id="trackingBadge" class="statusBadge">Ready</span>
         </div>
+
+        <div id="freshStartBanner" class="freshStartBanner hidden"></div>
 
         <div class="safeCard">
           <div class="safeTop">
@@ -329,6 +331,13 @@
           <button class="primary" type="submit">Save settings</button>
         </form>
 
+        <div id="reminderCard" class="settingsCard top reminderCard">
+          <div class="settingsIcon">🔔</div>
+          <div id="reminderCopy"><h3>Daily transaction reminders</h3><p>3:00 PM and 9:00 PM Maldives time on this phone.</p></div>
+          <button id="reminderAction" class="secondary compact" onclick="toggleDailyReminders()">Set up</button>
+        </div>
+        <button class="privacyNote" type="button" onclick="openReminderInfo()"><span>Set up Dhani and Sakhi’s phones</span><b>›</b></button>
+
         <div class="settingsCard top emailStatementCard">
           <div class="settingsIcon">✉</div>
           <div id="emailStatementCopy"><h3>Monthly statement</h3><p>Prepared automatically after Salary is recorded.</p></div>
@@ -393,6 +402,6 @@
   <div id="toast" class="toast hidden" aria-live="polite"></div>
   <div id="confetti" class="confetti" aria-hidden="true"></div>
 
-  <script src="app.js?v=9-16"></script>
+  <script src="app.js?v=9-17"></script>
 </body>
 </html>
