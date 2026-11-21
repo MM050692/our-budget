@@ -62,6 +62,7 @@ jobs:
 
   keep-schedule-enabled:
     if: >-
+      github.event_name == 'push' ||
       (github.event_name == 'schedule' && github.event.schedule == '43 3 1 * *') ||
       (github.event_name == 'workflow_dispatch' && inputs.refresh_schedule)
     runs-on: ubuntu-latest
