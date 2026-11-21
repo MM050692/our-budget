@@ -19,6 +19,8 @@ This file is the durable brief for future work. It records the decisions Dhani a
 ## Free backend continuity
 
 - Supabase Free may pause a low-activity project. The repository therefore keeps `.github/workflows/supabase-keepalive.yml`, scheduled three times daily as a best-effort free activity pulse.
+- GitHub can disable scheduled workflows after 60 days without repository activity. The same workflow therefore updates only `.github/keepalive-pulse.txt` once a month using its scoped `GITHUB_TOKEN`; the pulse contains no household or financial data and does not use an external secret.
+- The private 3:00 PM and 9:00 PM reminder cron provides a separate daily server-side activity path. Neither path is allowed to read household finance tables merely to create activity.
 - The workflow must call only `public.keepalive()`. That RPC runs as `SECURITY INVOKER`, returns only `true`, reads no household table and grants execution only to the anonymous role.
 - The workflow may use the public publishable key, but it must never use or store a database password, secret API key or service-role key.
 - A successful keep-alive must verify both HTTP `200` and the exact `true` response. Permission errors or other responses must fail visibly rather than being treated as success.

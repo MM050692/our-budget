@@ -9,7 +9,16 @@ on:
   schedule:
     # Three lightweight requests per day. Times are UTC.
     - cron: "17 1,9,17 * * *"
+    # A monthly repository pulse prevents GitHub from disabling this scheduled
+    # workflow after 60 days without repository activity.
+    - cron: "43 3 1 * *"
   workflow_dispatch:
+    inputs:
+      refresh_schedule:
+        description: "Record a repository activity pulse"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -50,3 +59,54 @@ jobs:
 
           echo "Supabase keep-alive failed after 3 attempts."
           exit 1
+
+  keep-schedule-enabled:
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '43 3 1 * *') ||
+      (github.event_name == 'workflow_dispatch' && inputs.refresh_schedule)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: write
+    steps:
+      - name: Record monthly workflow activity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          month=$(date -u +%Y-%m)
+          path=".github/keepalive-pulse.txt"
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${path}"
+          headers=(
+            -H "Accept: application/vnd.github+json"
+            -H "Authorization: Bearer ${GH_TOKEN}"
+            -H "X-GitHub-Api-Version: 2022-11-28"
+          )
+
+          current_sha=$(curl -fsS "${headers[@]}" "${api}?ref=${GITHUB_REF_NAME}" \
+            | jq -r '.sha // empty' || true)
+          encoded=$(printf 'Our DHAN continuity pulse: %s\n' "$month" | base64 -w 0)
+
+          if [ -n "$current_sha" ]; then
+            payload=$(jq -n \
+              --arg message "chore: keep continuity checks active (${month}) [skip ci]" \
+              --arg content "$encoded" \
+              --arg branch "$GITHUB_REF_NAME" \
+              --arg sha "$current_sha" \
+              '{message: $message, content: $content, branch: $branch, sha: $sha}')
+          else
+            payload=$(jq -n \
+              --arg message "chore: keep continuity checks active (${month}) [skip ci]" \
+              --arg content "$encoded" \
+              --arg branch "$GITHUB_REF_NAME" \
+              '{message: $message, content: $content, branch: $branch}')
+          fi
+
+          curl -fsS --request PUT "${headers[@]}" \
+            -H "Content-Type: application/json" \
+            --data "$payload" \
+            "$api" >/dev/null
+
+          echo "GitHub schedule activity recorded for ${month}."
